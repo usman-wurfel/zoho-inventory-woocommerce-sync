@@ -1826,23 +1826,61 @@ function zoho_sync_woo_to_zoho($offset, $total, $synced, $created, $updated) {
         delete_transient('zoho_woo_sync_stats');
         
         // Use direct SQL query to get ALL products (published, draft, private, pending)
+        // Exclude product_variation to get only parent products
         global $wpdb;
-        $product_ids = $wpdb->get_col("
+        $query = $wpdb->prepare("
             SELECT ID FROM {$wpdb->posts} 
-            WHERE post_type = 'product' 
+            WHERE post_type = %s 
             AND post_status IN ('publish', 'draft', 'private', 'pending')
             ORDER BY ID ASC
-        ");
+        ", 'product');
+        
+        $product_ids = $wpdb->get_col($query);
+        
+        // Also verify total count directly from database
+        $total_count_query = $wpdb->prepare("
+            SELECT COUNT(*) FROM {$wpdb->posts} 
+            WHERE post_type = %s 
+            AND post_status IN ('publish', 'draft', 'private', 'pending')
+        ", 'product');
+        $total_count = $wpdb->get_var($total_count_query);
+        error_log('Zoho Sync: Total products in database: ' . $total_count);
+        
+        // Also verify using WooCommerce function for comparison
+        $wc_product_ids = wc_get_products(array(
+            'status' => array('publish', 'draft', 'private', 'pending'),
+            'limit' => -1,
+            'return' => 'ids',
+            'paginate' => false
+        ));
         
         // Log the count for debugging
-        error_log('Zoho Sync: Found ' . count($product_ids) . ' products to sync (WooCommerce to Zoho)');
+        error_log('Zoho Sync: SQL Query found ' . count($product_ids) . ' products');
+        error_log('Zoho Sync: WC Function found ' . count($wc_product_ids) . ' products');
+        error_log('Zoho Sync: Database COUNT query shows ' . $total_count . ' products');
+        
+        // If SQL query got less than expected, try WC function
+        if (count($product_ids) < intval($total_count) && count($wc_product_ids) > count($product_ids)) {
+            error_log('Zoho Sync: SQL query got fewer results, using WC function results');
+            $product_ids = $wc_product_ids;
+        } else if (count($product_ids) < intval($total_count)) {
+            // SQL query got fewer results but WC also did - try re-running SQL query without prepare
+            error_log('Zoho Sync: Both methods got fewer results, trying alternative SQL query');
+            $product_ids = $wpdb->get_col("
+                SELECT ID FROM {$wpdb->posts} 
+                WHERE post_type = 'product' 
+                AND post_status IN ('publish', 'draft', 'private', 'pending')
+                ORDER BY ID ASC
+            ");
+            error_log('Zoho Sync: Alternative SQL query found ' . count($product_ids) . ' products');
+        }
         
         $total = count($product_ids);
         
         if ($total == 0) {
             wp_send_json_error('No products found in WooCommerce');
-        return;
-    }
+            return;
+        }
 
         // Store product IDs in transient for batch processing (10 minutes for large syncs)
         set_transient('zoho_woo_sync_products', $product_ids, 600);
