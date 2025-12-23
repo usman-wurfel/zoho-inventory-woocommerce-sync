@@ -2,6 +2,13 @@
 if (!defined('ABSPATH')) exit;
 
 function zoho_get_access_token() {
+    // Check if token is expired or about to expire (within 5 minutes)
+    $expires_at = get_option('zoho_token_expires_at', 0);
+    if ($expires_at > 0 && time() > ($expires_at - 300)) {
+        // Token expired or expiring soon - try to refresh
+        error_log('Zoho API: Token expired or expiring soon, refreshing...');
+        zoho_refresh_access_token();
+    }
     return get_option('zoho_access_token');
 }
 
@@ -15,34 +22,57 @@ function zoho_refresh_access_token() {
     $client_secret = get_option('zoho_client_secret');
     
     if (empty($refresh_token) || empty($client_id) || empty($client_secret)) {
+        error_log('Zoho API: Cannot refresh token - missing credentials');
         return false;
     }
     
-    $response = wp_remote_post('https://accounts.zoho.com/oauth/v2/token', [
-        'body' => [
-            'grant_type' => 'refresh_token',
-            'client_id' => $client_id,
-            'client_secret' => $client_secret,
-            'refresh_token' => $refresh_token
-        ],
-        'timeout' => 20
-    ]);
+    error_log('Zoho API: Attempting token refresh...');
     
-    if (is_wp_error($response)) {
-        return false;
-    }
+    // Try multiple Zoho domains (different regions use different domains)
+    $zoho_domains = array(
+        'https://accounts.zoho.com/oauth/v2/token',
+        'https://accounts.zoho.in/oauth/v2/token',
+        'https://accounts.zoho.eu/oauth/v2/token',
+        'https://accounts.zoho.com.au/oauth/v2/token',
+    );
     
-    $body = wp_remote_retrieve_body($response);
-    $data = json_decode($body, true);
-    
-    if (isset($data['access_token'])) {
-        update_option('zoho_access_token', $data['access_token']);
-        if (isset($data['expires_in'])) {
-            update_option('zoho_token_expires_at', time() + $data['expires_in']);
+    foreach ($zoho_domains as $token_url) {
+        $response = wp_remote_post($token_url, [
+            'body' => [
+                'grant_type' => 'refresh_token',
+                'client_id' => $client_id,
+                'client_secret' => $client_secret,
+                'refresh_token' => $refresh_token
+            ],
+            'timeout' => 20
+        ]);
+        
+        if (is_wp_error($response)) {
+            error_log('Zoho API: Token refresh failed for ' . $token_url . ' - ' . $response->get_error_message());
+            continue;
         }
-        return true;
+        
+        $body = wp_remote_retrieve_body($response);
+        $data = json_decode($body, true);
+        
+        error_log('Zoho API: Token refresh response from ' . $token_url . ' - ' . $body);
+        
+        if (isset($data['access_token'])) {
+            update_option('zoho_access_token', $data['access_token']);
+            if (isset($data['expires_in'])) {
+                update_option('zoho_token_expires_at', time() + $data['expires_in']);
+            }
+            error_log('Zoho API: Token refreshed successfully!');
+            return true;
+        }
+        
+        // If we get an error response, it might be the wrong domain - continue trying
+        if (isset($data['error'])) {
+            error_log('Zoho API: Token refresh error: ' . ($data['error_description'] ?? $data['error']));
+        }
     }
     
+    error_log('Zoho API: Token refresh failed on all domains');
     return false;
 }
 
@@ -51,7 +81,12 @@ function zoho_api_get($endpoint, $retry_on_auth_error = true) {
     $org_id = zoho_get_organization_id();
     
     if (empty($token)) {
-        return ['error' => 'No access token found. Please connect to Zoho first.'];
+        // Try to refresh token first
+        if (zoho_refresh_access_token()) {
+            $token = get_option('zoho_access_token');
+        } else {
+            return ['error' => 'No access token found. Please connect to Zoho first.', 'code' => 57];
+        }
     }
     
     // Add organization_id if not in endpoint
@@ -69,6 +104,7 @@ function zoho_api_get($endpoint, $retry_on_auth_error = true) {
     
     // Check for WP_Error
     if (is_wp_error($response)) {
+        error_log('Zoho API GET Error: ' . $response->get_error_message());
         return $response;
     }
     
@@ -82,8 +118,11 @@ function zoho_api_get($endpoint, $retry_on_auth_error = true) {
     
     // If authorization error (code 57) and retry allowed, refresh token and retry
     if (isset($data['code']) && $data['code'] == 57 && $retry_on_auth_error) {
+        error_log('Zoho API: Got Code 57, refreshing token and retrying GET to ' . $endpoint);
         if (zoho_refresh_access_token()) {
             return zoho_api_get($endpoint, false);
+        } else {
+            error_log('Zoho API: Token refresh failed, cannot retry');
         }
     }
     
@@ -95,7 +134,12 @@ function zoho_api_post($endpoint, $data, $retry_on_auth_error = true) {
     $org_id = zoho_get_organization_id();
     
     if (empty($token)) {
-        return ['error' => 'No access token found. Please connect to Zoho first.'];
+        // Try to refresh token first
+        if (zoho_refresh_access_token()) {
+            $token = get_option('zoho_access_token');
+        } else {
+            return ['error' => 'No access token found. Please connect to Zoho first.', 'code' => 57];
+        }
     }
     
     $url = 'https://www.zohoapis.com/inventory/v1/' . $endpoint;
@@ -113,6 +157,7 @@ function zoho_api_post($endpoint, $data, $retry_on_auth_error = true) {
     ]);
     
     if (is_wp_error($response)) {
+        error_log('Zoho API POST Error: ' . $response->get_error_message());
         return $response;
     }
     
@@ -125,8 +170,11 @@ function zoho_api_post($endpoint, $data, $retry_on_auth_error = true) {
     
     // If authorization error (code 57) and retry allowed, refresh token and retry
     if (isset($result['code']) && $result['code'] == 57 && $retry_on_auth_error) {
+        error_log('Zoho API: Got Code 57, refreshing token and retrying POST to ' . $endpoint);
         if (zoho_refresh_access_token()) {
             return zoho_api_post($endpoint, $data, false);
+        } else {
+            error_log('Zoho API: Token refresh failed, cannot retry');
         }
     }
     
@@ -138,7 +186,12 @@ function zoho_api_put($endpoint, $data, $retry_on_auth_error = true) {
     $org_id = zoho_get_organization_id();
     
     if (empty($token)) {
-        return ['error' => 'No access token found. Please connect to Zoho first.'];
+        // Try to refresh token first
+        if (zoho_refresh_access_token()) {
+            $token = get_option('zoho_access_token');
+        } else {
+            return ['error' => 'No access token found. Please connect to Zoho first.', 'code' => 57];
+        }
     }
     
     $url = 'https://www.zohoapis.com/inventory/v1/' . $endpoint;
@@ -157,6 +210,7 @@ function zoho_api_put($endpoint, $data, $retry_on_auth_error = true) {
     ]);
     
     if (is_wp_error($response)) {
+        error_log('Zoho API PUT Error: ' . $response->get_error_message());
         return $response;
     }
     
@@ -169,8 +223,11 @@ function zoho_api_put($endpoint, $data, $retry_on_auth_error = true) {
     
     // If authorization error (code 57) and retry allowed, refresh token and retry
     if (isset($result['code']) && $result['code'] == 57 && $retry_on_auth_error) {
+        error_log('Zoho API: Got Code 57, refreshing token and retrying PUT to ' . $endpoint);
         if (zoho_refresh_access_token()) {
             return zoho_api_put($endpoint, $data, false);
+        } else {
+            error_log('Zoho API: Token refresh failed, cannot retry');
         }
     }
     
