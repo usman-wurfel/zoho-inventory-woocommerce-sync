@@ -1,4 +1,6 @@
 jQuery(document).ready(function($) {
+    var syncDirection = 'zoho_to_woo';
+    
     $('#zoho-start-sync').on('click', function(e) {
         e.preventDefault();
         
@@ -8,18 +10,22 @@ jQuery(document).ready(function($) {
         var $progressText = $('#zoho-progress-text');
         var $successMessage = $('#zoho-sync-success');
         
+        // Get selected sync direction
+        syncDirection = $('input[name="inventory_sync_direction"]:checked').val() || 'zoho_to_woo';
+        
         // Reset UI
         $button.prop('disabled', true).text('Syncing...');
         $progressContainer.show();
         $successMessage.hide();
+        $('#zoho-sync-result').hide();
         $progressBar.css('width', '0%');
-        $progressText.text('Starting sync...');
+        $progressText.text('Starting sync (' + (syncDirection === 'zoho_to_woo' ? 'Zoho → WooCommerce' : 'WooCommerce → Zoho') + ')...');
         
         // Start AJAX sync
-        zohoSyncProducts(0, 0, 0, 0, 0);
+        zohoSyncProducts(0, 0, 0, 0, 0, syncDirection);
     });
     
-    function zohoSyncProducts(offset, total, synced, created, updated) {
+    function zohoSyncProducts(offset, total, synced, created, updated, direction) {
         $.ajax({
             url: zohoSync.ajax_url,
             type: 'POST',
@@ -30,7 +36,8 @@ jQuery(document).ready(function($) {
                 total: total,
                 synced: synced,
                 created: created,
-                updated: updated
+                updated: updated,
+                direction: direction
             },
             success: function(response) {
                 if (response.success) {
@@ -53,7 +60,7 @@ jQuery(document).ready(function($) {
                     if (data.has_more) {
                         // Continue with next batch
                         setTimeout(function() {
-                            zohoSyncProducts(data.offset, data.total, data.synced, data.created, data.updated);
+                            zohoSyncProducts(data.offset, data.total, data.synced, data.created, data.updated, direction);
                         }, 100);
                     } else {
                         // Sync completed

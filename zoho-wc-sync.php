@@ -1363,6 +1363,8 @@ function zoho_inventory_sync_page() {
     }
 
     echo '<h1>Inventory Sync</h1>';
+    
+    echo '<p>Configure product field mappings in <a href="'.admin_url('admin.php?page=zoho-field-mapping&tab=items').'">Field Mapping → Items</a> before syncing.</p>';
 
     // Show success message from previous sync (if exists)
     if (isset($_GET['sync_completed'])) {
@@ -1373,6 +1375,13 @@ function zoho_inventory_sync_page() {
     } else {
         echo '<div id="zoho-sync-success" style="display:none;"></div>';
     }
+    
+    // Sync direction
+    echo '<div style="background: #fff; border: 1px solid #ddd; padding: 20px; margin: 20px 0; border-radius: 4px;">';
+    echo '<h3 style="margin-top: 0;">Sync Direction</h3>';
+    echo '<p><label><input type="radio" name="inventory_sync_direction" value="zoho_to_woo" checked> <strong>Zoho → WooCommerce:</strong> Create/Update WooCommerce products from Zoho items</label></p>';
+    echo '<p><label><input type="radio" name="inventory_sync_direction" value="woo_to_zoho"> <strong>WooCommerce → Zoho:</strong> Create/Update Zoho items from WooCommerce products</label></p>';
+    echo '</div>';
 
     // Progress bar container
     echo '<div id="zoho-sync-progress" style="display:none; margin: 20px 0;">
@@ -1383,49 +1392,12 @@ function zoho_inventory_sync_page() {
         </div>
         <p id="zoho-progress-text" style="margin: 5px 0;">Starting sync...</p>
         </div>';
+    
+    echo '<div id="zoho-sync-result" style="display:none; margin: 20px 0; padding: 15px; background: #d4edda; border: 1px solid #c3e6cb; border-radius: 4px;"></div>';
 
-    echo '<form method="post">
-        <button id="zoho-start-sync" class="button button-primary" type="button">Sync Products Now</button>
-    </form>';
-
-    /* ---------- LOG TABLE ---------- */
-    $logs = get_option('zoho_inventory_logs', []);
-
-    echo '<h2>Sync History</h2>';
-
-    if (!$logs) {
-        echo '<p>No sync history.</p>';
-        return;
-    }
-
-    echo '<table class="widefat striped">
-    <thead>
-        <tr><th>Date</th><th>Total</th><th>Synced</th><th>Pending</th><th>Action</th></tr>
-    </thead><tbody>';
-
-    foreach (array_reverse($logs) as $log) {
-
-        $view_url = admin_url('admin.php?page=zoho-inventory-sync&view_log='.$log['id']);
-        $delete_url = wp_nonce_url(
-            admin_url('admin.php?page=zoho-inventory-sync&zoho_delete_log='.$log['id']),
-            'zoho_delete_log'
-        );
-
-        echo '<tr>
-            <td>'.$log['time'].'</td>
-            <td>'.$log['total'].'</td>
-            <td>'.$log['synced'].'</td>
-            <td>'.$log['pending'].'</td>
-            <td>
-                <a class="button button-small" href="'.esc_url($view_url).'">View</a>
-                <a class="button button-small button-link-delete"
-                   onclick="return confirm(\'Are you sure?\');"
-                   href="'.esc_url($delete_url).'">Delete</a>
-            </td>
-        </tr>';
-    }
-
-    echo '</tbody></table>';
+    echo '<button id="zoho-start-sync" class="button button-primary" type="button">Sync Products Now</button>';
+    
+    echo '<p style="margin-top: 15px;"><a href="'.admin_url('admin.php?page=zoho-logs&tab=items').'">View Item Sync Logs →</a></p>';
 }
 
 /* ======================================================
@@ -1503,8 +1475,15 @@ function zoho_sync_products_ajax_handler() {
     $synced = isset($_POST['synced']) ? intval($_POST['synced']) : 0;
     $created = isset($_POST['created']) ? intval($_POST['created']) : 0;
     $updated = isset($_POST['updated']) ? intval($_POST['updated']) : 0;
+    $direction = isset($_POST['direction']) ? sanitize_text_field($_POST['direction']) : 'zoho_to_woo';
     
-    // First call - fetch items from API
+    // Handle WooCommerce to Zoho sync
+    if ($direction === 'woo_to_zoho') {
+        zoho_sync_woo_to_zoho($offset, $total, $synced, $created, $updated);
+        return;
+    }
+    
+    // Zoho to WooCommerce sync (default) - First call - fetch items from API
     if ($offset == 0 && $total == 0) {
         $response = zoho_api_get('items');
         
@@ -1761,6 +1740,18 @@ function zoho_sync_products_ajax_handler() {
             Permalink_Manager_URI_Functions_Post::save_uri($saved_product_id, '', true, 0);
         }
         
+        // Add detailed log
+        $zoho_item_id = isset($item['item_id']) ? $item['item_id'] : '';
+        zoho_add_detailed_log(
+            'item',
+            'product',
+            $saved_product_id,
+            'items-inventory',
+            $zoho_item_id,
+            json_encode($item),
+            json_encode(array('code' => 0, 'message' => ($is_new_product ? 'Created' : 'Updated'), 'product_id' => $saved_product_id))
+        );
+        
         $processed++;
         $batch_synced_skus[] = $sku_value;
     }
@@ -1806,6 +1797,239 @@ function zoho_sync_products_ajax_handler() {
         'pending' => count($stats['pending_skus']),
         'has_more' => $has_more
     ));
+}
+
+/* ======================================================
+   WOOCOMMERCE TO ZOHO SYNC FUNCTION
+====================================================== */
+function zoho_sync_woo_to_zoho($offset, $total, $synced, $created, $updated) {
+    // First call - fetch WooCommerce products
+    if ($offset == 0 && $total == 0) {
+        $args = array(
+            'status' => 'publish',
+            'limit' => -1,
+            'return' => 'ids'
+        );
+        $product_ids = wc_get_products($args);
+        $total = count($product_ids);
+        
+        if ($total == 0) {
+            wp_send_json_error('No products found in WooCommerce');
+            return;
+        }
+        
+        // Store product IDs in transient for batch processing
+        set_transient('zoho_woo_sync_products', $product_ids, 300);
+        set_transient('zoho_woo_sync_stats', array('synced' => 0, 'created' => 0, 'updated' => 0, 'pending' => 0, 'synced_skus' => array(), 'pending_skus' => array()), 300);
+    } else {
+        // Get product IDs from transient
+        $product_ids = get_transient('zoho_woo_sync_products');
+        if (!$product_ids) {
+            wp_send_json_error('Sync session expired. Please try again.');
+            return;
+        }
+        $total = count($product_ids);
+        $stats = get_transient('zoho_woo_sync_stats');
+        $synced_skus = $stats['synced_skus'] ?? array();
+        $pending_skus = $stats['pending_skus'] ?? array();
+    }
+    
+    // Process batch (10 products per batch for API calls)
+    $batch_size = 10;
+    $batch_ids = array_slice($product_ids, $offset, $batch_size);
+    $processed = 0;
+    $batch_created = 0;
+    $batch_updated = 0;
+    $batch_synced_skus = array();
+    $batch_pending_skus = array();
+    
+    // Get organization ID
+    $org_id = get_option('zoho_organization_id', '');
+    $access_token = get_option('zoho_access_token', '');
+    
+    if (empty($org_id) || empty($access_token)) {
+        wp_send_json_error('Zoho connection not configured');
+        return;
+    }
+    
+    foreach ($batch_ids as $product_id) {
+        $product = wc_get_product($product_id);
+        if (!$product) {
+            $batch_pending_skus[] = array('sku' => $product_id, 'reason' => 'Product not found');
+            continue;
+        }
+        
+        $sku = $product->get_sku();
+        if (empty($sku)) {
+            $batch_pending_skus[] = array('sku' => $product_id, 'reason' => 'No SKU');
+            continue;
+        }
+        
+        // Prepare item data for Zoho
+        $item_data = array(
+            'name' => $product->get_name(),
+            'sku' => $sku,
+            'rate' => floatval($product->get_regular_price()),
+            'description' => $product->get_description(),
+            'item_type' => 'inventory',
+        );
+        
+        // Add stock if managing stock
+        if ($product->get_manage_stock()) {
+            $item_data['initial_stock'] = $product->get_stock_quantity() ?: 0;
+            $item_data['initial_stock_rate'] = floatval($product->get_regular_price());
+        }
+        
+        // Check if item exists in Zoho by SKU
+        $zoho_item_id = zoho_get_item_by_sku($sku);
+        
+        $request_data = json_encode(array('data' => array($item_data)));
+        
+        if ($zoho_item_id) {
+            // Update existing item
+            $response = zoho_api_put('items/' . $zoho_item_id, $item_data);
+            $action = 'updated';
+            $batch_updated++;
+        } else {
+            // Create new item
+            $response = zoho_api_post('items', $item_data);
+            $action = 'created';
+            $batch_created++;
+        }
+        
+        // Log the sync
+        $zoho_object_id = '';
+        if (isset($response['item']['item_id'])) {
+            $zoho_object_id = $response['item']['item_id'];
+        }
+        
+        zoho_add_detailed_log(
+            'item',
+            'product',
+            $product_id,
+            'items-inventory',
+            $zoho_object_id,
+            $request_data,
+            json_encode($response)
+        );
+        
+        if (is_wp_error($response) || (isset($response['code']) && $response['code'] != 0)) {
+            $error_msg = is_wp_error($response) ? $response->get_error_message() : ($response['message'] ?? 'Unknown error');
+            $batch_pending_skus[] = array('sku' => $sku, 'reason' => $error_msg);
+            // Revert count
+            if ($action == 'updated') $batch_updated--;
+            else $batch_created--;
+        } else {
+            $batch_synced_skus[] = $sku;
+        }
+        
+        $processed++;
+    }
+    
+    // Calculate new totals
+    $stats = get_transient('zoho_woo_sync_stats') ?: array('synced' => 0, 'created' => 0, 'updated' => 0, 'synced_skus' => array(), 'pending_skus' => array());
+    $new_offset = $offset + $processed;
+    $new_synced = $synced + count($batch_synced_skus);
+    $new_created = $created + $batch_created;
+    $new_updated = $updated + $batch_updated;
+    
+    // Update transient stats
+    $stats['synced_skus'] = array_merge($stats['synced_skus'] ?? array(), $batch_synced_skus);
+    $stats['pending_skus'] = array_merge($stats['pending_skus'] ?? array(), $batch_pending_skus);
+    set_transient('zoho_woo_sync_stats', $stats, 300);
+    
+    $has_more = $new_offset < $total;
+    
+    // If last batch, save log and cleanup
+    if (!$has_more) {
+        zoho_add_sync_log($total, $new_synced, $stats['synced_skus'], $stats['pending_skus'], $new_created, $new_updated);
+        delete_transient('zoho_woo_sync_products');
+        delete_transient('zoho_woo_sync_stats');
+    }
+    
+    wp_send_json_success(array(
+        'offset' => $new_offset,
+        'total' => $total,
+        'synced' => $new_synced,
+        'created' => $new_created,
+        'updated' => $new_updated,
+        'pending' => count($stats['pending_skus']),
+        'has_more' => $has_more
+    ));
+}
+
+/* ======================================================
+   HELPER: Get Zoho Item by SKU
+====================================================== */
+function zoho_get_item_by_sku($sku) {
+    $response = zoho_api_get('items?sku=' . urlencode($sku));
+    
+    if (!is_wp_error($response) && isset($response['items']) && !empty($response['items'])) {
+        return $response['items'][0]['item_id'];
+    }
+    
+    return null;
+}
+
+/* ======================================================
+   HELPER: Zoho API POST
+====================================================== */
+function zoho_api_post($endpoint, $data) {
+    $access_token = get_option('zoho_access_token', '');
+    $org_id = get_option('zoho_organization_id', '');
+    
+    if (empty($access_token) || empty($org_id)) {
+        return new WP_Error('no_credentials', 'Zoho credentials not configured');
+    }
+    
+    $url = 'https://www.zohoapis.com/inventory/v1/' . $endpoint . '?organization_id=' . $org_id;
+    
+    $response = wp_remote_post($url, array(
+        'headers' => array(
+            'Authorization' => 'Zoho-oauthtoken ' . $access_token,
+            'Content-Type' => 'application/json'
+        ),
+        'body' => json_encode($data),
+        'timeout' => 30
+    ));
+    
+    if (is_wp_error($response)) {
+        return $response;
+    }
+    
+    $body = wp_remote_retrieve_body($response);
+    return json_decode($body, true);
+}
+
+/* ======================================================
+   HELPER: Zoho API PUT
+====================================================== */
+function zoho_api_put($endpoint, $data) {
+    $access_token = get_option('zoho_access_token', '');
+    $org_id = get_option('zoho_organization_id', '');
+    
+    if (empty($access_token) || empty($org_id)) {
+        return new WP_Error('no_credentials', 'Zoho credentials not configured');
+    }
+    
+    $url = 'https://www.zohoapis.com/inventory/v1/' . $endpoint . '?organization_id=' . $org_id;
+    
+    $response = wp_remote_request($url, array(
+        'method' => 'PUT',
+        'headers' => array(
+            'Authorization' => 'Zoho-oauthtoken ' . $access_token,
+            'Content-Type' => 'application/json'
+        ),
+        'body' => json_encode($data),
+        'timeout' => 30
+    ));
+    
+    if (is_wp_error($response)) {
+        return $response;
+    }
+    
+    $body = wp_remote_retrieve_body($response);
+    return json_decode($body, true);
 }
 
 /* ======================================================
@@ -1909,35 +2133,7 @@ function zoho_invoice_sync_page() {
     
     echo '<button id="zoho-start-invoice-sync" class="button button-primary" type="button">Sync Invoices Now</button>';
     
-    // Recent sync logs
-    echo '<h2 style="margin-top: 30px;">Recent Invoice Sync Logs</h2>';
-    $logs = get_option('zoho_detailed_logs', []);
-    $invoice_logs = array_filter($logs, function($log) {
-        return ($log['type'] ?? '') === 'invoice';
-    });
-    $invoice_logs = array_slice(array_reverse($invoice_logs), 0, 10);
-    
-    if (empty($invoice_logs)) {
-        echo '<p>No invoice sync logs yet.</p>';
-    } else {
-        echo '<table class="wp-list-table widefat fixed striped">';
-        echo '<thead><tr>
-            <th>Time</th>
-            <th>Woo Order ID</th>
-            <th>Zoho Invoice ID</th>
-            <th>Action</th>
-        </tr></thead><tbody>';
-        foreach ($invoice_logs as $log) {
-            echo '<tr>';
-            echo '<td>'.esc_html($log['time']).'</td>';
-            echo '<td>'.esc_html($log['woo_object_id'] ?? '-').'</td>';
-            echo '<td>'.esc_html($log['zoho_object_id'] ?? '-').'</td>';
-            echo '<td><a href="'.admin_url('admin.php?page=zoho-logs&tab=invoices&view_log='.esc_attr($log['id'])).'" class="button button-small">View</a></td>';
-            echo '</tr>';
-        }
-        echo '</tbody></table>';
-        echo '<p><a href="'.admin_url('admin.php?page=zoho-logs&tab=invoices').'">View all invoice logs →</a></p>';
-    }
+    echo '<p style="margin-top: 15px;"><a href="'.admin_url('admin.php?page=zoho-logs&tab=invoices').'">View Invoice Sync Logs →</a></p>';
     
     ?>
     <script>
@@ -2019,35 +2215,7 @@ function zoho_contact_sync_page() {
     
     echo '<button id="zoho-start-contact-sync" class="button button-primary" type="button">Sync Contacts Now</button>';
     
-    // Recent sync logs
-    echo '<h2 style="margin-top: 30px;">Recent Contact Sync Logs</h2>';
-    $logs = get_option('zoho_detailed_logs', []);
-    $contact_logs = array_filter($logs, function($log) {
-        return ($log['type'] ?? '') === 'contact';
-    });
-    $contact_logs = array_slice(array_reverse($contact_logs), 0, 10);
-    
-    if (empty($contact_logs)) {
-        echo '<p>No contact sync logs yet.</p>';
-    } else {
-        echo '<table class="wp-list-table widefat fixed striped">';
-        echo '<thead><tr>
-            <th>Time</th>
-            <th>Woo Customer ID</th>
-            <th>Zoho Contact ID</th>
-            <th>Action</th>
-        </tr></thead><tbody>';
-        foreach ($contact_logs as $log) {
-            echo '<tr>';
-            echo '<td>'.esc_html($log['time']).'</td>';
-            echo '<td>'.esc_html($log['woo_object_id'] ?? '-').'</td>';
-            echo '<td>'.esc_html($log['zoho_object_id'] ?? '-').'</td>';
-            echo '<td><a href="'.admin_url('admin.php?page=zoho-logs&tab=contacts&view_log='.esc_attr($log['id'])).'" class="button button-small">View</a></td>';
-            echo '</tr>';
-        }
-        echo '</tbody></table>';
-        echo '<p><a href="'.admin_url('admin.php?page=zoho-logs&tab=contacts').'">View all contact logs →</a></p>';
-    }
+    echo '<p style="margin-top: 15px;"><a href="'.admin_url('admin.php?page=zoho-logs&tab=contacts').'">View Contact Sync Logs →</a></p>';
     
     ?>
     <script>
