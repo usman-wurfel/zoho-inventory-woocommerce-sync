@@ -369,6 +369,7 @@ function zoho_inventory_sync_page() {
             }
 
             $product_id = wc_get_product_id_by_sku($item['sku']);
+            $is_new_product = false;
             
             if (!$product_id) {
                 // Create new product if not found
@@ -389,6 +390,7 @@ function zoho_inventory_sync_page() {
                 // Set catalog visibility to visible
                 $product->set_catalog_visibility('visible');
                 
+                $is_new_product = true;
                 $created++;
             } else {
                 // Update existing product
@@ -419,14 +421,14 @@ function zoho_inventory_sync_page() {
             // Get the product ID after saving
             $saved_product_id = $product->get_id();
             
-            // If Permalink Manager plugin is active, manually trigger URI generation
-            if ($saved_product_id && class_exists('Permalink_Manager_URI_Functions_Post')) {
-                // Clear existing URI first, then regenerate
+            // If Permalink Manager plugin is active, manually trigger URI generation for new products
+            if ($saved_product_id && $is_new_product && class_exists('Permalink_Manager_URI_Functions_Post')) {
+                // Clear existing URI first, then regenerate for new products
                 global $permalink_manager_uris;
                 if (isset($permalink_manager_uris[$saved_product_id])) {
                     unset($permalink_manager_uris[$saved_product_id]);
                 }
-                // Force generate permalink
+                // Force generate permalink for new product
                 Permalink_Manager_URI_Functions_Post::save_uri($saved_product_id, '', true, 0);
             }
 
