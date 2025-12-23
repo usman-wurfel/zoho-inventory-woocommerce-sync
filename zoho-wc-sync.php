@@ -463,29 +463,33 @@ function zoho_inventory_sync_page() {
         $args = array(
             'post_type' => 'product',
             'posts_per_page' => -1,
-            'post_status' => 'publish',
+            'post_status' => array('publish', 'draft', 'pending'),
             'fields' => 'ids'
         );
         $product_ids = get_posts($args);
         
         if (class_exists('Permalink_Manager_URI_Functions_Post')) {
-            global $permalink_manager_uris;
-            
             foreach ($product_ids as $product_id) {
-                // Clear existing URI
-                if (isset($permalink_manager_uris[$product_id])) {
-                    unset($permalink_manager_uris[$product_id]);
+                $post = get_post($product_id);
+                if (!$post || $post->post_type != 'product') {
+                    continue;
                 }
-                // Regenerate permalink
-                Permalink_Manager_URI_Functions_Post::save_uri($product_id, '', true, 0);
+                
+                // Check if it's a new post or existing (based on post_date)
+                $is_new = (strtotime($post->post_date) > (time() - 60)); // Created in last minute
+                
+                // Regenerate permalink - pass empty string to use default URI
+                Permalink_Manager_URI_Functions_Post::save_uri($product_id, '', $is_new, false, true);
                 $regenerated++;
             }
             
-            // Save the URIs
-            update_option('permalink-manager-uris', $permalink_manager_uris);
+            // Flush rewrite rules
+            global $wp_rewrite;
+            $wp_rewrite->flush_rules(true);
             
             echo '<div class="notice notice-success">
-                <p>Permalinks regenerated for '.$regenerated.' products.</p>
+                <p><strong>Success!</strong> Permalinks regenerated for '.$regenerated.' products.</p>
+                <p>Please check your product pages now. If issues persist, try going to <a href="'.admin_url('options-permalink.php').'">Settings → Permalinks</a> and click "Save Changes".</p>
             </div>';
         } else {
             // Fallback: just flush rewrite rules
@@ -502,9 +506,15 @@ function zoho_inventory_sync_page() {
         <button class="button button-primary" name="start_inventory_sync">Sync Products Now</button>
     </form>';
     
-    echo '<form method="post" style="display: inline-block;">
+    echo '<form method="post" style="display: inline-block; margin-right: 10px;">
         <button class="button button-secondary" name="regenerate_permalinks" onclick="return confirm(\'Regenerate permalinks for all products?\');">Regenerate Permalinks</button>
     </form>';
+    
+    // Show Permalink Manager link if plugin is active
+    if (class_exists('Permalink_Manager_Admin_Functions')) {
+        $pm_tools_url = admin_url('tools.php?page=permalink-manager');
+        echo '<p class="description" style="margin-top: 15px;">If permalink issues persist after domain migration, you can also regenerate URIs from <a href="'.esc_url($pm_tools_url).'" target="_blank">Permalink Manager → Tools → Regenerate/reset</a></p>';
+    }
 
     /* ---------- LOG TABLE ---------- */
     $logs = get_option('zoho_inventory_logs', []);
