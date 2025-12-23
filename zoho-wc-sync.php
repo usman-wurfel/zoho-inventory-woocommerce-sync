@@ -177,7 +177,7 @@ function zoho_connection_page() {
 
     // Show connection success message
     if (isset($_GET['connected']) && $_GET['connected'] == '1') {
-        echo '<div class="notice notice-success"><p>✅ Successfully connected to Zoho! New token saved.</p></div>';
+        echo '<div class="notice notice-success"><p>Successfully connected to Zoho! New token saved.</p></div>';
     }
 
     // Show error messages
@@ -193,12 +193,12 @@ function zoho_connection_page() {
 
     // Connection status dikhao
     if ($connected) {
-        echo '<div class="notice notice-info"><p><strong>Status:</strong> ✅ Connected to Zoho</p></div>';
+        echo '<div class="notice notice-info"><p><strong>Status:</strong> Connected to Zoho</p></div>';
         if (get_option('zoho_refresh_token')) {
-            echo '<p><strong>Refresh Token:</strong> ✅ Saved</p>';
+            echo '<p><strong>Refresh Token:</strong> Saved</p>';
         }
     } else {
-        echo '<div class="notice notice-warning"><p><strong>Status:</strong> ❌ Not Connected</p></div>';
+        echo '<div class="notice notice-warning"><p><strong>Status:</strong> Not Connected</p></div>';
     }
 
     // Credentials form hamesha dikhao
@@ -207,11 +207,11 @@ function zoho_connection_page() {
         <tr><th>Client ID</th><td><input name="client_id" value="'.esc_attr(get_option('zoho_client_id')).'" class="regular-text" required></td></tr>
         <tr><th>Client Secret</th><td><input name="client_secret" type="password" value="'.esc_attr(get_option('zoho_client_secret')).'" class="regular-text" required></td></tr>
         <tr><th>Redirect URI</th><td><input name="redirect_uri" value="'.esc_attr(get_option('zoho_redirect_uri', $default_redirect_uri)).'" class="regular-text" required>
-            <p class="description">Yehi redirect URI ko Zoho App settings mein configure karna hoga.</p></td></tr>
+            <p class="description">Configure this redirect URI in your Zoho App settings.</p></td></tr>
     </table>';
     submit_button('Update & Connect','primary','save_zoho_credentials');
     echo '</form>';
-    echo '<p class="description">Credentials update karke automatically Zoho se connect hoga.</p>';
+    echo '<p class="description">After updating credentials, you will be automatically redirected to connect with Zoho.</p>';
 }
 
 /* ======================================================
@@ -247,13 +247,13 @@ function zoho_inventory_sync_page() {
     
     if ($cleaned) {
         update_option('zoho_inventory_logs', array_values($logs));
-        echo '<div class="notice notice-success"><p>✅ Old logs cleaned! Refreshing...</p></div>';
+        echo '<div class="notice notice-success"><p>Old logs cleaned! Refreshing...</p></div>';
         echo '<script>setTimeout(function(){ window.location.href = "'.admin_url('admin.php?page=zoho-inventory-sync&cleaned=1').'"; }, 1500);</script>';
         return;
     }
     
     if (isset($_GET['cleaned'])) {
-        echo '<div class="notice notice-success"><p>✅ Cleanup complete! Old logs removed.</p></div>';
+        echo '<div class="notice notice-success"><p>Cleanup complete! Old logs removed.</p></div>';
     }
 
     /* ---------- VIEW LOG ---------- */
@@ -269,10 +269,10 @@ function zoho_inventory_sync_page() {
                 echo '<p><strong>Synced:</strong> '.$log['synced'].'</p>';
                 echo '<p><strong>Pending:</strong> '.$log['pending'].'</p>';
 
-                echo '<h3>✅ Synced SKUs</h3>';
+                echo '<h3>Synced SKUs</h3>';
                 zoho_render_sku_table($log['synced_skus']);
 
-                echo '<h3>❌ Pending / Skipped</h3>';
+                echo '<h3>Pending / Skipped</h3>';
                 zoho_render_pending_table($log['pending_skus']);
 
                 echo '<a href="'.admin_url('admin.php?page=zoho-inventory-sync').'" class="button">Back</a>';
@@ -319,12 +319,12 @@ function zoho_inventory_sync_page() {
             $error_msg = $response['message'] ?? 'Unknown error';
             $error_code = $response['code'];
             
-            // Agar authorization error hai (code 57), to re-connect karne ko kaho
+            // If authorization error (code 57), ask to re-connect
             if ($error_code == 57) {
                 echo '<div class="notice notice-error">
                     <p><strong>Authorization Error (Code: '.$error_code.'):</strong> '.esc_html($error_msg).'</p>
-                    <p>Token expired ho gaya hai. Please <a href="'.admin_url('admin.php?page=zoho-sync').'">Zoho se phir se connect karein</a>.</p>
-                    <p>Ya agar refresh token save hai to page refresh karke phir try karein (auto-refresh try kiya gaya).</p>
+                    <p>Token has expired. Please <a href="'.admin_url('admin.php?page=zoho-sync').'">reconnect with Zoho</a>.</p>
+                    <p>Or if refresh token is saved, refresh the page and try again (auto-refresh was attempted).</p>
                 </div>';
             } else {
                 echo '<div class="notice notice-error">
