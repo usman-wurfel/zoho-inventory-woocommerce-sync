@@ -69,6 +69,23 @@ function zoho_register_admin_menu() {
 }
 
 /* ======================================================
+   ENQUEUE SCRIPTS FOR PROGRESS BAR
+====================================================== */
+add_action('admin_enqueue_scripts', 'zoho_enqueue_sync_scripts');
+function zoho_enqueue_sync_scripts($hook) {
+    // Only load on our sync page
+    if ($hook != 'toplevel_page_zoho-sync' && $hook != 'zoho-sync_page_zoho-inventory-sync') {
+        return;
+    }
+    
+    wp_enqueue_script('zoho-sync-script', plugin_dir_url(__FILE__) . 'js/zoho-sync.js', array('jquery'), '1.0.0', true);
+    wp_localize_script('zoho-sync-script', 'zohoSync', array(
+        'ajax_url' => admin_url('admin-ajax.php'),
+        'nonce' => wp_create_nonce('zoho_sync_nonce')
+    ));
+}
+
+/* ======================================================
    ZOHO OAUTH CALLBACK HANDLER
 ====================================================== */
 add_action('admin_init', function () {
@@ -288,177 +305,29 @@ function zoho_inventory_sync_page() {
     }
 
     echo '<h1>Inventory Sync</h1>';
-
-    /* ---------- START SYNC ---------- */
-    if (isset($_POST['start_inventory_sync'])) {
-
-        // API se data fetch karo
-        $response = zoho_api_get('items');
-        
-        // Debugging - response check karo
-        if (is_wp_error($response)) {
-            echo '<div class="notice notice-error">
-                <p><strong>Error:</strong> API call failed - '.$response->get_error_message().'</p>
-            </div>';
-            return;
-        }
-        
-        // Check for custom error messages
-        if (isset($response['error'])) {
-            echo '<div class="notice notice-error">
-                <p><strong>Error:</strong> '.esc_html($response['error']).'</p>
-            </div>';
-            return;
-        }
-        
-        // Response structure check karo
-        if (empty($response)) {
-            echo '<div class="notice notice-error">
-                <p><strong>Error:</strong> Empty response from Zoho API. Please check connection and try again.</p>
-                <p>Make sure you are connected to Zoho and access token is valid.</p>
-            </div>';
-            return;
-        }
-        
-        // Check for API errors (Zoho API error codes)
-        if (isset($response['code']) && $response['code'] != 0) {
-            $error_msg = $response['message'] ?? 'Unknown error';
-            $error_code = $response['code'];
-            
-            // If authorization error (code 57), ask to re-connect
-            if ($error_code == 57) {
-                echo '<div class="notice notice-error">
-                    <p><strong>Authorization Error (Code: '.$error_code.'):</strong> '.esc_html($error_msg).'</p>
-                    <p>Token has expired. Please <a href="'.admin_url('admin.php?page=zoho-sync').'">reconnect with Zoho</a>.</p>
-                    <p>Or if refresh token is saved, refresh the page and try again (auto-refresh was attempted).</p>
-                </div>';
-            } else {
-                echo '<div class="notice notice-error">
-                    <p><strong>API Error (Code: '.$error_code.'):</strong> '.esc_html($error_msg).'</p>
-                </div>';
-            }
-            return;
-        }
-        
-        // Items array extract karo
-        $items = [];
-        if (isset($response['items']) && is_array($response['items'])) {
-            $items = $response['items'];
-        } else {
-            echo '<div class="notice notice-warning">
-                <p><strong>Warning:</strong> No items found in API response.</p>
-                <p>Response structure: <pre>'.esc_html(print_r(array_keys($response), true)).'</pre></p>
-                <p>Full response (first 500 chars): <pre>'.esc_html(substr(print_r($response, true), 0, 500)).'</pre></p>
-            </div>';
-            // Return early if no items found
-            return;
-        }
-
-        $total = count($items);
-        $synced = 0;
-        $created = 0;
-        $updated = 0;
-        $synced_skus = [];
-        $pending_skus = [];
-
-        foreach ($items as $item) {
-
-            if (empty($item['sku'])) {
-                $pending_skus[] = ['sku'=>'(empty)','reason'=>'Missing SKU'];
-                continue;
-            }
-
-            $product_id = wc_get_product_id_by_sku($item['sku']);
-            $is_new_product = false;
-            
-            if (!$product_id) {
-                // Create new product if not found
-                $product = new WC_Product_Simple();
-                $product->set_sku($item['sku']);
-                
-                // Set product name from Zoho item name or use SKU if name not available
-                $product_name = !empty($item['name']) ? $item['name'] : $item['sku'];
-                $product->set_name($product_name);
-                
-                // Set slug explicitly from product name
-                $product_slug = sanitize_title($product_name);
-                $product->set_slug($product_slug);
-                
-                // Set status to publish
-                $product->set_status('publish');
-                
-                // Set catalog visibility to visible
-                $product->set_catalog_visibility('visible');
-                
-                $is_new_product = true;
-                $created++;
-            } else {
-                // Update existing product
-                $product = wc_get_product($product_id);
-                $updated++;
-            }
-
-            // Set price
-            if (isset($item['rate'])) {
-                $product->set_regular_price($item['rate']);
-            }
-
-            // Set stock quantity
-            if (isset($item['stock_on_hand'])) {
-                $product->set_manage_stock(true);
-                $product->set_stock_quantity($item['stock_on_hand']);
-                $product->set_stock_status('instock');
-            }
-
-            // Set description if available from Zoho
-            if (!empty($item['description'])) {
-                $product->set_description($item['description']);
-            }
-
-            // Save product
-            $product->save();
-            
-            // Get the product ID after saving
-            $saved_product_id = $product->get_id();
-            
-            // If Permalink Manager plugin is active, manually trigger URI generation for new products
-            if ($saved_product_id && $is_new_product && class_exists('Permalink_Manager_URI_Functions_Post')) {
-                // Clear existing URI first, then regenerate for new products
-                global $permalink_manager_uris;
-                if (isset($permalink_manager_uris[$saved_product_id])) {
-                    unset($permalink_manager_uris[$saved_product_id]);
-                }
-                // Force generate permalink for new product
-                Permalink_Manager_URI_Functions_Post::save_uri($saved_product_id, '', true, 0);
-            }
-
-            $synced++;
-            $synced_skus[] = $item['sku'];
-        }
-        
-        // Flush rewrite rules after creating new products to ensure permalinks work
-        if ($created > 0) {
-            // Force flush rewrite rules
-            global $wp_rewrite;
-            $wp_rewrite->flush_rules(true);
-        }
-
-        zoho_add_sync_log($total,$synced,$synced_skus,$pending_skus,$created,$updated);
-
-        echo '<div class="notice notice-success">
+    
+    // Show success message from previous sync (if exists)
+    if (isset($_GET['sync_completed'])) {
+        echo '<div id="zoho-sync-success" class="notice notice-success">
             <p><strong>Sync Completed!</strong></p>
-            <p>Total: '.$total.' | Synced: '.$synced.' | Created: '.$created.' | Updated: '.$updated.' | Pending: '.count($pending_skus).'</p>
+            <p>Total: '.intval($_GET['total']).' | Synced: '.intval($_GET['synced']).' | Created: '.intval($_GET['created']).' | Updated: '.intval($_GET['updated']).' | Pending: '.intval($_GET['pending']).'</p>
         </div>';
-        
-        if ($created > 0) {
-            echo '<div class="notice notice-info">
-                <p><strong>Note:</strong> If product pages show 404, please go to <a href="'.admin_url('options-permalink.php').'">Settings → Permalinks</a> and click "Save Changes" to refresh permalinks.</p>
-            </div>';
-        }
+    } else {
+        echo '<div id="zoho-sync-success" style="display:none;"></div>';
     }
 
+    // Progress bar container
+    echo '<div id="zoho-sync-progress" style="display:none; margin: 20px 0;">
+        <div style="background: #f0f0f0; border-radius: 4px; padding: 3px; margin-bottom: 10px;">
+            <div id="zoho-progress-bar" style="background: #2271b1; height: 24px; border-radius: 3px; width: 0%; transition: width 0.3s ease; text-align: center; line-height: 24px; color: white; font-weight: bold;">
+                <span id="zoho-progress-percentage">0%</span>
+            </div>
+        </div>
+        <p id="zoho-progress-text" style="margin: 5px 0;">Starting sync...</p>
+    </div>';
+
     echo '<form method="post">
-        <button class="button button-primary" name="start_inventory_sync">Sync Products Now</button>
+        <button id="zoho-start-sync" class="button button-primary" type="button">Sync Products Now</button>
     </form>';
 
     /* ---------- LOG TABLE ---------- */
@@ -499,6 +368,185 @@ function zoho_inventory_sync_page() {
     }
 
     echo '</tbody></table>';
+}
+
+/* ======================================================
+   AJAX HANDLER FOR PRODUCT SYNC
+====================================================== */
+add_action('wp_ajax_zoho_sync_products_ajax', 'zoho_sync_products_ajax_handler');
+function zoho_sync_products_ajax_handler() {
+    check_ajax_referer('zoho_sync_nonce', 'nonce');
+    
+    if (!current_user_can('manage_options')) {
+        wp_send_json_error('Unauthorized');
+        return;
+    }
+    
+    $offset = isset($_POST['offset']) ? intval($_POST['offset']) : 0;
+    $total = isset($_POST['total']) ? intval($_POST['total']) : 0;
+    $synced = isset($_POST['synced']) ? intval($_POST['synced']) : 0;
+    $created = isset($_POST['created']) ? intval($_POST['created']) : 0;
+    $updated = isset($_POST['updated']) ? intval($_POST['updated']) : 0;
+    
+    // First call - fetch items from API
+    if ($offset == 0 && $total == 0) {
+        $response = zoho_api_get('items');
+        
+        if (is_wp_error($response)) {
+            wp_send_json_error('API call failed: ' . $response->get_error_message());
+            return;
+        }
+        
+        if (isset($response['error'])) {
+            wp_send_json_error($response['error']);
+            return;
+        }
+        
+        if (empty($response)) {
+            wp_send_json_error('Empty response from Zoho API');
+            return;
+        }
+        
+        if (isset($response['code']) && $response['code'] != 0) {
+            $error_msg = $response['message'] ?? 'Unknown error';
+            wp_send_json_error('API Error (Code: ' . $response['code'] . '): ' . $error_msg);
+            return;
+        }
+        
+        if (!isset($response['items']) || !is_array($response['items'])) {
+            wp_send_json_error('No items found in API response');
+            return;
+        }
+        
+        $items = $response['items'];
+        $total = count($items);
+        
+        // Store items in transient for batch processing
+        set_transient('zoho_sync_items', $items, 300); // 5 minutes
+        set_transient('zoho_sync_stats', array('synced' => 0, 'created' => 0, 'updated' => 0, 'pending' => 0, 'synced_skus' => array(), 'pending_skus' => array()), 300);
+    } else {
+        // Get items from transient
+        $items = get_transient('zoho_sync_items');
+        if (!$items) {
+            wp_send_json_error('Sync session expired. Please try again.');
+            return;
+        }
+        $total = count($items);
+        $stats = get_transient('zoho_sync_stats');
+        $synced_skus = $stats['synced_skus'] ?? array();
+        $pending_skus = $stats['pending_skus'] ?? array();
+    }
+    
+    // Process batch (50 products per batch)
+    $batch_size = 50;
+    $batch_items = array_slice($items, $offset, $batch_size);
+    $processed = 0;
+    $batch_created = 0;
+    $batch_updated = 0;
+    $batch_synced_skus = array();
+    $batch_pending_skus = array();
+    
+    foreach ($batch_items as $item) {
+        if (empty($item['sku'])) {
+            $batch_pending_skus[] = ['sku'=>'(empty)','reason'=>'Missing SKU'];
+            continue;
+        }
+        
+        $product_id = wc_get_product_id_by_sku($item['sku']);
+        $is_new_product = false;
+        
+        if (!$product_id) {
+            // Create new product
+            $product = new WC_Product_Simple();
+            $product->set_sku($item['sku']);
+            
+            $product_name = !empty($item['name']) ? $item['name'] : $item['sku'];
+            $product->set_name($product_name);
+            $product->set_slug(sanitize_title($product_name));
+            $product->set_status('publish');
+            $product->set_catalog_visibility('visible');
+            
+            $is_new_product = true;
+            $batch_created++;
+        } else {
+            $product = wc_get_product($product_id);
+            $batch_updated++;
+        }
+        
+        // Set price
+        if (isset($item['rate'])) {
+            $product->set_regular_price($item['rate']);
+        }
+        
+        // Set stock
+        if (isset($item['stock_on_hand'])) {
+            $product->set_manage_stock(true);
+            $product->set_stock_quantity($item['stock_on_hand']);
+            $product->set_stock_status('instock');
+        }
+        
+        // Set description
+        if (!empty($item['description'])) {
+            $product->set_description($item['description']);
+        }
+        
+        $product->save();
+        $saved_product_id = $product->get_id();
+        
+        // Permalink Manager integration
+        if ($saved_product_id && $is_new_product && class_exists('Permalink_Manager_URI_Functions_Post')) {
+            global $permalink_manager_uris;
+            if (isset($permalink_manager_uris[$saved_product_id])) {
+                unset($permalink_manager_uris[$saved_product_id]);
+            }
+            Permalink_Manager_URI_Functions_Post::save_uri($saved_product_id, '', true, 0);
+        }
+        
+        $processed++;
+        $batch_synced_skus[] = $item['sku'];
+    }
+    
+    // Update stats
+    $new_offset = $offset + $batch_size;
+    $new_synced = $synced + $processed;
+    $new_created = $created + $batch_created;
+    $new_updated = $updated + $batch_updated;
+    
+    $stats = get_transient('zoho_sync_stats');
+    $stats['synced'] = $new_synced;
+    $stats['created'] = $new_created;
+    $stats['updated'] = $new_updated;
+    $stats['synced_skus'] = array_merge($stats['synced_skus'] ?? array(), $batch_synced_skus);
+    $stats['pending_skus'] = array_merge($stats['pending_skus'] ?? array(), $batch_pending_skus);
+    set_transient('zoho_sync_stats', $stats, 300);
+    
+    $has_more = $new_offset < $total;
+    
+    // If last batch, save log and cleanup
+    if (!$has_more) {
+        // Flush rewrite rules
+        if ($new_created > 0) {
+            global $wp_rewrite;
+            $wp_rewrite->flush_rules(false);
+        }
+        
+        // Save log
+        zoho_add_sync_log($total, $new_synced, $stats['synced_skus'], $stats['pending_skus'], $new_created, $new_updated);
+        
+        // Cleanup transients
+        delete_transient('zoho_sync_items');
+        delete_transient('zoho_sync_stats');
+    }
+    
+    wp_send_json_success(array(
+        'offset' => $new_offset,
+        'total' => $total,
+        'synced' => $new_synced,
+        'created' => $new_created,
+        'updated' => $new_updated,
+        'pending' => count($stats['pending_skus']),
+        'has_more' => $has_more
+    ));
 }
 
 /* ======================================================
