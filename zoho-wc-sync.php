@@ -526,7 +526,44 @@ add_action('admin_init', function() {
             update_option($key, $value);
         }
         
-        wp_redirect(admin_url('admin.php?page=zoho-field-mapping&saved=1'));
+        wp_redirect(admin_url('admin.php?page=zoho-field-mapping&tab=items&saved=1'));
+        exit;
+    }
+    
+    // Save invoice mapping settings
+    if (isset($_POST['save_zoho_invoice_mapping']) && check_admin_referer('zoho_field_mapping_nonce')) {
+        // Save invoice field mappings
+        update_option('zoho_invoice_customer_id_type', sanitize_text_field($_POST['invoice_customer_id_type'] ?? 'standard_field'));
+        $customer_id_value = ($_POST['invoice_customer_id_type'] == 'custom_value') ? 
+            sanitize_text_field($_POST['invoice_customer_id_custom_value'] ?? '') : 
+            sanitize_text_field($_POST['invoice_customer_id_value'] ?? 'shop_order_billing_email');
+        update_option('zoho_invoice_customer_id_value', $customer_id_value);
+        
+        update_option('zoho_invoice_reference_number_type', sanitize_text_field($_POST['invoice_reference_number_type'] ?? 'custom_value'));
+        $ref_number_value = ($_POST['invoice_reference_number_type'] == 'custom_value') ? 
+            sanitize_text_field($_POST['invoice_reference_number_custom_value'] ?? 'woo-order-{shop_order_order_id}') : 
+            sanitize_text_field($_POST['invoice_reference_number_value'] ?? '');
+        update_option('zoho_invoice_reference_number_value', $ref_number_value);
+        
+        update_option('zoho_invoice_date_type', sanitize_text_field($_POST['invoice_date_type'] ?? 'standard_field'));
+        $date_value = ($_POST['invoice_date_type'] == 'custom_value') ? 
+            sanitize_text_field($_POST['invoice_date_custom_value'] ?? '') : 
+            sanitize_text_field($_POST['invoice_date_value'] ?? 'shop_order_order_create_date');
+        update_option('zoho_invoice_date_value', $date_value);
+        
+        update_option('zoho_invoice_invoice_number_type', sanitize_text_field($_POST['invoice_invoice_number_type'] ?? 'custom_value'));
+        $invoice_number_value = ($_POST['invoice_invoice_number_type'] == 'custom_value') ? 
+            sanitize_text_field($_POST['invoice_invoice_number_custom_value'] ?? 'woo{shop_order_order_id}') : 
+            sanitize_text_field($_POST['invoice_invoice_number_value'] ?? '');
+        update_option('zoho_invoice_invoice_number_value', $invoice_number_value);
+        
+        update_option('zoho_invoice_reason_type', sanitize_text_field($_POST['invoice_reason_type'] ?? 'custom_value'));
+        $reason_value = ($_POST['invoice_reason_type'] == 'custom_value') ? 
+            sanitize_text_field($_POST['invoice_reason_custom_value'] ?? 'Invoice create or update') : 
+            sanitize_text_field($_POST['invoice_reason_value'] ?? '');
+        update_option('zoho_invoice_reason_value', $reason_value);
+        
+        wp_redirect(admin_url('admin.php?page=zoho-field-mapping&tab=invoices&saved=1'));
         exit;
     }
 });
@@ -537,8 +574,37 @@ function zoho_field_mapping_page() {
         echo '<div class="notice notice-success"><p>Field mapping settings saved successfully!</p></div>';
     }
     
+    // Get current tab
+    $current_tab = isset($_GET['tab']) ? sanitize_text_field($_GET['tab']) : 'items';
+    
     echo '<h1>Field Mapping & Sync Settings</h1>';
-    echo '<p>Configure which attributes to sync and map Zoho fields to WooCommerce fields.</p>';
+    
+    // Tabs
+    echo '<nav class="nav-tab-wrapper">';
+    echo '<a href="'.admin_url('admin.php?page=zoho-field-mapping&tab=items').'" class="nav-tab '.($current_tab == 'items' ? 'nav-tab-active' : '').'">Items</a>';
+    echo '<a href="'.admin_url('admin.php?page=zoho-field-mapping&tab=invoices').'" class="nav-tab '.($current_tab == 'invoices' ? 'nav-tab-active' : '').'">Invoices</a>';
+    echo '<a href="'.admin_url('admin.php?page=zoho-field-mapping&tab=customers').'" class="nav-tab '.($current_tab == 'customers' ? 'nav-tab-active' : '').'">Customers</a>';
+    echo '</nav>';
+    
+    echo '<div class="tab-content" style="margin-top: 20px;">';
+    
+    // Show appropriate tab content
+    if ($current_tab == 'items') {
+        zoho_field_mapping_items_tab();
+    } elseif ($current_tab == 'invoices') {
+        zoho_field_mapping_invoices_tab();
+    } elseif ($current_tab == 'customers') {
+        zoho_field_mapping_customers_tab();
+    }
+    
+    echo '</div>';
+}
+
+/* ======================================================
+   ITEMS MAPPING TAB
+====================================================== */
+function zoho_field_mapping_items_tab() {
+    echo '<p>Configure which attributes to sync and map Zoho fields to WooCommerce fields for products.</p>';
     
     // Get saved settings with defaults
     $sync_name = get_option('zoho_sync_name', 'yes');
@@ -558,7 +624,6 @@ function zoho_field_mapping_page() {
     $sync_mpn = get_option('zoho_sync_mpn', 'no');
     $sync_brand = get_option('zoho_sync_brand', 'no');
     $sync_manufacturer = get_option('zoho_sync_manufacturer', 'no');
-    $sync_invoice = get_option('zoho_sync_invoice', 'no');
     
     // Zoho field options
     $zoho_fields = array(
@@ -854,14 +919,6 @@ function zoho_field_mapping_page() {
     }
     echo '</select></td>
         <td>Attribute: Manufacturer (fixed)</td>
-    </tr>';
-    
-    // Invoice Sync section
-    echo '<tr style="background: #f9f9f9;"><td colspan="4"><h3 style="margin: 10px 0;">Invoice Sync Settings</h3></td></tr>';
-    echo '<tr>
-        <td><strong>Invoice Sync</strong></td>
-        <td><input type="checkbox" name="sync_invoice" value="1" '.checked($sync_invoice, 'yes', false).'></td>
-        <td colspan="2">Enable two-way sync between Zoho Invoices and WooCommerce Orders</td>
     </tr>';
     
     echo '</tbody></table>';
