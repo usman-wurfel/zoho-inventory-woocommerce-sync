@@ -84,6 +84,15 @@ function zoho_register_admin_menu() {
         'zoho-invoice-sync',
         'zoho_invoice_sync_page'
     );
+
+    add_submenu_page(
+        'zoho-sync',
+        'Contact Sync',
+        'Contact Sync',
+        'manage_options',
+        'zoho-contact-sync',
+        'zoho_contact_sync_page'
+    );
 }
 
 /* ======================================================
@@ -401,8 +410,8 @@ function zoho_dashboard_page() {
         <div style="background: #fff; border: 1px solid #ccd0d4; box-shadow: 0 1px 1px rgba(0,0,0,.04); padding: 20px; border-radius: 4px;">
             <h2 style="margin-top: 0; font-size: 18px; margin-bottom: 20px;">Connection Settings</h2>
             
-            <form method="post">
-                <table class="form-table">
+    <form method="post">
+    <table class="form-table">
                     <tr>
                         <th scope="row"><label for="client_id">Client ID</label></th>
                         <td>
@@ -564,6 +573,30 @@ add_action('admin_init', function() {
         update_option('zoho_invoice_reason_value', $reason_value);
         
         wp_redirect(admin_url('admin.php?page=zoho-field-mapping&tab=invoices&saved=1'));
+        exit;
+    }
+    
+    // Save customer mapping settings
+    if (isset($_POST['save_zoho_customer_mapping']) && check_admin_referer('zoho_field_mapping_nonce')) {
+        $customer_fields = array(
+            'contact_name', 'company_name', 'contact_type', 'customer_sub_type',
+            'first_name', 'last_name', 'email', 'bill_address', 'billing_street2',
+            'billing_city', 'billing_state', 'billing_zip', 'billing_country', 'billing_phone',
+            'ship_address', 'shipping_street2', 'shipping_city', 'shipping_state',
+            'shipping_zip', 'shipping_country'
+        );
+        
+        foreach ($customer_fields as $field) {
+            $type = sanitize_text_field($_POST['customer_' . $field . '_type'] ?? 'standard_field');
+            update_option('zoho_customer_' . $field . '_type', $type);
+            
+            $value = ($type == 'custom_value') ? 
+                sanitize_text_field($_POST['customer_' . $field . '_custom_value'] ?? '') : 
+                sanitize_text_field($_POST['customer_' . $field . '_value'] ?? '');
+            update_option('zoho_customer_' . $field . '_value', $value);
+        }
+        
+        wp_redirect(admin_url('admin.php?page=zoho-field-mapping&tab=customers&saved=1'));
         exit;
     }
 });
@@ -1147,10 +1180,115 @@ function zoho_field_mapping_invoices_tab() {
    CUSTOMERS MAPPING TAB
 ====================================================== */
 function zoho_field_mapping_customers_tab() {
-    echo '<p>Customer mapping settings will be available here.</p>';
-    echo '<div style="background: #fff; border: 1px solid #ddd; padding: 40px; text-align: center; border-radius: 4px;">';
-    echo '<p style="color: #666; font-size: 16px;">Customer mapping functionality coming soon...</p>';
-    echo '</div>';
+    echo '<p>Configure field mappings for syncing Zoho Contacts with WooCommerce Customers.</p>';
+    
+    // WooCommerce Customer fields
+    $wc_customer_fields = array(
+        'billing_email' => 'Billing Email',
+        'billing_first_name' => 'Billing First Name',
+        'billing_last_name' => 'Billing Last Name',
+        'billing_company' => 'Billing Company',
+        'billing_address_1' => 'Billing Address 1',
+        'billing_address_2' => 'Billing Address 2',
+        'billing_city' => 'Billing City',
+        'billing_state' => 'Billing State',
+        'billing_postcode' => 'Billing Postcode',
+        'billing_country' => 'Billing Country',
+        'billing_phone' => 'Billing Phone',
+        'shipping_first_name' => 'Shipping First Name',
+        'shipping_last_name' => 'Shipping Last Name',
+        'shipping_company' => 'Shipping Company',
+        'shipping_address_1' => 'Shipping Address 1',
+        'shipping_address_2' => 'Shipping Address 2',
+        'shipping_city' => 'Shipping City',
+        'shipping_state' => 'Shipping State',
+        'shipping_postcode' => 'Shipping Postcode',
+        'shipping_country' => 'Shipping Country',
+    );
+    
+    // Define all customer fields
+    $customer_fields = array(
+        'contact_name' => array('label' => 'Contact_name', 'api' => 'contact_name', 'type' => 'string', 'default_type' => 'standard_field', 'default_value' => 'billing_email'),
+        'company_name' => array('label' => 'Company_name', 'api' => 'company_name', 'type' => 'string', 'default_type' => 'standard_field', 'default_value' => 'billing_company'),
+        'contact_type' => array('label' => 'Contact_type', 'api' => 'contact_type', 'type' => 'string', 'default_type' => 'custom_value', 'default_value' => 'customer'),
+        'customer_sub_type' => array('label' => 'Customer_sub_type', 'api' => 'customer_sub_type', 'type' => 'string', 'default_type' => 'custom_value', 'default_value' => 'individual'),
+        'first_name' => array('label' => 'First_name', 'api' => 'first_name', 'type' => 'string', 'default_type' => 'standard_field', 'default_value' => 'billing_first_name'),
+        'last_name' => array('label' => 'Last_name', 'api' => 'last_name', 'type' => 'string', 'default_type' => 'standard_field', 'default_value' => 'billing_last_name'),
+        'email' => array('label' => 'Email', 'api' => 'email', 'type' => 'string', 'default_type' => 'standard_field', 'default_value' => 'billing_email'),
+        'bill_address' => array('label' => 'Bill_address', 'api' => 'bill_address', 'type' => 'string', 'default_type' => 'standard_field', 'default_value' => 'billing_address_1'),
+        'billing_street2' => array('label' => 'Billing_street2', 'api' => 'billing_street2', 'type' => 'string', 'default_type' => 'standard_field', 'default_value' => 'billing_address_2'),
+        'billing_city' => array('label' => 'Billing_city', 'api' => 'billing_city', 'type' => 'string', 'default_type' => 'standard_field', 'default_value' => 'billing_city'),
+        'billing_state' => array('label' => 'Billing_state', 'api' => 'billing_state', 'type' => 'string', 'default_type' => 'standard_field', 'default_value' => 'billing_state'),
+        'billing_zip' => array('label' => 'Billing_zip', 'api' => 'billing_zip', 'type' => 'string', 'default_type' => 'standard_field', 'default_value' => 'billing_postcode'),
+        'billing_country' => array('label' => 'Billing_country', 'api' => 'billing_country', 'type' => 'string', 'default_type' => 'standard_field', 'default_value' => 'billing_country'),
+        'billing_phone' => array('label' => 'Billing_phone', 'api' => 'billing_phone', 'type' => 'string', 'default_type' => 'standard_field', 'default_value' => 'billing_phone'),
+        'ship_address' => array('label' => 'Ship_address', 'api' => 'ship_address', 'type' => 'string', 'default_type' => 'standard_field', 'default_value' => 'shipping_address_1'),
+        'shipping_street2' => array('label' => 'Shipping_street2', 'api' => 'shipping_street2', 'type' => 'string', 'default_type' => 'standard_field', 'default_value' => 'shipping_address_2'),
+        'shipping_city' => array('label' => 'Shipping_city', 'api' => 'shipping_city', 'type' => 'string', 'default_type' => 'standard_field', 'default_value' => 'shipping_city'),
+        'shipping_state' => array('label' => 'Shipping_state', 'api' => 'shipping_state', 'type' => 'string', 'default_type' => 'standard_field', 'default_value' => 'shipping_state'),
+        'shipping_zip' => array('label' => 'Shipping_zip', 'api' => 'shipping_zip', 'type' => 'string', 'default_type' => 'standard_field', 'default_value' => 'shipping_postcode'),
+        'shipping_country' => array('label' => 'Shipping_country', 'api' => 'shipping_country', 'type' => 'string', 'default_type' => 'standard_field', 'default_value' => 'shipping_country'),
+    );
+    
+    echo '<form method="post">';
+    wp_nonce_field('zoho_field_mapping_nonce');
+    
+    foreach ($customer_fields as $field_key => $field_info) {
+        $saved_type = get_option('zoho_customer_' . $field_key . '_type', $field_info['default_type']);
+        $saved_value = get_option('zoho_customer_' . $field_key . '_value', $field_info['default_value']);
+        
+        echo '<div style="background: #fff; border: 1px solid #ddd; padding: 15px; margin-bottom: 15px; border-radius: 4px;">';
+        echo '<h3 style="margin-top: 0;">'.$field_info['label'].'</h3>';
+        echo '<p style="margin: 5px 0; color: #666;">API Name : <code>'.$field_info['api'].'</code> Type : <code>'.$field_info['type'].'</code></p>';
+        echo '<table class="form-table" style="margin-top: 15px;">';
+        echo '<tr>';
+        echo '<th scope="row"><label>Field Type</label></th>';
+        echo '<td>';
+        echo '<select name="customer_'.$field_key.'_type" class="zoho-field-type" data-field="customer_'.$field_key.'" style="width: 200px;">';
+        echo '<option value="standard_field" '.selected($saved_type, 'standard_field', false).'>Standard Fields</option>';
+        echo '<option value="custom_value" '.selected($saved_type, 'custom_value', false).'>Custom Value</option>';
+        echo '</select>';
+        echo '</td>';
+        echo '</tr>';
+        echo '<tr class="customer_'.$field_key.'_field_row" '.($saved_type == 'custom_value' ? 'style="display:none;"' : '').'>';
+        echo '<th scope="row"><label>Field Value</label></th>';
+        echo '<td>';
+        echo '<select name="customer_'.$field_key.'_value" style="width: 300px;">';
+        foreach ($wc_customer_fields as $wc_key => $wc_label) {
+            $sel = ($saved_type == 'standard_field' && $saved_value == $wc_key) ? ' selected' : '';
+            echo '<option value="'.esc_attr($wc_key).'"'.$sel.'>'.esc_html($wc_label).'</option>';
+        }
+        echo '</select>';
+        echo '</td>';
+        echo '</tr>';
+        echo '<tr class="customer_'.$field_key.'_custom_row" '.($saved_type == 'standard_field' ? 'style="display:none;"' : '').'>';
+        echo '<th scope="row"><label>Custom Value</label></th>';
+        echo '<td><input type="text" name="customer_'.$field_key.'_custom_value" value="'.esc_attr($saved_type == 'custom_value' ? $saved_value : $field_info['default_value']).'" class="regular-text"></td>';
+        echo '</tr>';
+        echo '</table>';
+        echo '</div>';
+    }
+    
+    submit_button('Save Customer Mapping Settings', 'primary', 'save_zoho_customer_mapping');
+    echo '</form>';
+    
+    ?>
+    <script>
+    jQuery(document).ready(function($) {
+        $('.zoho-field-type').on('change', function() {
+            var field = $(this).data('field');
+            var type = $(this).val();
+            if (type == 'custom_value') {
+                $('.' + field + '_field_row').hide();
+                $('.' + field + '_custom_row').show();
+            } else {
+                $('.' + field + '_field_row').show();
+                $('.' + field + '_custom_row').hide();
+            }
+        });
+    });
+    </script>
+    <?php
 }
 
 /* ======================================================
@@ -1216,7 +1354,7 @@ function zoho_inventory_sync_page() {
     }
 
     echo '<h1>Inventory Sync</h1>';
-    
+
     // Show success message from previous sync (if exists)
     if (isset($_GET['sync_completed'])) {
         echo '<div id="zoho-sync-success" class="notice notice-success">
@@ -1235,7 +1373,7 @@ function zoho_inventory_sync_page() {
             </div>
         </div>
         <p id="zoho-progress-text" style="margin: 5px 0;">Starting sync...</p>
-    </div>';
+        </div>';
 
     echo '<form method="post">
         <button id="zoho-start-sync" class="button button-primary" type="button">Sync Products Now</button>
@@ -1743,4 +1881,92 @@ function zoho_invoice_sync_page() {
     // Invoice sync logs placeholder
     echo '<h2>Invoice Sync History</h2>';
     echo '<p>No invoice sync history yet.</p>';
+}
+
+/* ======================================================
+   CONTACT SYNC PAGE
+====================================================== */
+function zoho_contact_sync_page() {
+    echo '<h1>Contact Sync</h1>';
+    
+    echo '<p>Sync contacts/customers between Zoho Inventory and WooCommerce.</p>';
+    
+    // Check connection
+    $access_token = get_option('zoho_access_token', '');
+    if (empty($access_token)) {
+        echo '<div class="notice notice-error"><p>Please connect to Zoho first from the <a href="'.admin_url('admin.php?page=zoho-sync').'">Dashboard</a>.</p></div>';
+        return;
+    }
+    
+    echo '<div style="margin: 20px 0; padding: 20px; background: #f9f9f9; border: 1px solid #ddd; border-radius: 4px;">
+        <h3>Sync Options</h3>
+        <p>Choose sync direction:</p>
+        <ul>
+            <li><strong>Zoho → WooCommerce:</strong> Create/Update WooCommerce customers from Zoho contacts</li>
+            <li><strong>WooCommerce → Zoho:</strong> Create/Update Zoho contacts from WooCommerce customers</li>
+            <li><strong>Two-Way Sync:</strong> Sync in both directions</li>
+        </ul>
+    </div>';
+    
+    echo '<div style="margin: 20px 0;">';
+    echo '<h3>Sync Contacts</h3>';
+    echo '<p>Configure contact field mappings in <a href="'.admin_url('admin.php?page=zoho-field-mapping&tab=customers').'">Field Mapping → Customers</a> before syncing.</p>';
+    
+    echo '<div id="zoho-contact-sync-progress" style="display:none; margin: 20px 0;">
+        <div style="background: #e0e0e0; border-radius: 4px; height: 30px; position: relative; overflow: hidden;">
+            <div id="contact-progress-bar" style="background: linear-gradient(90deg, #0073aa, #00a0d2); height: 100%; width: 0%; transition: width 0.3s;"></div>
+            <span id="contact-progress-text" style="position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%); font-weight: bold; color: #333;">0%</span>
+        </div>
+        <p id="contact-sync-status" style="margin-top: 10px;">Starting sync...</p>
+    </div>';
+    
+    echo '<div id="zoho-contact-sync-result" style="display:none; margin: 20px 0; padding: 15px; background: #d4edda; border: 1px solid #c3e6cb; border-radius: 4px;"></div>';
+    
+    echo '<form method="post" id="zoho-contact-sync-form">
+        <button class="button button-primary" type="button" id="sync-contacts-btn">Sync Contacts Now</button>
+    </form>';
+    echo '</div>';
+    
+    // Contact sync logs
+    echo '<h2>Contact Sync History</h2>';
+    $contact_logs = get_option('zoho_contact_sync_logs', []);
+    if (empty($contact_logs)) {
+        echo '<p>No contact sync history yet.</p>';
+    } else {
+        echo '<table class="wp-list-table widefat fixed striped">';
+        echo '<thead><tr><th>Time</th><th>Total</th><th>Synced</th><th>Created</th><th>Updated</th><th>Failed</th></tr></thead><tbody>';
+        foreach (array_reverse($contact_logs) as $log) {
+            echo '<tr>
+                <td>'.esc_html($log['time']).'</td>
+                <td>'.esc_html($log['total']).'</td>
+                <td>'.esc_html($log['synced']).'</td>
+                <td>'.esc_html($log['created']).'</td>
+                <td>'.esc_html($log['updated']).'</td>
+                <td>'.esc_html($log['failed']).'</td>
+            </tr>';
+        }
+        echo '</tbody></table>';
+    }
+    
+    ?>
+    <script>
+    jQuery(document).ready(function($) {
+        $('#sync-contacts-btn').on('click', function() {
+            var $btn = $(this);
+            $btn.prop('disabled', true).text('Syncing...');
+            $('#zoho-contact-sync-progress').show();
+            $('#zoho-contact-sync-result').hide();
+            
+            // Placeholder - actual AJAX sync to be implemented
+            setTimeout(function() {
+                $('#contact-progress-bar').css('width', '100%');
+                $('#contact-progress-text').text('100%');
+                $('#contact-sync-status').text('Contact sync functionality coming soon...');
+                $('#zoho-contact-sync-result').html('<strong>Note:</strong> Contact sync will be fully implemented in the next phase.').show();
+                $btn.prop('disabled', false).text('Sync Contacts Now');
+            }, 1000);
+        });
+    });
+    </script>
+    <?php
 }
