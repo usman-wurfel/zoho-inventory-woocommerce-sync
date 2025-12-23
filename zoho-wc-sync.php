@@ -206,7 +206,7 @@ function zoho_enqueue_sync_scripts($hook) {
         }
     ');
     
-    // Only load sync script on inventory sync page
+    // Load sync script on inventory sync page only (invoice/contact use inline scripts)
     if ($hook == 'zoho-sync_page_zoho-inventory-sync') {
         wp_enqueue_script('zoho-sync-script', plugin_dir_url(__FILE__) . 'js/zoho-sync.js', array('jquery'), '1.0.0', true);
         wp_localize_script('zoho-sync-script', 'zohoSync', array(
@@ -1370,7 +1370,7 @@ function zoho_inventory_sync_page() {
     }
 
     echo '<h1>Inventory Sync</h1>';
-    
+
     echo '<p>Configure product field mappings in <a href="'.admin_url('admin.php?page=zoho-field-mapping&tab=items').'">Field Mapping → Items</a> before syncing.</p>';
 
     // Show success message from previous sync (if exists)
@@ -1490,42 +1490,51 @@ function zoho_sync_products_ajax_handler() {
         return;
     }
     
-    // Zoho to WooCommerce sync (default) - First call - fetch items from API
+    // Zoho to WooCommerce sync (default) - First call - fetch ALL items from API with pagination
     if ($offset == 0 && $total == 0) {
-        $response = zoho_api_get('items');
+        $all_items = array();
+        $page = 1;
+        $per_page = 200; // Zoho default limit
         
-        if (is_wp_error($response)) {
-            wp_send_json_error('API call failed: ' . $response->get_error_message());
+        // Fetch all pages from Zoho API
+        do {
+            $response = zoho_api_get('items?page=' . $page . '&per_page=' . $per_page);
+            
+            if (is_wp_error($response)) {
+                wp_send_json_error('API call failed: ' . $response->get_error_message());
+                return;
+            }
+            
+            if (isset($response['error'])) {
+                wp_send_json_error($response['error']);
+                return;
+            }
+            
+            if (isset($response['code']) && $response['code'] != 0) {
+                $error_msg = $response['message'] ?? 'Unknown error';
+                wp_send_json_error('API Error (Code: ' . $response['code'] . '): ' . $error_msg);
+                return;
+            }
+            
+            $items = $response['items'] ?? array();
+            $all_items = array_merge($all_items, $items);
+            
+            $has_more_pages = isset($response['page_context']['has_more_page']) ? $response['page_context']['has_more_page'] : (count($items) >= $per_page);
+            $page++;
+            
+        } while ($has_more_pages && $page <= 50); // Max 50 pages = 10,000 items safety limit
+        
+        if (empty($all_items)) {
+            wp_send_json_error('No items found in Zoho');
             return;
         }
         
-        if (isset($response['error'])) {
-            wp_send_json_error($response['error']);
-            return;
-        }
-        
-        if (empty($response)) {
-            wp_send_json_error('Empty response from Zoho API');
-            return;
-        }
-        
-        if (isset($response['code']) && $response['code'] != 0) {
-            $error_msg = $response['message'] ?? 'Unknown error';
-            wp_send_json_error('API Error (Code: ' . $response['code'] . '): ' . $error_msg);
-            return;
-        }
-        
-        if (!isset($response['items']) || !is_array($response['items'])) {
-            wp_send_json_error('No items found in API response');
-            return;
-        }
-        
-        $items = $response['items'];
-        $total = count($items);
+        $total = count($all_items);
+        error_log('Zoho Sync: Found ' . $total . ' items from Zoho API');
         
         // Store items in transient for batch processing
-        set_transient('zoho_sync_items', $items, 300); // 5 minutes
-        set_transient('zoho_sync_stats', array('synced' => 0, 'created' => 0, 'updated' => 0, 'pending' => 0, 'synced_skus' => array(), 'pending_skus' => array()), 300);
+        set_transient('zoho_sync_items', $all_items, 600); // 10 minutes for large syncs
+        set_transient('zoho_sync_stats', array('synced' => 0, 'created' => 0, 'updated' => 0, 'pending' => 0, 'synced_skus' => array(), 'pending_skus' => array()), 600);
     } else {
         // Get items from transient
         $items = get_transient('zoho_sync_items');
@@ -1575,13 +1584,13 @@ function zoho_sync_products_ajax_handler() {
         
         if (empty($sku_value)) {
             $batch_pending_skus[] = ['sku'=>'(empty)','reason'=>'Missing SKU'];
-            continue;
-        }
-        
+                continue;
+            }
+
         $product_id = wc_get_product_id_by_sku($sku_value);
         $is_new_product = false;
         
-        if (!$product_id) {
+            if (!$product_id) {
             // Create new product
             $product = new WC_Product_Simple();
             $product->set_sku($sku_value);
@@ -1733,9 +1742,9 @@ function zoho_sync_products_ajax_handler() {
             if (!empty($image_value)) {
                 zoho_set_product_image($product, $image_value);
             }
-        }
-        
-        $product->save();
+            }
+
+            $product->save();
         $saved_product_id = $product->get_id();
         
         // Permalink Manager integration
@@ -1812,22 +1821,28 @@ function zoho_sync_products_ajax_handler() {
 function zoho_sync_woo_to_zoho($offset, $total, $synced, $created, $updated) {
     // First call - fetch WooCommerce products
     if ($offset == 0 && $total == 0) {
-        $args = array(
-            'status' => 'publish',
-            'limit' => -1,
-            'return' => 'ids'
-        );
-        $product_ids = wc_get_products($args);
+        // Use direct SQL query to get ALL products (published, draft, private, pending)
+        global $wpdb;
+        $product_ids = $wpdb->get_col("
+            SELECT ID FROM {$wpdb->posts} 
+            WHERE post_type = 'product' 
+            AND post_status IN ('publish', 'draft', 'private', 'pending')
+            ORDER BY ID ASC
+        ");
+        
+        // Log the count for debugging
+        error_log('Zoho Sync: Found ' . count($product_ids) . ' products to sync (WooCommerce to Zoho)');
+        
         $total = count($product_ids);
         
         if ($total == 0) {
             wp_send_json_error('No products found in WooCommerce');
-            return;
-        }
-        
-        // Store product IDs in transient for batch processing
-        set_transient('zoho_woo_sync_products', $product_ids, 300);
-        set_transient('zoho_woo_sync_stats', array('synced' => 0, 'created' => 0, 'updated' => 0, 'pending' => 0, 'synced_skus' => array(), 'pending_skus' => array()), 300);
+        return;
+    }
+
+        // Store product IDs in transient for batch processing (10 minutes for large syncs)
+        set_transient('zoho_woo_sync_products', $product_ids, 600);
+        set_transient('zoho_woo_sync_stats', array('synced' => 0, 'created' => 0, 'updated' => 0, 'pending' => 0, 'synced_skus' => array(), 'pending_skus' => array()), 600);
     } else {
         // Get product IDs from transient
         $product_ids = get_transient('zoho_woo_sync_products');
@@ -2836,6 +2851,9 @@ function zoho_invoice_sync_page() {
     ?>
     <script>
     jQuery(document).ready(function($) {
+        var ajaxUrl = '<?php echo admin_url('admin-ajax.php'); ?>';
+        var ajaxNonce = '<?php echo wp_create_nonce('zoho_sync_nonce'); ?>';
+        
         $('#zoho-start-invoice-sync').on('click', function() {
             var $btn = $(this);
             var fromDate = $('#invoice_from_date').val();
@@ -2851,11 +2869,11 @@ function zoho_invoice_sync_page() {
         
         function syncInvoices(offset, total, synced, created, updated, direction, fromDate, toDate) {
             $.ajax({
-                url: zohoSync.ajax_url,
+                url: ajaxUrl,
                 type: 'POST',
                 data: {
                     action: 'zoho_sync_invoices_ajax',
-                    nonce: zohoSync.nonce,
+                    nonce: ajaxNonce,
                     offset: offset,
                     total: total,
                     synced: synced,
@@ -2959,6 +2977,9 @@ function zoho_contact_sync_page() {
     ?>
     <script>
     jQuery(document).ready(function($) {
+        var ajaxUrl = '<?php echo admin_url('admin-ajax.php'); ?>';
+        var ajaxNonce = '<?php echo wp_create_nonce('zoho_sync_nonce'); ?>';
+        
         $('#zoho-start-contact-sync').on('click', function() {
             var $btn = $(this);
             var fromDate = $('#contact_from_date').val();
@@ -2974,11 +2995,11 @@ function zoho_contact_sync_page() {
         
         function syncContacts(offset, total, synced, created, updated, direction, fromDate, toDate) {
             $.ajax({
-                url: zohoSync.ajax_url,
+                url: ajaxUrl,
                 type: 'POST',
                 data: {
                     action: 'zoho_sync_contacts_ajax',
-                    nonce: zohoSync.nonce,
+                    nonce: ajaxNonce,
                     offset: offset,
                     total: total,
                     synced: synced,
