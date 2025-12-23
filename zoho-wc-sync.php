@@ -75,6 +75,15 @@ function zoho_register_admin_menu() {
         'zoho-inventory-sync',
         'zoho_inventory_sync_page'
     );
+
+    add_submenu_page(
+        'zoho-sync',
+        'Invoice Sync',
+        'Invoice Sync',
+        'manage_options',
+        'zoho-invoice-sync',
+        'zoho_invoice_sync_page'
+    );
 }
 
 /* ======================================================
@@ -347,6 +356,7 @@ function zoho_field_mapping_page() {
     $sync_mpn = get_option('zoho_sync_mpn', 'no');
     $sync_brand = get_option('zoho_sync_brand', 'no');
     $sync_manufacturer = get_option('zoho_sync_manufacturer', 'no');
+    $sync_invoice = get_option('zoho_sync_invoice', 'no');
     
     // Zoho field options
     $zoho_fields = array(
@@ -642,6 +652,14 @@ function zoho_field_mapping_page() {
     }
     echo '</select></td>
         <td>Attribute: Manufacturer (fixed)</td>
+    </tr>';
+    
+    // Invoice Sync section
+    echo '<tr style="background: #f9f9f9;"><td colspan="4"><h3 style="margin: 10px 0;">Invoice Sync Settings</h3></td></tr>';
+    echo '<tr>
+        <td><strong>Invoice Sync</strong></td>
+        <td><input type="checkbox" name="sync_invoice" value="1" '.checked($sync_invoice, 'yes', false).'></td>
+        <td colspan="2">Enable two-way sync between Zoho Invoices and WooCommerce Orders</td>
     </tr>';
     
     echo '</tbody></table>';
@@ -1204,4 +1222,40 @@ function zoho_add_sync_log($total,$synced,$synced_skus,$pending_skus,$created=0,
     ];
 
     update_option('zoho_inventory_logs', array_slice($logs, -20));
+}
+
+/* ======================================================
+   INVOICE SYNC PAGE
+====================================================== */
+function zoho_invoice_sync_page() {
+    echo '<h1>Invoice Sync</h1>';
+    
+    // Check if invoice sync is enabled
+    $invoice_sync_enabled = get_option('zoho_sync_invoice', 'no');
+    
+    if ($invoice_sync_enabled != 'yes') {
+        echo '<div class="notice notice-warning"><p><strong>Invoice Sync is disabled.</strong> Please enable it from <a href="'.admin_url('admin.php?page=zoho-field-mapping').'">Field Mapping</a> settings.</p></div>';
+    }
+    
+    echo '<p>Sync invoices between Zoho Inventory and WooCommerce Orders.</p>';
+    echo '<p><strong>Note:</strong> Invoice sync functionality will be implemented in the next phase.</p>';
+    
+    // Placeholder for invoice sync UI
+    echo '<div style="margin: 20px 0; padding: 20px; background: #f9f9f9; border: 1px solid #ddd;">
+        <h3>Sync Direction</h3>
+        <p>Choose sync direction:</p>
+        <ul>
+            <li><strong>Zoho → WooCommerce:</strong> Create/Update WooCommerce orders from Zoho invoices</li>
+            <li><strong>WooCommerce → Zoho:</strong> Create/Update Zoho invoices from WooCommerce orders</li>
+            <li><strong>Two-Way Sync:</strong> Sync in both directions (recommended)</li>
+        </ul>
+    </div>';
+    
+    echo '<form method="post">
+        <button class="button button-primary" type="button" disabled>Sync Invoices Now (Coming Soon)</button>
+    </form>';
+    
+    // Invoice sync logs placeholder
+    echo '<h2>Invoice Sync History</h2>';
+    echo '<p>No invoice sync history yet.</p>';
 }
