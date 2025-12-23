@@ -267,6 +267,12 @@ function zoho_inventory_sync_page() {
                 echo '<p><strong>Date:</strong> '.$log['time'].'</p>';
                 echo '<p><strong>Total Products:</strong> '.$log['total'].'</p>';
                 echo '<p><strong>Synced:</strong> '.$log['synced'].'</p>';
+                if (isset($log['created'])) {
+                    echo '<p><strong>Created (New):</strong> '.$log['created'].'</p>';
+                }
+                if (isset($log['updated'])) {
+                    echo '<p><strong>Updated (Existing):</strong> '.$log['updated'].'</p>';
+                }
                 echo '<p><strong>Pending:</strong> '.$log['pending'].'</p>';
 
                 echo '<h3>Synced SKUs</h3>';
@@ -350,6 +356,8 @@ function zoho_inventory_sync_page() {
 
         $total = count($items);
         $synced = 0;
+        $created = 0;
+        $updated = 0;
         $synced_skus = [];
         $pending_skus = [];
 
@@ -361,32 +369,55 @@ function zoho_inventory_sync_page() {
             }
 
             $product_id = wc_get_product_id_by_sku($item['sku']);
+            
             if (!$product_id) {
-                $pending_skus[] = ['sku'=>$item['sku'],'reason'=>'Product not found in Woo'];
-                continue;
+                // Create new product if not found
+                $product = new WC_Product_Simple();
+                $product->set_sku($item['sku']);
+                
+                // Set product name from Zoho item name or use SKU if name not available
+                $product_name = !empty($item['name']) ? $item['name'] : $item['sku'];
+                $product->set_name($product_name);
+                
+                // Set status to publish
+                $product->set_status('publish');
+                
+                $created++;
+            } else {
+                // Update existing product
+                $product = wc_get_product($product_id);
+                $updated++;
             }
 
-            $product = wc_get_product($product_id);
-
+            // Set price
             if (isset($item['rate'])) {
                 $product->set_regular_price($item['rate']);
             }
 
+            // Set stock quantity
             if (isset($item['stock_on_hand'])) {
                 $product->set_manage_stock(true);
                 $product->set_stock_quantity($item['stock_on_hand']);
+                $product->set_stock_status('instock');
             }
 
+            // Set description if available from Zoho
+            if (!empty($item['description'])) {
+                $product->set_description($item['description']);
+            }
+
+            // Save product
             $product->save();
 
             $synced++;
             $synced_skus[] = $item['sku'];
         }
 
-        zoho_add_sync_log($total,$synced,$synced_skus,$pending_skus);
+        zoho_add_sync_log($total,$synced,$synced_skus,$pending_skus,$created,$updated);
 
         echo '<div class="notice notice-success">
-            <p>Sync Completed — '.$synced.' / '.$total.' products synced.</p>
+            <p><strong>Sync Completed!</strong></p>
+            <p>Total: '.$total.' | Synced: '.$synced.' | Created: '.$created.' | Updated: '.$updated.' | Pending: '.count($pending_skus).'</p>
         </div>';
     }
 
@@ -463,7 +494,7 @@ function zoho_render_pending_table($items) {
 /* ======================================================
    SAVE LOG
 ====================================================== */
-function zoho_add_sync_log($total,$synced,$synced_skus,$pending_skus) {
+function zoho_add_sync_log($total,$synced,$synced_skus,$pending_skus,$created=0,$updated=0) {
 
     $logs = get_option('zoho_inventory_logs', []);
 
@@ -472,6 +503,8 @@ function zoho_add_sync_log($total,$synced,$synced_skus,$pending_skus) {
         'time' => current_time('mysql'),
         'total' => $total,
         'synced' => $synced,
+        'created' => $created,
+        'updated' => $updated,
         'pending' => $total - $synced,
         'synced_skus' => $synced_skus,
         'pending_skus' => $pending_skus
