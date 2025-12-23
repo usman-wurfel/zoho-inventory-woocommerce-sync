@@ -415,6 +415,20 @@ function zoho_inventory_sync_page() {
 
             // Save product
             $product->save();
+            
+            // Get the product ID after saving
+            $saved_product_id = $product->get_id();
+            
+            // If Permalink Manager plugin is active, manually trigger URI generation
+            if ($saved_product_id && class_exists('Permalink_Manager_URI_Functions_Post')) {
+                // Clear existing URI first, then regenerate
+                global $permalink_manager_uris;
+                if (isset($permalink_manager_uris[$saved_product_id])) {
+                    unset($permalink_manager_uris[$saved_product_id]);
+                }
+                // Force generate permalink
+                Permalink_Manager_URI_Functions_Post::save_uri($saved_product_id, '', true, 0);
+            }
 
             $synced++;
             $synced_skus[] = $item['sku'];
@@ -441,8 +455,55 @@ function zoho_inventory_sync_page() {
         }
     }
 
-    echo '<form method="post">
+    // Regenerate permalinks for all products if requested
+    if (isset($_POST['regenerate_permalinks'])) {
+        $regenerated = 0;
+        
+        // Get all products
+        $args = array(
+            'post_type' => 'product',
+            'posts_per_page' => -1,
+            'post_status' => 'publish',
+            'fields' => 'ids'
+        );
+        $product_ids = get_posts($args);
+        
+        if (class_exists('Permalink_Manager_URI_Functions_Post')) {
+            global $permalink_manager_uris;
+            
+            foreach ($product_ids as $product_id) {
+                // Clear existing URI
+                if (isset($permalink_manager_uris[$product_id])) {
+                    unset($permalink_manager_uris[$product_id]);
+                }
+                // Regenerate permalink
+                Permalink_Manager_URI_Functions_Post::save_uri($product_id, '', true, 0);
+                $regenerated++;
+            }
+            
+            // Save the URIs
+            update_option('permalink-manager-uris', $permalink_manager_uris);
+            
+            echo '<div class="notice notice-success">
+                <p>Permalinks regenerated for '.$regenerated.' products.</p>
+            </div>';
+        } else {
+            // Fallback: just flush rewrite rules
+            global $wp_rewrite;
+            $wp_rewrite->flush_rules(true);
+            
+            echo '<div class="notice notice-success">
+                <p>Rewrite rules flushed. Total products: '.count($product_ids).'</p>
+            </div>';
+        }
+    }
+    
+    echo '<form method="post" style="display: inline-block; margin-right: 10px;">
         <button class="button button-primary" name="start_inventory_sync">Sync Products Now</button>
+    </form>';
+    
+    echo '<form method="post" style="display: inline-block;">
+        <button class="button button-secondary" name="regenerate_permalinks" onclick="return confirm(\'Regenerate permalinks for all products?\');">Regenerate Permalinks</button>
     </form>';
 
     /* ---------- LOG TABLE ---------- */
