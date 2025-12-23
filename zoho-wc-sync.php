@@ -159,6 +159,7 @@ add_action('admin_init', function () {
 ====================================================== */
 function zoho_connection_page() {
 
+    // Save credentials (hidden form for initial setup)
     if (isset($_POST['save_zoho_credentials'])) {
         update_option('zoho_client_id', sanitize_text_field($_POST['client_id']));
         update_option('zoho_client_secret', sanitize_text_field($_POST['client_secret']));
@@ -168,7 +169,7 @@ function zoho_connection_page() {
 
     // Show connection success message
     if (isset($_GET['connected']) && $_GET['connected'] == '1') {
-        echo '<div class="notice notice-success"><p>✅ Successfully connected to Zoho!</p></div>';
+        echo '<div class="notice notice-success"><p>✅ Successfully connected to Zoho! New token saved.</p></div>';
     }
 
     // Show error messages
@@ -178,29 +179,51 @@ function zoho_connection_page() {
     }
 
     $connected = get_option('zoho_access_token');
+    $has_credentials = get_option('zoho_client_id') && get_option('zoho_client_secret');
     $default_redirect_uri = admin_url('admin.php?page=zoho-sync');
 
-    echo '<h1>Zoho Connection</h1>
-    <form method="post">
-    <table class="form-table">
-        <tr><th>Client ID</th><td><input name="client_id" value="'.esc_attr(get_option('zoho_client_id')).'" class="regular-text" required></td></tr>
-        <tr><th>Client Secret</th><td><input name="client_secret" type="password" value="'.esc_attr(get_option('zoho_client_secret')).'" class="regular-text" required></td></tr>
-        <tr><th>Redirect URI</th><td><input name="redirect_uri" value="'.esc_attr(get_option('zoho_redirect_uri', $default_redirect_uri)).'" class="regular-text" required>
-            <p class="description">Yehi redirect URI ko Zoho App settings mein configure karna hoga.</p></td></tr>
-    </table>';
-    submit_button('Save Credentials','primary','save_zoho_credentials');
-    echo '</form>';
+    echo '<h1>Zoho Connection</h1>';
 
-    if (get_option('zoho_client_id') && !$connected) {
-        echo '<p><a href="'.esc_url(zoho_auth_url()).'" class="button button-primary">🔗 Connect to Zoho</a></p>';
-        echo '<p class="description">Button click karke Zoho se authorize karein.</p>';
-    }
-
-    if ($connected) {
-        echo '<div class="notice notice-info"><p><strong>Status:</strong> ✅ Connected to Zoho</p></div>';
-        if (get_option('zoho_refresh_token')) {
-            echo '<p><strong>Refresh Token:</strong> ✅ Saved (tokens automatically refresh honge)</p>';
+    // Agar credentials nahi hain, to pehle credentials save karo
+    if (!$has_credentials) {
+        echo '<form method="post">
+        <table class="form-table">
+            <tr><th>Client ID</th><td><input name="client_id" value="'.esc_attr(get_option('zoho_client_id')).'" class="regular-text" required></td></tr>
+            <tr><th>Client Secret</th><td><input name="client_secret" type="password" value="'.esc_attr(get_option('zoho_client_secret')).'" class="regular-text" required></td></tr>
+            <tr><th>Redirect URI</th><td><input name="redirect_uri" value="'.esc_attr(get_option('zoho_redirect_uri', $default_redirect_uri)).'" class="regular-text" required>
+                <p class="description">Yehi redirect URI ko Zoho App settings mein configure karna hoga.</p></td></tr>
+        </table>';
+        submit_button('Save Credentials','primary','save_zoho_credentials');
+        echo '</form>';
+    } else {
+        // Credentials already hain, to connect button dikhao
+        if ($connected) {
+            echo '<div class="notice notice-info"><p><strong>Status:</strong> ✅ Connected to Zoho</p></div>';
+            if (get_option('zoho_refresh_token')) {
+                echo '<p><strong>Refresh Token:</strong> ✅ Saved</p>';
+            }
+            echo '<p><a href="'.esc_url(zoho_auth_url()).'" class="button button-primary">🔄 Re-connect to Zoho</a></p>';
+            echo '<p class="description">Re-connect button click karke naya token save karein.</p>';
+        } else {
+            echo '<p><a href="'.esc_url(zoho_auth_url()).'" class="button button-primary button-large">🔗 Connect to Zoho</a></p>';
+            echo '<p class="description">Button click karke Zoho se authorize karein.</p>';
         }
+        
+        // Credentials edit karne ke liye expand/collapse section
+        echo '<details style="margin-top: 20px;">
+            <summary style="cursor: pointer; padding: 10px; background: #f5f5f5; border: 1px solid #ddd;">📝 Edit Credentials</summary>
+            <div style="padding: 15px; background: #fff; border: 1px solid #ddd; border-top: none;">
+                <form method="post">
+                <table class="form-table">
+                    <tr><th>Client ID</th><td><input name="client_id" value="'.esc_attr(get_option('zoho_client_id')).'" class="regular-text" required></td></tr>
+                    <tr><th>Client Secret</th><td><input name="client_secret" type="password" value="'.esc_attr(get_option('zoho_client_secret')).'" class="regular-text" required></td></tr>
+                    <tr><th>Redirect URI</th><td><input name="redirect_uri" value="'.esc_attr(get_option('zoho_redirect_uri', $default_redirect_uri)).'" class="regular-text" required>
+                        <p class="description">Yehi redirect URI ko Zoho App settings mein configure karna hoga.</p></td></tr>
+                </table>';
+                submit_button('Update Credentials','primary','save_zoho_credentials');
+                echo '</form>
+            </div>
+        </details>';
     }
 }
 
