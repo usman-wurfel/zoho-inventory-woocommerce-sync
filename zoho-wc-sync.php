@@ -346,7 +346,7 @@ function zoho_dashboard_page() {
         <!-- Connection Status Card -->
         <div style="background: #fff; border: 1px solid #ccd0d4; box-shadow: 0 1px 1px rgba(0,0,0,.04); padding: 20px; margin-bottom: 20px; border-radius: 4px;">
             <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 15px;">
-                <h2 style="margin: 0; font-size: 18px;">Connection Status</h2>
+                <h2 style="margin: 0; font-size: 18px;">Zoho Inventory Connection Status</h2>
                 <?php if ($connected): ?>
                     <span class="zoho-status-badge zoho-status-connected">Connected</span>
                 <?php else: ?>
@@ -362,21 +362,16 @@ function zoho_dashboard_page() {
                             Access token will expire in <?php echo esc_html($expires_in); ?>.
                         </p>
                     <?php endif; ?>
-                    <?php if ($refresh_token): ?>
-                        <p style="margin: 5px 0; color: #666;">Refresh token is saved and will be used automatically when token expires.</p>
-                    <?php endif; ?>
                 </div>
                 
                 <div style="margin-top: 15px;">
                     <a href="<?php echo esc_url(zoho_auth_url()); ?>" class="button button-secondary" style="margin-right: 10px;">
-                        <span class="dashicons dashicons-update" style="vertical-align: middle;"></span> Reauthorize
+                        Reauthorize
                     </a>
                     <a href="<?php echo esc_url(admin_url('admin.php?page=zoho-sync&disconnect=1&_wpnonce=' . wp_create_nonce('zoho_disconnect'))); ?>" class="button button-link-delete" onclick="return confirm('Are you sure you want to disconnect?');">
                         Disconnect
                     </a>
                 </div>
-            <?php else: ?>
-                <p style="color: #666; margin-bottom: 15px;">Please configure your Zoho API credentials below to connect.</p>
             <?php endif; ?>
         </div>
         
@@ -386,18 +381,23 @@ function zoho_dashboard_page() {
             <div class="zoho-stat-card">
                 <h3 class="zoho-stat-label">Items Synced</h3>
                 <div class="zoho-stat-number"><?php echo number_format($published_products); ?></div>
-                <p style="margin: 0; color: #666; font-size: 13px;">Products in WooCommerce</p>
             </div>
             
             <!-- Invoices Synced Card -->
             <div class="zoho-stat-card">
                 <h3 class="zoho-stat-label">Invoices Synced</h3>
                 <div class="zoho-stat-number"><?php echo number_format($total_invoices); ?></div>
-                <p style="margin: 0; color: #666; font-size: 13px;">Orders in WooCommerce</p>
+            </div>
+            
+            <!-- Customers Synced Card -->
+            <div class="zoho-stat-card">
+                <h3 class="zoho-stat-label">Customers Synced</h3>
+                <div class="zoho-stat-number">0</div>
             </div>
         </div>
         
-        <!-- Connection Settings -->
+        <!-- Connection Settings - Only show if not connected -->
+        <?php if (!$connected): ?>
         <div style="background: #fff; border: 1px solid #ccd0d4; box-shadow: 0 1px 1px rgba(0,0,0,.04); padding: 20px; border-radius: 4px;">
             <h2 style="margin-top: 0; font-size: 18px; margin-bottom: 20px;">Connection Settings</h2>
             
@@ -430,6 +430,7 @@ function zoho_dashboard_page() {
             </form>
             <p class="description" style="margin-top: 15px;">After updating credentials, you will be automatically redirected to connect with Zoho.</p>
         </div>
+        <?php endif; ?>
     </div>
     <?php
 }
