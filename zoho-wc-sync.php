@@ -1887,7 +1887,7 @@ function zoho_sync_woo_to_zoho($offset, $total, $synced, $created, $updated) {
         
         $sku = $product->get_sku();
         if (empty($sku)) {
-            $batch_pending_skus[] = array('sku' => $product_id, 'reason' => 'No SKU');
+            $batch_pending_skus[] = array('sku' => 'ID:' . $product_id, 'reason' => 'No SKU - ' . $product->get_name());
             continue;
         }
         
@@ -1895,33 +1895,34 @@ function zoho_sync_woo_to_zoho($offset, $total, $synced, $created, $updated) {
         $item_data = array(
             'name' => $product->get_name(),
             'sku' => $sku,
-            'rate' => floatval($product->get_regular_price()),
-            'description' => $product->get_description(),
+            'rate' => floatval($product->get_regular_price()) ?: 0,
+            'description' => wp_strip_all_tags($product->get_description()),
             'item_type' => 'inventory',
         );
         
         // Add stock if managing stock
         if ($product->get_manage_stock()) {
             $item_data['initial_stock'] = $product->get_stock_quantity() ?: 0;
-            $item_data['initial_stock_rate'] = floatval($product->get_regular_price());
+            $item_data['initial_stock_rate'] = floatval($product->get_regular_price()) ?: 0;
         }
         
         // Check if item exists in Zoho by SKU
         $zoho_item_id = zoho_get_item_by_sku($sku);
         
-        $request_data = json_encode(array('data' => array($item_data)));
+        $request_data = json_encode($item_data);
+        error_log('Zoho Item Sync - SKU: ' . $sku . ' - Zoho ID: ' . ($zoho_item_id ?: 'NEW') . ' - Data: ' . $request_data);
         
         if ($zoho_item_id) {
             // Update existing item
             $response = zoho_api_put('items/' . $zoho_item_id, $item_data);
             $action = 'updated';
-            $batch_updated++;
         } else {
             // Create new item
             $response = zoho_api_post('items', $item_data);
             $action = 'created';
-            $batch_created++;
         }
+        
+        error_log('Zoho Item Sync - Response: ' . json_encode($response));
         
         // Log the sync
         $zoho_object_id = '';
@@ -1939,14 +1940,28 @@ function zoho_sync_woo_to_zoho($offset, $total, $synced, $created, $updated) {
             json_encode($response)
         );
         
-        if (is_wp_error($response) || (isset($response['code']) && $response['code'] != 0)) {
-            $error_msg = is_wp_error($response) ? $response->get_error_message() : ($response['message'] ?? 'Unknown error');
+        // Check for errors
+        $has_error = false;
+        $error_msg = '';
+        
+        if (is_wp_error($response)) {
+            $has_error = true;
+            $error_msg = $response->get_error_message();
+        } elseif (isset($response['error'])) {
+            $has_error = true;
+            $error_msg = $response['error'];
+        } elseif (isset($response['code']) && $response['code'] != 0) {
+            $has_error = true;
+            $error_msg = 'Code ' . $response['code'] . ': ' . ($response['message'] ?? 'Unknown error');
+        }
+        
+        if ($has_error) {
             $batch_pending_skus[] = array('sku' => $sku, 'reason' => $error_msg);
-            // Revert count
-            if ($action == 'updated') $batch_updated--;
-            else $batch_created--;
+            error_log('Zoho Item Sync FAILED - SKU: ' . $sku . ' - Error: ' . $error_msg);
         } else {
             $batch_synced_skus[] = $sku;
+            if ($action == 'updated') $batch_updated++;
+            else $batch_created++;
         }
         
         $processed++;
@@ -1973,6 +1988,12 @@ function zoho_sync_woo_to_zoho($offset, $total, $synced, $created, $updated) {
         delete_transient('zoho_woo_sync_stats');
     }
     
+    // Get failure reasons for display
+    $failure_reasons = array();
+    foreach ($stats['pending_skus'] as $fail) {
+        $failure_reasons[] = $fail['sku'] . ': ' . $fail['reason'];
+    }
+    
     wp_send_json_success(array(
         'offset' => $new_offset,
         'total' => $total,
@@ -1980,6 +2001,7 @@ function zoho_sync_woo_to_zoho($offset, $total, $synced, $created, $updated) {
         'created' => $new_created,
         'updated' => $new_updated,
         'pending' => count($stats['pending_skus']),
+        'failed_reasons' => $failure_reasons,
         'has_more' => $has_more
     ));
 }
@@ -2611,6 +2633,7 @@ function zoho_sync_contacts_to_customers($offset, $total, $synced, $created, $up
         
         set_transient('zoho_contact_sync_contacts', $all_contacts, 600);
         set_transient('zoho_contact_sync_stats', array('synced' => 0, 'created' => 0, 'updated' => 0, 'failed' => array()), 600);
+        $contacts = $all_contacts;
     } else {
         $contacts = get_transient('zoho_contact_sync_contacts');
         if (!$contacts) {
@@ -2629,26 +2652,61 @@ function zoho_sync_contacts_to_customers($offset, $total, $synced, $created, $up
     
     foreach ($batch_contacts as $contact) {
         $zoho_contact_id = $contact['contact_id'] ?? '';
-        $email = $contact['email'] ?? '';
+        $contact_name = $contact['contact_name'] ?? '';
         
+        // Get email - if not available, generate dummy from contact name or ID
+        $email = $contact['email'] ?? '';
         if (empty($email)) {
-            $batch_failed[] = array('id' => $zoho_contact_id, 'reason' => 'No email');
-            continue;
+            // Generate dummy email from contact name or ID
+            $slug = sanitize_title($contact_name ?: 'contact-' . $zoho_contact_id);
+            $email = $slug . '@zoho-import.local';
         }
+        
+        // Get first/last name - parse from contact_name if not available
+        $first_name = $contact['first_name'] ?? '';
+        $last_name = $contact['last_name'] ?? '';
+        
+        if (empty($first_name) && empty($last_name) && !empty($contact_name)) {
+            // Parse contact_name into first/last
+            $name_parts = explode(' ', trim($contact_name), 2);
+            $first_name = $name_parts[0] ?? '';
+            $last_name = $name_parts[1] ?? '';
+        }
+        
+        // Fallback for names
+        if (empty($first_name)) $first_name = 'Customer';
+        if (empty($last_name)) $last_name = $zoho_contact_id;
+        
+        // Get other fields with defaults
+        $company = $contact['company_name'] ?? '';
+        $phone = $contact['phone'] ?? ($contact['mobile'] ?? '');
+        
+        // Get billing address from Zoho
+        $billing_address = $contact['billing_address'] ?? array();
+        $billing_street = $billing_address['address'] ?? ($billing_address['street'] ?? '');
+        $billing_street2 = $billing_address['street2'] ?? '';
+        $billing_city = $billing_address['city'] ?? '';
+        $billing_state = $billing_address['state'] ?? '';
+        $billing_zip = $billing_address['zip'] ?? ($billing_address['zipcode'] ?? '');
+        $billing_country = $billing_address['country'] ?? '';
+        $billing_phone = $billing_address['phone'] ?? $phone;
+        
+        // Get shipping address from Zoho
+        $shipping_address = $contact['shipping_address'] ?? array();
+        $shipping_street = $shipping_address['address'] ?? ($shipping_address['street'] ?? $billing_street);
+        $shipping_street2 = $shipping_address['street2'] ?? $billing_street2;
+        $shipping_city = $shipping_address['city'] ?? $billing_city;
+        $shipping_state = $shipping_address['state'] ?? $billing_state;
+        $shipping_zip = $shipping_address['zip'] ?? ($shipping_address['zipcode'] ?? $billing_zip);
+        $shipping_country = $shipping_address['country'] ?? $billing_country;
         
         // Check if user exists
         $existing_user = get_user_by('email', $email);
         
         if ($existing_user) {
-            // Update existing user
-            update_user_meta($existing_user->ID, 'billing_first_name', $contact['first_name'] ?? '');
-            update_user_meta($existing_user->ID, 'billing_last_name', $contact['last_name'] ?? '');
-            update_user_meta($existing_user->ID, 'billing_company', $contact['company_name'] ?? '');
-            update_user_meta($existing_user->ID, 'billing_phone', $contact['phone'] ?? '');
-            update_user_meta($existing_user->ID, '_zoho_contact_id', $zoho_contact_id);
-            
+            $user_id = $existing_user->ID;
+            $action = 'Updated';
             $batch_updated++;
-            zoho_add_detailed_log('contact', 'customer', $existing_user->ID, 'contact', $zoho_contact_id, json_encode($contact), json_encode(array('message' => 'Updated')));
         } else {
             // Create new user
             $username = sanitize_user($email);
@@ -2661,15 +2719,42 @@ function zoho_sync_contacts_to_customers($offset, $total, $synced, $created, $up
                 continue;
             }
             
-            update_user_meta($user_id, 'billing_first_name', $contact['first_name'] ?? '');
-            update_user_meta($user_id, 'billing_last_name', $contact['last_name'] ?? '');
-            update_user_meta($user_id, 'billing_company', $contact['company_name'] ?? '');
-            update_user_meta($user_id, 'billing_phone', $contact['phone'] ?? '');
-            update_user_meta($user_id, '_zoho_contact_id', $zoho_contact_id);
-            
+            $action = 'Created';
             $batch_created++;
-            zoho_add_detailed_log('contact', 'customer', $user_id, 'contact', $zoho_contact_id, json_encode($contact), json_encode(array('message' => 'Created', 'user_id' => $user_id)));
         }
+        
+        // Update all user meta
+        update_user_meta($user_id, 'first_name', $first_name);
+        update_user_meta($user_id, 'last_name', $last_name);
+        
+        // Billing details
+        update_user_meta($user_id, 'billing_first_name', $first_name);
+        update_user_meta($user_id, 'billing_last_name', $last_name);
+        update_user_meta($user_id, 'billing_company', $company);
+        update_user_meta($user_id, 'billing_email', $email);
+        update_user_meta($user_id, 'billing_phone', $billing_phone);
+        update_user_meta($user_id, 'billing_address_1', $billing_street);
+        update_user_meta($user_id, 'billing_address_2', $billing_street2);
+        update_user_meta($user_id, 'billing_city', $billing_city);
+        update_user_meta($user_id, 'billing_state', $billing_state);
+        update_user_meta($user_id, 'billing_postcode', $billing_zip);
+        update_user_meta($user_id, 'billing_country', $billing_country);
+        
+        // Shipping details
+        update_user_meta($user_id, 'shipping_first_name', $first_name);
+        update_user_meta($user_id, 'shipping_last_name', $last_name);
+        update_user_meta($user_id, 'shipping_company', $company);
+        update_user_meta($user_id, 'shipping_address_1', $shipping_street);
+        update_user_meta($user_id, 'shipping_address_2', $shipping_street2);
+        update_user_meta($user_id, 'shipping_city', $shipping_city);
+        update_user_meta($user_id, 'shipping_state', $shipping_state);
+        update_user_meta($user_id, 'shipping_postcode', $shipping_zip);
+        update_user_meta($user_id, 'shipping_country', $shipping_country);
+        
+        // Link to Zoho
+        update_user_meta($user_id, '_zoho_contact_id', $zoho_contact_id);
+        
+        zoho_add_detailed_log('contact', 'customer', $user_id, 'contact', $zoho_contact_id, json_encode($contact), json_encode(array('message' => $action, 'user_id' => $user_id)));
     }
     
     // Update stats
@@ -2703,42 +2788,56 @@ function zoho_sync_contacts_to_customers($offset, $total, $synced, $created, $up
    HELPER: Build Contact Data from WC Customer
 ====================================================== */
 function zoho_build_contact_data_from_customer($customer) {
-    // Default mappings for Zoho contact fields to WooCommerce customer fields
-    $default_mappings = array(
-        'contact_name' => 'full_name',
-        'company_name' => 'billing_company',
-        'contact_type' => 'customer',
-        'customer_sub_type' => 'individual',
-        'first_name' => 'billing_first_name',
-        'last_name' => 'billing_last_name',
-        'email' => 'billing_email',
-        'billing_address' => array(
-            'address' => 'billing_address_1',
-            'street2' => 'billing_address_2',
-            'city' => 'billing_city',
-            'state' => 'billing_state',
-            'zip' => 'billing_postcode',
-            'country' => 'billing_country',
-            'phone' => 'billing_phone',
-        ),
-        'shipping_address' => array(
-            'address' => 'shipping_address_1',
-            'street2' => 'shipping_address_2',
-            'city' => 'shipping_city',
-            'state' => 'shipping_state',
-            'zip' => 'shipping_postcode',
-            'country' => 'shipping_country',
-        ),
-    );
+    // Get user data - try multiple sources
+    $user_id = $customer->get_id();
+    $user = get_user_by('ID', $user_id);
     
-    // Build contact data with defaults (no need for complex option checks)
+    // Get first name - try billing, then user meta, then display name
+    $first_name = $customer->get_billing_first_name();
+    if (empty($first_name)) {
+        $first_name = get_user_meta($user_id, 'first_name', true);
+    }
+    
+    // Get last name
+    $last_name = $customer->get_billing_last_name();
+    if (empty($last_name)) {
+        $last_name = get_user_meta($user_id, 'last_name', true);
+    }
+    
+    // Get email - try billing email, then user email
+    $email = $customer->get_billing_email();
+    if (empty($email) && $user) {
+        $email = $user->user_email;
+    }
+    
+    // Build contact name with multiple fallbacks
+    $contact_name = trim($first_name . ' ' . $last_name);
+    if (empty($contact_name) || $contact_name == ' ') {
+        // Try display name
+        if ($user && !empty($user->display_name)) {
+            $contact_name = $user->display_name;
+        }
+    }
+    if (empty($contact_name) || $contact_name == ' ') {
+        // Try company name
+        $company = $customer->get_billing_company();
+        if (!empty($company)) {
+            $contact_name = $company;
+        }
+    }
+    if (empty($contact_name) || $contact_name == ' ') {
+        // Last resort - use email
+        $contact_name = $email;
+    }
+    
+    // Build contact data
     $contact_data = array(
-        'contact_name' => trim($customer->get_billing_first_name() . ' ' . $customer->get_billing_last_name()),
+        'contact_name' => $contact_name,
         'contact_type' => 'customer',
         'customer_sub_type' => 'individual',
-        'first_name' => $customer->get_billing_first_name(),
-        'last_name' => $customer->get_billing_last_name(),
-        'email' => $customer->get_billing_email(),
+        'first_name' => $first_name,
+        'last_name' => $last_name,
+        'email' => $email,
         'company_name' => $customer->get_billing_company(),
         'billing_address' => array(
             'address' => $customer->get_billing_address_1(),
@@ -2758,12 +2857,6 @@ function zoho_build_contact_data_from_customer($customer) {
             'country' => $customer->get_shipping_country(),
         ),
     );
-    
-    // Remove empty values
-    if (empty($contact_data['contact_name'])) {
-        // Fallback to email if no name
-        $contact_data['contact_name'] = $customer->get_billing_email();
-    }
     
     return $contact_data;
 }

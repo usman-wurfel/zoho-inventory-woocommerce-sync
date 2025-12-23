@@ -70,16 +70,25 @@ jQuery(document).ready(function($) {
                         
                         // Show success message
                         var successHtml = '<div class="notice notice-success"><p><strong>Sync Completed!</strong></p>' +
-                            '<p>Total: ' + data.total + ' | Synced: ' + data.synced + ' | Created: ' + data.created + ' | Updated: ' + data.updated + ' | Pending: ' + data.pending + '</p></div>';
+                            '<p>Total: ' + data.total + ' | Synced: ' + data.synced + ' | Created: ' + data.created + ' | Updated: ' + data.updated + ' | Pending: ' + data.pending + '</p>';
+                        
+                        // Show failure reasons if any
+                        if (data.pending > 0 && data.failed_reasons && data.failed_reasons.length > 0) {
+                            successHtml += '<br><strong>Failure Details:</strong><ul style="margin-top:5px; margin-left:20px;">';
+                            for (var i = 0; i < Math.min(data.failed_reasons.length, 20); i++) {
+                                successHtml += '<li>' + data.failed_reasons[i] + '</li>';
+                            }
+                            if (data.failed_reasons.length > 20) {
+                                successHtml += '<li>... and ' + (data.failed_reasons.length - 20) + ' more. Check Logs for details.</li>';
+                            }
+                            successHtml += '</ul>';
+                        }
+                        
+                        successHtml += '</div>';
                         $('#zoho-sync-success').html(successHtml).show();
                         
                         // Reset button
                         $('#zoho-start-sync').prop('disabled', false).text('Sync Products Now');
-                        
-                        // Reload page after 2 seconds to show updated log
-                        setTimeout(function() {
-                            window.location.reload();
-                        }, 2000);
                     }
                 } else {
                     // Error occurred
