@@ -1821,6 +1821,10 @@ function zoho_sync_products_ajax_handler() {
 function zoho_sync_woo_to_zoho($offset, $total, $synced, $created, $updated) {
     // First call - fetch WooCommerce products
     if ($offset == 0 && $total == 0) {
+        // Clear old transients first to ensure fresh data
+        delete_transient('zoho_woo_sync_products');
+        delete_transient('zoho_woo_sync_stats');
+        
         // Use direct SQL query to get ALL products (published, draft, private, pending)
         global $wpdb;
         $product_ids = $wpdb->get_col("
@@ -1837,8 +1841,8 @@ function zoho_sync_woo_to_zoho($offset, $total, $synced, $created, $updated) {
         
         if ($total == 0) {
             wp_send_json_error('No products found in WooCommerce');
-        return;
-    }
+            return;
+        }
 
         // Store product IDs in transient for batch processing (10 minutes for large syncs)
         set_transient('zoho_woo_sync_products', $product_ids, 600);
@@ -2027,8 +2031,12 @@ function zoho_sync_invoices_ajax_handler() {
 function zoho_sync_orders_to_invoices($offset, $total, $synced, $created, $updated, $from_date, $to_date) {
     // First call - fetch WooCommerce orders
     if ($offset == 0 && $total == 0) {
+        // Clear old transients
+        delete_transient('zoho_invoice_sync_orders');
+        delete_transient('zoho_invoice_sync_stats');
+        
         $args = array(
-            'status' => array('completed', 'processing'),
+            'status' => array('completed', 'processing', 'pending', 'on-hold'),
             'limit' => -1,
             'return' => 'ids',
             'orderby' => 'date',
@@ -2048,6 +2056,8 @@ function zoho_sync_orders_to_invoices($offset, $total, $synced, $created, $updat
         
         $order_ids = wc_get_orders($args);
         $total = count($order_ids);
+        
+        error_log('Zoho Sync: Found ' . $total . ' orders to sync (WooCommerce to Zoho)');
         
         if ($total == 0) {
             wp_send_json_error('No orders found in WooCommerce');
@@ -2213,50 +2223,70 @@ function zoho_sync_orders_to_invoices($offset, $total, $synced, $created, $updat
    ZOHO INVOICES TO WOO ORDERS
 ====================================================== */
 function zoho_sync_invoices_to_orders($offset, $total, $synced, $created, $updated, $from_date, $to_date) {
-    // First call - fetch Zoho invoices
+    // First call - fetch Zoho invoices with pagination
     if ($offset == 0 && $total == 0) {
-        $endpoint = 'invoices';
-        if (!empty($from_date) || !empty($to_date)) {
-            $params = array();
-            if (!empty($from_date)) $params[] = 'date_start=' . $from_date;
-            if (!empty($to_date)) $params[] = 'date_end=' . $to_date;
-            $endpoint .= '?' . implode('&', $params);
-        }
+        // Clear old transients
+        delete_transient('zoho_invoice_sync_invoices');
+        delete_transient('zoho_invoice_sync_stats');
         
-        $response = zoho_api_get($endpoint);
+        $all_invoices = array();
+        $page = 1;
+        $per_page = 200;
         
-        if (is_wp_error($response)) {
-            wp_send_json_error('API call failed: ' . $response->get_error_message());
-            return;
-        }
+        // Build base params with date filters
+        $base_params = array();
+        if (!empty($from_date)) $base_params[] = 'date_start=' . $from_date;
+        if (!empty($to_date)) $base_params[] = 'date_end=' . $to_date;
         
-        if (isset($response['code']) && $response['code'] != 0) {
-            wp_send_json_error('API Error: ' . ($response['message'] ?? 'Unknown error'));
-            return;
-        }
+        // Fetch all pages from Zoho API
+        do {
+            $params = $base_params;
+            $params[] = 'page=' . $page;
+            $params[] = 'per_page=' . $per_page;
+            $endpoint = 'invoices?' . implode('&', $params);
+            
+            $response = zoho_api_get($endpoint);
+            
+            if (is_wp_error($response)) {
+                wp_send_json_error('API call failed: ' . $response->get_error_message());
+                return;
+            }
+            
+            if (isset($response['code']) && $response['code'] != 0) {
+                wp_send_json_error('API Error: ' . ($response['message'] ?? 'Unknown error'));
+                return;
+            }
+            
+            $invoices = $response['invoices'] ?? array();
+            $all_invoices = array_merge($all_invoices, $invoices);
+            
+            $has_more_pages = isset($response['page_context']['has_more_page']) ? $response['page_context']['has_more_page'] : (count($invoices) >= $per_page);
+            $page++;
+            
+        } while ($has_more_pages && $page <= 50);
         
-        $invoices = $response['invoices'] ?? array();
-        $total = count($invoices);
+        $total = count($all_invoices);
+        error_log('Zoho Sync: Found ' . $total . ' invoices from Zoho API');
         
         if ($total == 0) {
             wp_send_json_error('No invoices found in Zoho');
             return;
         }
         
-        set_transient('zoho_invoice_sync_invoices', $invoices, 600);
+        set_transient('zoho_invoice_sync_invoices', $all_invoices, 600);
         set_transient('zoho_invoice_sync_stats', array('synced' => 0, 'created' => 0, 'updated' => 0, 'failed' => array()), 600);
     } else {
-        $invoices = get_transient('zoho_invoice_sync_invoices');
-        if (!$invoices) {
+        $all_invoices = get_transient('zoho_invoice_sync_invoices');
+        if (!$all_invoices) {
             wp_send_json_error('Sync session expired. Please try again.');
             return;
         }
-        $total = count($invoices);
+        $total = count($all_invoices);
     }
     
     // Process batch
     $batch_size = 5;
-    $batch_invoices = array_slice($invoices, $offset, $batch_size);
+    $batch_invoices = array_slice($all_invoices, $offset, $batch_size);
     $batch_created = 0;
     $batch_updated = 0;
     $batch_failed = array();
@@ -2391,6 +2421,10 @@ function zoho_sync_contacts_ajax_handler() {
 function zoho_sync_customers_to_contacts($offset, $total, $synced, $created, $updated, $from_date, $to_date) {
     // First call - fetch WooCommerce customers
     if ($offset == 0 && $total == 0) {
+        // Clear old transients first
+        delete_transient('zoho_contact_sync_customers');
+        delete_transient('zoho_contact_sync_stats');
+        
         $args = array(
             'role' => 'customer',
             'number' => -1,
@@ -2409,6 +2443,8 @@ function zoho_sync_customers_to_contacts($offset, $total, $synced, $created, $up
         
         $users = get_users($args);
         $total = count($users);
+        
+        error_log('Zoho Sync: Found ' . $total . ' customers to sync (WooCommerce to Zoho)');
         
         if ($total == 0) {
             wp_send_json_error('No customers found in WooCommerce');
@@ -2505,29 +2541,47 @@ function zoho_sync_customers_to_contacts($offset, $total, $synced, $created, $up
    ZOHO CONTACTS TO WOO CUSTOMERS
 ====================================================== */
 function zoho_sync_contacts_to_customers($offset, $total, $synced, $created, $updated, $from_date, $to_date) {
-    // First call - fetch Zoho contacts
+    // First call - fetch Zoho contacts with pagination
     if ($offset == 0 && $total == 0) {
-        $response = zoho_api_get('contacts');
+        // Clear old transients
+        delete_transient('zoho_contact_sync_contacts');
+        delete_transient('zoho_contact_sync_stats');
         
-        if (is_wp_error($response)) {
-            wp_send_json_error('API call failed: ' . $response->get_error_message());
-            return;
-        }
+        $all_contacts = array();
+        $page = 1;
+        $per_page = 200;
         
-        if (isset($response['code']) && $response['code'] != 0) {
-            wp_send_json_error('API Error: ' . ($response['message'] ?? 'Unknown error'));
-            return;
-        }
+        // Fetch all pages from Zoho API
+        do {
+            $response = zoho_api_get('contacts?page=' . $page . '&per_page=' . $per_page);
+            
+            if (is_wp_error($response)) {
+                wp_send_json_error('API call failed: ' . $response->get_error_message());
+                return;
+            }
+            
+            if (isset($response['code']) && $response['code'] != 0) {
+                wp_send_json_error('API Error: ' . ($response['message'] ?? 'Unknown error'));
+                return;
+            }
+            
+            $contacts = $response['contacts'] ?? array();
+            $all_contacts = array_merge($all_contacts, $contacts);
+            
+            $has_more_pages = isset($response['page_context']['has_more_page']) ? $response['page_context']['has_more_page'] : (count($contacts) >= $per_page);
+            $page++;
+            
+        } while ($has_more_pages && $page <= 50);
         
-        $contacts = $response['contacts'] ?? array();
-        $total = count($contacts);
+        $total = count($all_contacts);
+        error_log('Zoho Sync: Found ' . $total . ' contacts from Zoho API');
         
         if ($total == 0) {
             wp_send_json_error('No contacts found in Zoho');
             return;
         }
         
-        set_transient('zoho_contact_sync_contacts', $contacts, 600);
+        set_transient('zoho_contact_sync_contacts', $all_contacts, 600);
         set_transient('zoho_contact_sync_stats', array('synced' => 0, 'created' => 0, 'updated' => 0, 'failed' => array()), 600);
     } else {
         $contacts = get_transient('zoho_contact_sync_contacts');
@@ -2621,6 +2675,75 @@ function zoho_sync_contacts_to_customers($offset, $total, $synced, $created, $up
    HELPER: Build Contact Data from WC Customer
 ====================================================== */
 function zoho_build_contact_data_from_customer($customer) {
+    // Default mappings for Zoho contact fields to WooCommerce customer fields
+    $default_mappings = array(
+        'contact_name' => 'full_name',
+        'company_name' => 'billing_company',
+        'contact_type' => 'customer',
+        'customer_sub_type' => 'individual',
+        'first_name' => 'billing_first_name',
+        'last_name' => 'billing_last_name',
+        'email' => 'billing_email',
+        'billing_address' => array(
+            'address' => 'billing_address_1',
+            'street2' => 'billing_address_2',
+            'city' => 'billing_city',
+            'state' => 'billing_state',
+            'zip' => 'billing_postcode',
+            'country' => 'billing_country',
+            'phone' => 'billing_phone',
+        ),
+        'shipping_address' => array(
+            'address' => 'shipping_address_1',
+            'street2' => 'shipping_address_2',
+            'city' => 'shipping_city',
+            'state' => 'shipping_state',
+            'zip' => 'shipping_postcode',
+            'country' => 'shipping_country',
+        ),
+    );
+    
+    // Build contact data with defaults (no need for complex option checks)
+    $contact_data = array(
+        'contact_name' => trim($customer->get_billing_first_name() . ' ' . $customer->get_billing_last_name()),
+        'contact_type' => 'customer',
+        'customer_sub_type' => 'individual',
+        'first_name' => $customer->get_billing_first_name(),
+        'last_name' => $customer->get_billing_last_name(),
+        'email' => $customer->get_billing_email(),
+        'company_name' => $customer->get_billing_company(),
+        'billing_address' => array(
+            'address' => $customer->get_billing_address_1(),
+            'street2' => $customer->get_billing_address_2(),
+            'city' => $customer->get_billing_city(),
+            'state' => $customer->get_billing_state(),
+            'zip' => $customer->get_billing_postcode(),
+            'country' => $customer->get_billing_country(),
+            'phone' => $customer->get_billing_phone(),
+        ),
+        'shipping_address' => array(
+            'address' => $customer->get_shipping_address_1(),
+            'street2' => $customer->get_shipping_address_2(),
+            'city' => $customer->get_shipping_city(),
+            'state' => $customer->get_shipping_state(),
+            'zip' => $customer->get_shipping_postcode(),
+            'country' => $customer->get_shipping_country(),
+        ),
+    );
+    
+    // Remove empty values
+    if (empty($contact_data['contact_name'])) {
+        // Fallback to email if no name
+        $contact_data['contact_name'] = $customer->get_billing_email();
+    }
+    
+    return $contact_data;
+}
+
+/* ======================================================
+   HELPER: Build Contact Data from WC Customer (OLD - keeping for reference)
+====================================================== */
+function zoho_build_contact_data_from_customer_with_mapping($customer) {
     $fields = array(
         'contact_name', 'company_name', 'contact_type', 'customer_sub_type',
         'first_name', 'last_name', 'email', 'bill_address', 'billing_street2',
