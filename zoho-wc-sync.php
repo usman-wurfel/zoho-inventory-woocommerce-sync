@@ -928,6 +928,232 @@ function zoho_field_mapping_items_tab() {
 }
 
 /* ======================================================
+   INVOICES MAPPING TAB
+====================================================== */
+function zoho_field_mapping_invoices_tab() {
+    echo '<p>Configure field mappings for syncing Zoho Invoices with WooCommerce Orders.</p>';
+    
+    // Get saved invoice mappings
+    $invoice_customer_id_type = get_option('zoho_invoice_customer_id_type', 'standard_field');
+    $invoice_customer_id_value = get_option('zoho_invoice_customer_id_value', 'shop_order_billing_email');
+    $invoice_reference_number_type = get_option('zoho_invoice_reference_number_type', 'custom_value');
+    $invoice_reference_number_value = get_option('zoho_invoice_reference_number_value', 'woo-order-{shop_order_order_id}');
+    $invoice_date_type = get_option('zoho_invoice_date_type', 'standard_field');
+    $invoice_date_value = get_option('zoho_invoice_date_value', 'shop_order_order_create_date');
+    $invoice_invoice_number_type = get_option('zoho_invoice_invoice_number_type', 'custom_value');
+    $invoice_invoice_number_value = get_option('zoho_invoice_invoice_number_value', 'woo{shop_order_order_id}');
+    $invoice_reason_type = get_option('zoho_invoice_reason_type', 'custom_value');
+    $invoice_reason_value = get_option('zoho_invoice_reason_value', 'Invoice create or update');
+    
+    // WooCommerce Order fields
+    $wc_order_fields = array(
+        'shop_order_billing_email' => 'Billing Email',
+        'shop_order_billing_first_name' => 'Billing First Name',
+        'shop_order_billing_last_name' => 'Billing Last Name',
+        'shop_order_billing_company' => 'Billing Company',
+        'shop_order_order_number' => 'Order Number',
+        'shop_order_order_id' => 'Order ID',
+        'shop_order_order_create_date' => 'Order Create Date',
+        'shop_order_order_status' => 'Order Status',
+    );
+    
+    echo '<form method="post">';
+    wp_nonce_field('zoho_field_mapping_nonce');
+    
+    // Customer ID Field
+    echo '<div style="background: #fff; border: 1px solid #ddd; padding: 15px; margin-bottom: 15px; border-radius: 4px;">';
+    echo '<h3 style="margin-top: 0;">Customer_id</h3>';
+    echo '<p style="margin: 5px 0; color: #666;">API Name : <code>customer_id</code> Type : <code>lookup</code></p>';
+    echo '<table class="form-table" style="margin-top: 15px;">';
+    echo '<tr>';
+    echo '<th scope="row"><label>Field Type</label></th>';
+    echo '<td>';
+    echo '<select name="invoice_customer_id_type" class="zoho-field-type" data-field="invoice_customer_id" style="width: 200px;">';
+    echo '<option value="standard_field" '.selected($invoice_customer_id_type, 'standard_field', false).'>Standard Fields</option>';
+    echo '<option value="custom_value" '.selected($invoice_customer_id_type, 'custom_value', false).'>Custom Value</option>';
+    echo '</select>';
+    echo '</td>';
+    echo '</tr>';
+    echo '<tr class="invoice_customer_id_field_row" '.($invoice_customer_id_type == 'custom_value' ? 'style="display:none;"' : '').'>';
+    echo '<th scope="row"><label>Field Value</label></th>';
+    echo '<td>';
+    echo '<select name="invoice_customer_id_value" style="width: 300px;">';
+    foreach ($wc_order_fields as $field_key => $field_label) {
+        $selected = selected($invoice_customer_id_value, $field_key, false);
+        echo '<option value="'.esc_attr($field_key).'"'.$selected.'>'.esc_html($field_label).'</option>';
+    }
+    echo '</select>';
+    echo '</td>';
+    echo '</tr>';
+    echo '<tr class="invoice_customer_id_custom_row" '.($invoice_customer_id_type == 'standard_field' ? 'style="display:none;"' : '').'>';
+    echo '<th scope="row"><label>Custom Value</label></th>';
+    echo '<td><input type="text" name="invoice_customer_id_custom_value" value="'.esc_attr($invoice_customer_id_type == 'custom_value' ? $invoice_customer_id_value : '').'" class="regular-text"></td>';
+    echo '</tr>';
+    echo '</table>';
+    echo '</div>';
+    
+    // Reference Number Field
+    echo '<div style="background: #fff; border: 1px solid #ddd; padding: 15px; margin-bottom: 15px; border-radius: 4px;">';
+    echo '<h3 style="margin-top: 0;">Reference_number</h3>';
+    echo '<p style="margin: 5px 0; color: #666;">API Name : <code>reference_number</code> Type : <code>string</code></p>';
+    echo '<table class="form-table" style="margin-top: 15px;">';
+    echo '<tr>';
+    echo '<th scope="row"><label>Field Type</label></th>';
+    echo '<td>';
+    echo '<select name="invoice_reference_number_type" class="zoho-field-type" data-field="invoice_reference_number" style="width: 200px;">';
+    echo '<option value="standard_field" '.selected($invoice_reference_number_type, 'standard_field', false).'>Standard Fields</option>';
+    echo '<option value="custom_value" '.selected($invoice_reference_number_type, 'custom_value', false).'>Custom Value</option>';
+    echo '</select>';
+    echo '</td>';
+    echo '</tr>';
+    echo '<tr class="invoice_reference_number_field_row" '.($invoice_reference_number_type == 'custom_value' ? 'style="display:none;"' : '').'>';
+    echo '<th scope="row"><label>Field Value</label></th>';
+    echo '<td>';
+    echo '<select name="invoice_reference_number_value" style="width: 300px;">';
+    foreach ($wc_order_fields as $field_key => $field_label) {
+        $selected = selected($invoice_reference_number_value, $field_key, false);
+        echo '<option value="'.esc_attr($field_key).'"'.$selected.'>'.esc_html($field_label).'</option>';
+    }
+    echo '</select>';
+    echo '</td>';
+    echo '</tr>';
+    echo '<tr class="invoice_reference_number_custom_row" '.($invoice_reference_number_type == 'standard_field' ? 'style="display:none;"' : '').'>';
+    echo '<th scope="row"><label>Custom Value</label></th>';
+    echo '<td><input type="text" name="invoice_reference_number_custom_value" value="'.esc_attr($invoice_reference_number_type == 'custom_value' ? $invoice_reference_number_value : '').'" class="regular-text" placeholder="woo-order-{shop_order_order_id}"></td>';
+    echo '</tr>';
+    echo '</table>';
+    echo '</div>';
+    
+    // Date Field
+    echo '<div style="background: #fff; border: 1px solid #ddd; padding: 15px; margin-bottom: 15px; border-radius: 4px;">';
+    echo '<h3 style="margin-top: 0;">Date</h3>';
+    echo '<p style="margin: 5px 0; color: #666;">API Name : <code>date</code> Type : <code>string</code></p>';
+    echo '<table class="form-table" style="margin-top: 15px;">';
+    echo '<tr>';
+    echo '<th scope="row"><label>Field Type</label></th>';
+    echo '<td>';
+    echo '<select name="invoice_date_type" class="zoho-field-type" data-field="invoice_date" style="width: 200px;">';
+    echo '<option value="standard_field" '.selected($invoice_date_type, 'standard_field', false).'>Standard Fields</option>';
+    echo '<option value="custom_value" '.selected($invoice_date_type, 'custom_value', false).'>Custom Value</option>';
+    echo '</select>';
+    echo '</td>';
+    echo '</tr>';
+    echo '<tr class="invoice_date_field_row" '.($invoice_date_type == 'custom_value' ? 'style="display:none;"' : '').'>';
+    echo '<th scope="row"><label>Field Value</label></th>';
+    echo '<td>';
+    echo '<select name="invoice_date_value" style="width: 300px;">';
+    foreach ($wc_order_fields as $field_key => $field_label) {
+        $selected = selected($invoice_date_value, $field_key, false);
+        echo '<option value="'.esc_attr($field_key).'"'.$selected.'>'.esc_html($field_label).'</option>';
+    }
+    echo '</select>';
+    echo '</td>';
+    echo '</tr>';
+    echo '<tr class="invoice_date_custom_row" '.($invoice_date_type == 'standard_field' ? 'style="display:none;"' : '').'>';
+    echo '<th scope="row"><label>Custom Value</label></th>';
+    echo '<td><input type="text" name="invoice_date_custom_value" value="'.esc_attr($invoice_date_type == 'custom_value' ? $invoice_date_value : '').'" class="regular-text"></td>';
+    echo '</tr>';
+    echo '</table>';
+    echo '</div>';
+    
+    // Invoice Number Field
+    echo '<div style="background: #fff; border: 1px solid #ddd; padding: 15px; margin-bottom: 15px; border-radius: 4px;">';
+    echo '<h3 style="margin-top: 0;">Invoice_number</h3>';
+    echo '<p style="margin: 5px 0; color: #666;">API Name : <code>invoice_number</code> Type : <code>string</code></p>';
+    echo '<table class="form-table" style="margin-top: 15px;">';
+    echo '<tr>';
+    echo '<th scope="row"><label>Field Type</label></th>';
+    echo '<td>';
+    echo '<select name="invoice_invoice_number_type" class="zoho-field-type" data-field="invoice_invoice_number" style="width: 200px;">';
+    echo '<option value="standard_field" '.selected($invoice_invoice_number_type, 'standard_field', false).'>Standard Fields</option>';
+    echo '<option value="custom_value" '.selected($invoice_invoice_number_type, 'custom_value', false).'>Custom Value</option>';
+    echo '</select>';
+    echo '</td>';
+    echo '</tr>';
+    echo '<tr class="invoice_invoice_number_field_row" '.($invoice_invoice_number_type == 'custom_value' ? 'style="display:none;"' : '').'>';
+    echo '<th scope="row"><label>Field Value</label></th>';
+    echo '<td>';
+    echo '<select name="invoice_invoice_number_value" style="width: 300px;">';
+    foreach ($wc_order_fields as $field_key => $field_label) {
+        $selected = selected($invoice_invoice_number_value, $field_key, false);
+        echo '<option value="'.esc_attr($field_key).'"'.$selected.'>'.esc_html($field_label).'</option>';
+    }
+    echo '</select>';
+    echo '</td>';
+    echo '</tr>';
+    echo '<tr class="invoice_invoice_number_custom_row" '.($invoice_invoice_number_type == 'standard_field' ? 'style="display:none;"' : '').'>';
+    echo '<th scope="row"><label>Custom Value</label></th>';
+    echo '<td><input type="text" name="invoice_invoice_number_custom_value" value="'.esc_attr($invoice_invoice_number_type == 'custom_value' ? $invoice_invoice_number_value : '').'" class="regular-text" placeholder="woo{shop_order_order_id}"></td>';
+    echo '</tr>';
+    echo '</table>';
+    echo '</div>';
+    
+    // Reason Field
+    echo '<div style="background: #fff; border: 1px solid #ddd; padding: 15px; margin-bottom: 15px; border-radius: 4px;">';
+    echo '<h3 style="margin-top: 0;">Reason</h3>';
+    echo '<p style="margin: 5px 0; color: #666;">API Name : <code>reason</code> Type : <code>string</code></p>';
+    echo '<table class="form-table" style="margin-top: 15px;">';
+    echo '<tr>';
+    echo '<th scope="row"><label>Field Type</label></th>';
+    echo '<td>';
+    echo '<select name="invoice_reason_type" class="zoho-field-type" data-field="invoice_reason" style="width: 200px;">';
+    echo '<option value="standard_field" '.selected($invoice_reason_type, 'standard_field', false).'>Standard Fields</option>';
+    echo '<option value="custom_value" '.selected($invoice_reason_type, 'custom_value', false).'>Custom Value</option>';
+    echo '</select>';
+    echo '</td>';
+    echo '</tr>';
+    echo '<tr class="invoice_reason_field_row" '.($invoice_reason_type == 'custom_value' ? 'style="display:none;"' : '').'>';
+    echo '<th scope="row"><label>Field Value</label></th>';
+    echo '<td>';
+    echo '<select name="invoice_reason_value" style="width: 300px;">';
+    foreach ($wc_order_fields as $field_key => $field_label) {
+        $selected = selected($invoice_reason_value, $field_key, false);
+        echo '<option value="'.esc_attr($field_key).'"'.$selected.'>'.esc_html($field_label).'</option>';
+    }
+    echo '</select>';
+    echo '</td>';
+    echo '</tr>';
+    echo '<tr class="invoice_reason_custom_row" '.($invoice_reason_type == 'standard_field' ? 'style="display:none;"' : '').'>';
+    echo '<th scope="row"><label>Custom Value</label></th>';
+    echo '<td><input type="text" name="invoice_reason_custom_value" value="'.esc_attr($invoice_reason_type == 'custom_value' ? $invoice_reason_value : '').'" class="regular-text" placeholder="Invoice create or update"></td>';
+    echo '</tr>';
+    echo '</table>';
+    echo '</div>';
+    
+    submit_button('Save Invoice Mapping Settings', 'primary', 'save_zoho_invoice_mapping');
+    echo '</form>';
+    
+    // JavaScript for toggling field type
+    ?>
+    <script>
+    jQuery(document).ready(function($) {
+        $('.zoho-field-type').on('change', function() {
+            var field = $(this).data('field');
+            var type = $(this).val();
+            if (type == 'custom_value') {
+                $('.' + field + '_field_row').hide();
+                $('.' + field + '_custom_row').show();
+            } else {
+                $('.' + field + '_field_row').show();
+                $('.' + field + '_custom_row').hide();
+            }
+        });
+    });
+    </script>
+    <?php
+}
+
+/* ======================================================
+   CUSTOMERS MAPPING TAB
+====================================================== */
+function zoho_field_mapping_customers_tab() {
+    echo '<p>Customer mapping settings will be available here.</p>';
+    echo '<div style="background: #fff; border: 1px solid #ddd; padding: 40px; text-align: center; border-radius: 4px;">';
+    echo '<p style="color: #666; font-size: 16px;">Customer mapping functionality coming soon...</p>';
+    echo '</div>';
+}
+
+/* ======================================================
    INVENTORY SYNC PAGE
 ====================================================== */
 function zoho_inventory_sync_page() {
