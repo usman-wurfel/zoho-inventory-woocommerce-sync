@@ -44,18 +44,18 @@ function zoho_register_admin_menu() {
         'Zoho Sync',
         'manage_options',
         'zoho-sync',
-        'zoho_connection_page',
+        'zoho_dashboard_page',
         'dashicons-update',
         56
     );
 
     add_submenu_page(
         'zoho-sync',
-        'Connection',
-        'Connection',
+        'Dashboard',
+        'Dashboard',
         'manage_options',
         'zoho-sync',
-        'zoho_connection_page'
+        'zoho_dashboard_page'
     );
 
     add_submenu_page(
@@ -92,9 +92,94 @@ function zoho_register_admin_menu() {
 add_action('admin_enqueue_scripts', 'zoho_enqueue_sync_scripts');
 function zoho_enqueue_sync_scripts($hook) {
     // Only load on our sync pages
-    if ($hook != 'toplevel_page_zoho-sync' && $hook != 'zoho-sync_page_zoho-inventory-sync' && $hook != 'zoho-sync_page_zoho-field-mapping') {
+    if ($hook != 'toplevel_page_zoho-sync' && $hook != 'zoho-sync_page_zoho-inventory-sync' && $hook != 'zoho-sync_page_zoho-field-mapping' && $hook != 'zoho-sync_page_zoho-invoice-sync') {
         return;
     }
+    
+    // Add custom CSS for better styling
+    wp_add_inline_style('wp-admin', '
+        /* Zoho Sync Dashboard Styles */
+        .zoho-dashboard-card {
+            background: #fff;
+            border: 1px solid #ccd0d4;
+            box-shadow: 0 1px 1px rgba(0,0,0,.04);
+            padding: 20px;
+            margin-bottom: 20px;
+            border-radius: 4px;
+        }
+        .zoho-stat-card {
+            background: #fff;
+            border: 1px solid #ccd0d4;
+            box-shadow: 0 1px 1px rgba(0,0,0,.04);
+            padding: 25px;
+            border-radius: 4px;
+            text-align: center;
+            transition: transform 0.2s, box-shadow 0.2s;
+        }
+        .zoho-stat-card:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 4px 8px rgba(0,0,0,.1);
+        }
+        .zoho-stat-number {
+            font-size: 48px;
+            font-weight: 600;
+            color: #2271b1;
+            margin: 15px 0;
+        }
+        .zoho-stat-label {
+            margin: 0 0 15px 0;
+            font-size: 14px;
+            color: #666;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+        }
+        .zoho-status-badge {
+            padding: 5px 15px;
+            border-radius: 3px;
+            font-weight: 600;
+            font-size: 13px;
+            display: inline-block;
+        }
+        .zoho-status-connected {
+            background: #46b450;
+            color: #fff;
+        }
+        .zoho-status-disconnected {
+            background: #dc3232;
+            color: #fff;
+        }
+        
+        /* Enhanced Tab Styles */
+        .nav-tab-wrapper {
+            border-bottom: 2px solid #2271b1;
+            margin-bottom: 20px;
+        }
+        .nav-tab {
+            border: 1px solid #ccd0d4;
+            border-bottom: none;
+            background: #f6f7f7;
+            color: #50575e;
+            padding: 8px 15px;
+            margin-left: 0.5em;
+            margin-bottom: -1px;
+            transition: all 0.2s;
+        }
+        .nav-tab:hover {
+            background: #fff;
+            color: #2271b1;
+        }
+        .nav-tab-active {
+            background: #fff;
+            color: #2271b1;
+            border-bottom-color: #fff;
+            position: relative;
+            z-index: 1;
+        }
+        .nav-tab-active:focus {
+            box-shadow: none;
+            outline: none;
+        }
+    ');
     
     // Only load sync script on inventory sync page
     if ($hook == 'zoho-sync_page_zoho-inventory-sync') {
@@ -193,9 +278,9 @@ add_action('admin_init', function () {
 });
 
 /* ======================================================
-   CONNECTION PAGE
+   DASHBOARD PAGE
 ====================================================== */
-function zoho_connection_page() {
+function zoho_dashboard_page() {
 
     if (isset($_POST['save_zoho_credentials'])) {
         // Pehle existing connection clear karo (agar hai)
@@ -215,42 +300,158 @@ function zoho_connection_page() {
 
     // Show connection success message
     if (isset($_GET['connected']) && $_GET['connected'] == '1') {
-        echo '<div class="notice notice-success"><p>Successfully connected to Zoho! New token saved.</p></div>';
+        echo '<div class="notice notice-success is-dismissible"><p>Successfully connected to Zoho! New token saved.</p></div>';
     }
 
     // Show error messages
     if (isset($_GET['error'])) {
         $error = sanitize_text_field($_GET['error']);
-        echo '<div class="notice notice-error"><p><strong>Error:</strong> '.esc_html($error).'</p></div>';
+        echo '<div class="notice notice-error is-dismissible"><p><strong>Error:</strong> '.esc_html($error).'</p></div>';
     }
 
     $connected = get_option('zoho_access_token');
+    $refresh_token = get_option('zoho_refresh_token');
+    $token_expires_at = get_option('zoho_token_expires_at');
     $default_redirect_uri = admin_url('admin.php?page=zoho-sync');
-
-    echo '<h1>Zoho Connection</h1>';
-
-    // Connection status dikhao
-    if ($connected) {
-        echo '<div class="notice notice-info"><p><strong>Status:</strong> Connected to Zoho</p></div>';
-        if (get_option('zoho_refresh_token')) {
-            echo '<p><strong>Refresh Token:</strong> Saved</p>';
+    
+    // Calculate token expiry time
+    $expires_in = '';
+    if ($token_expires_at && $connected) {
+        $time_left = $token_expires_at - time();
+        if ($time_left > 0) {
+            $minutes = round($time_left / 60);
+            $expires_in = $minutes . ' minutes';
         }
-    } else {
-        echo '<div class="notice notice-warning"><p><strong>Status:</strong> Not Connected</p></div>';
     }
 
-    // Credentials form hamesha dikhao
-    echo '<form method="post">
-    <table class="form-table">
-        <tr><th>Client ID</th><td><input name="client_id" value="'.esc_attr(get_option('zoho_client_id')).'" class="regular-text" required></td></tr>
-        <tr><th>Client Secret</th><td><input name="client_secret" type="password" value="'.esc_attr(get_option('zoho_client_secret')).'" class="regular-text" required></td></tr>
-        <tr><th>Redirect URI</th><td><input name="redirect_uri" value="'.esc_attr(get_option('zoho_redirect_uri', $default_redirect_uri)).'" class="regular-text" required>
-            <p class="description">Configure this redirect URI in your Zoho App settings.</p></td></tr>
-    </table>';
-    submit_button('Update & Connect','primary','save_zoho_credentials');
-    echo '</form>';
-    echo '<p class="description">After updating credentials, you will be automatically redirected to connect with Zoho.</p>';
+    // Get sync statistics
+    $inventory_logs = get_option('zoho_inventory_logs', []);
+    $total_items_synced = 0;
+    if (!empty($inventory_logs)) {
+        $latest_log = end($inventory_logs);
+        $total_items_synced = isset($latest_log['synced']) ? $latest_log['synced'] : 0;
+    }
+    
+    // Count total products in WooCommerce
+    $total_products = wp_count_posts('product');
+    $published_products = $total_products->publish ?? 0;
+
+    // Count total invoices (orders) - placeholder for now
+    $total_invoices = 0; // Will be updated when invoice sync is implemented
+    
+    ?>
+    <div class="wrap">
+        <h1 style="margin-bottom: 20px;">Zoho Inventory Dashboard</h1>
+        
+        <!-- Connection Status Card -->
+        <div style="background: #fff; border: 1px solid #ccd0d4; box-shadow: 0 1px 1px rgba(0,0,0,.04); padding: 20px; margin-bottom: 20px; border-radius: 4px;">
+            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 15px;">
+                <h2 style="margin: 0; font-size: 18px;">Connection Status</h2>
+                <?php if ($connected): ?>
+                    <span class="zoho-status-badge zoho-status-connected">Connected</span>
+                <?php else: ?>
+                    <span class="zoho-status-badge zoho-status-disconnected">Not Connected</span>
+                <?php endif; ?>
+            </div>
+            
+            <?php if ($connected): ?>
+                <div style="margin-bottom: 15px;">
+                    <?php if ($expires_in): ?>
+                        <p style="margin: 5px 0; color: #666;">
+                            <span class="dashicons dashicons-update" style="vertical-align: middle;"></span>
+                            Access token will expire in <?php echo esc_html($expires_in); ?>.
+                        </p>
+                    <?php endif; ?>
+                    <?php if ($refresh_token): ?>
+                        <p style="margin: 5px 0; color: #666;">Refresh token is saved and will be used automatically when token expires.</p>
+                    <?php endif; ?>
+                </div>
+                
+                <div style="margin-top: 15px;">
+                    <a href="<?php echo esc_url(zoho_auth_url()); ?>" class="button button-secondary" style="margin-right: 10px;">
+                        <span class="dashicons dashicons-update" style="vertical-align: middle;"></span> Reauthorize
+                    </a>
+                    <a href="<?php echo esc_url(admin_url('admin.php?page=zoho-sync&disconnect=1&_wpnonce=' . wp_create_nonce('zoho_disconnect'))); ?>" class="button button-link-delete" onclick="return confirm('Are you sure you want to disconnect?');">
+                        Disconnect
+                    </a>
+                </div>
+            <?php else: ?>
+                <p style="color: #666; margin-bottom: 15px;">Please configure your Zoho API credentials below to connect.</p>
+            <?php endif; ?>
+        </div>
+        
+        <!-- Sync Statistics Cards -->
+        <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(250px, 1fr)); gap: 20px; margin-bottom: 20px;">
+            <!-- Items Synced Card -->
+            <div class="zoho-stat-card">
+                <h3 class="zoho-stat-label">Items Synced</h3>
+                <div class="zoho-stat-number"><?php echo number_format($published_products); ?></div>
+                <p style="margin: 0; color: #666; font-size: 13px;">Products in WooCommerce</p>
+            </div>
+            
+            <!-- Invoices Synced Card -->
+            <div class="zoho-stat-card">
+                <h3 class="zoho-stat-label">Invoices Synced</h3>
+                <div class="zoho-stat-number"><?php echo number_format($total_invoices); ?></div>
+                <p style="margin: 0; color: #666; font-size: 13px;">Orders in WooCommerce</p>
+            </div>
+        </div>
+        
+        <!-- Connection Settings -->
+        <div style="background: #fff; border: 1px solid #ccd0d4; box-shadow: 0 1px 1px rgba(0,0,0,.04); padding: 20px; border-radius: 4px;">
+            <h2 style="margin-top: 0; font-size: 18px; margin-bottom: 20px;">Connection Settings</h2>
+            
+            <form method="post">
+                <table class="form-table">
+                    <tr>
+                        <th scope="row"><label for="client_id">Client ID</label></th>
+                        <td>
+                            <input name="client_id" type="text" id="client_id" value="<?php echo esc_attr(get_option('zoho_client_id')); ?>" class="regular-text" required>
+                            <p class="description">Your Zoho API Client ID</p>
+                        </td>
+                    </tr>
+                    <tr>
+                        <th scope="row"><label for="client_secret">Client Secret</label></th>
+                        <td>
+                            <input name="client_secret" type="password" id="client_secret" value="<?php echo esc_attr(get_option('zoho_client_secret')); ?>" class="regular-text" required>
+                            <p class="description">Your Zoho API Client Secret</p>
+                        </td>
+                    </tr>
+                    <tr>
+                        <th scope="row"><label for="redirect_uri">Redirect URI</label></th>
+                        <td>
+                            <input name="redirect_uri" type="url" id="redirect_uri" value="<?php echo esc_attr(get_option('zoho_redirect_uri', $default_redirect_uri)); ?>" class="regular-text" required>
+                            <p class="description">Configure this redirect URI in your Zoho App settings.</p>
+                        </td>
+                    </tr>
+                </table>
+                
+                <?php submit_button('Update & Connect', 'primary', 'save_zoho_credentials'); ?>
+            </form>
+            <p class="description" style="margin-top: 15px;">After updating credentials, you will be automatically redirected to connect with Zoho.</p>
+        </div>
+    </div>
+    <?php
 }
+
+// Handle disconnect
+add_action('admin_init', function() {
+    if (isset($_GET['disconnect']) && isset($_GET['_wpnonce']) && current_user_can('manage_options')) {
+        if (wp_verify_nonce($_GET['_wpnonce'], 'zoho_disconnect')) {
+            delete_option('zoho_access_token');
+            delete_option('zoho_refresh_token');
+            delete_option('zoho_token_expires_at');
+            wp_redirect(admin_url('admin.php?page=zoho-sync&disconnected=1'));
+            exit;
+        }
+    }
+    
+    if (isset($_GET['disconnected'])) {
+        add_action('admin_notices', function() {
+            echo '<div class="notice notice-success is-dismissible"><p>Disconnected from Zoho successfully.</p></div>';
+        });
+    }
+});
 
 /* ======================================================
    AUTH URL
