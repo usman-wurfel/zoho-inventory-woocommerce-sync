@@ -1972,67 +1972,6 @@ function zoho_get_item_by_sku($sku) {
 }
 
 /* ======================================================
-   HELPER: Zoho API POST
-====================================================== */
-function zoho_api_post($endpoint, $data) {
-    $access_token = get_option('zoho_access_token', '');
-    $org_id = get_option('zoho_organization_id', '');
-    
-    if (empty($access_token) || empty($org_id)) {
-        return new WP_Error('no_credentials', 'Zoho credentials not configured');
-    }
-    
-    $url = 'https://www.zohoapis.com/inventory/v1/' . $endpoint . '?organization_id=' . $org_id;
-    
-    $response = wp_remote_post($url, array(
-        'headers' => array(
-            'Authorization' => 'Zoho-oauthtoken ' . $access_token,
-            'Content-Type' => 'application/json'
-        ),
-        'body' => json_encode($data),
-        'timeout' => 30
-    ));
-    
-    if (is_wp_error($response)) {
-        return $response;
-    }
-    
-    $body = wp_remote_retrieve_body($response);
-    return json_decode($body, true);
-}
-
-/* ======================================================
-   HELPER: Zoho API PUT
-====================================================== */
-function zoho_api_put($endpoint, $data) {
-    $access_token = get_option('zoho_access_token', '');
-    $org_id = get_option('zoho_organization_id', '');
-    
-    if (empty($access_token) || empty($org_id)) {
-        return new WP_Error('no_credentials', 'Zoho credentials not configured');
-    }
-    
-    $url = 'https://www.zohoapis.com/inventory/v1/' . $endpoint . '?organization_id=' . $org_id;
-    
-    $response = wp_remote_request($url, array(
-        'method' => 'PUT',
-        'headers' => array(
-            'Authorization' => 'Zoho-oauthtoken ' . $access_token,
-            'Content-Type' => 'application/json'
-        ),
-        'body' => json_encode($data),
-        'timeout' => 30
-    ));
-    
-    if (is_wp_error($response)) {
-        return $response;
-    }
-    
-    $body = wp_remote_retrieve_body($response);
-    return json_decode($body, true);
-}
-
-/* ======================================================
    HELPERS
 ====================================================== */
 function zoho_render_sku_table($skus) {
@@ -2278,166 +2217,30 @@ function zoho_logs_page() {
    LOGS - ITEMS TAB
 ====================================================== */
 function zoho_logs_items_tab() {
-    // View single log detail
-    if (isset($_GET['view_log'])) {
-        $logs = get_option('zoho_detailed_logs', []);
-        $log_id = sanitize_text_field($_GET['view_log']);
-        
-        foreach ($logs as $log) {
-            if (isset($log['id']) && $log['id'] === $log_id) {
-                echo '<div style="margin-bottom: 20px;">';
-                echo '<a href="'.admin_url('admin.php?page=zoho-logs&tab=items').'" class="button">&larr; Back to Logs</a>';
-                echo '</div>';
-                
-                echo '<div style="background: #fff; border: 1px solid #ddd; padding: 20px; margin-bottom: 20px; border-radius: 4px;">';
-                echo '<h2 style="margin-top: 0;">Log Details</h2>';
-                echo '<table class="form-table">';
-                echo '<tr><th>Time</th><td>'.esc_html($log['time']).'</td></tr>';
-                echo '<tr><th>Woo Object</th><td>'.esc_html($log['woo_object'] ?? 'product').'</td></tr>';
-                echo '<tr><th>Woo Object Id</th><td>'.esc_html($log['woo_object_id'] ?? '-').'</td></tr>';
-                echo '<tr><th>Zoho Inventory Object</th><td>'.esc_html($log['zoho_object'] ?? 'items-inventory').'</td></tr>';
-                echo '<tr><th>Zoho Inventory Object Id</th><td>'.esc_html($log['zoho_object_id'] ?? '-').'</td></tr>';
-                echo '</table>';
-                echo '</div>';
-                
-                // Request
-                echo '<div style="background: #fff; border: 1px solid #ddd; padding: 20px; margin-bottom: 20px; border-radius: 4px;">';
-                echo '<h3 style="margin-top: 0;">Request</h3>';
-                echo '<pre style="background: #f5f5f5; padding: 15px; overflow-x: auto; white-space: pre-wrap; word-wrap: break-word;">'.esc_html(json_encode(json_decode($log['request'] ?? '{}'), JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES)).'</pre>';
-                echo '</div>';
-                
-                // Response
-                echo '<div style="background: #fff; border: 1px solid #ddd; padding: 20px; margin-bottom: 20px; border-radius: 4px;">';
-                echo '<h3 style="margin-top: 0;">Response</h3>';
-                echo '<pre style="background: #f5f5f5; padding: 15px; overflow-x: auto; white-space: pre-wrap; word-wrap: break-word;">'.esc_html(json_encode(json_decode($log['response'] ?? '{}'), JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES)).'</pre>';
-                echo '</div>';
-                
-                return;
-            }
-        }
-        echo '<p>Log not found.</p>';
-        return;
-    }
-    
-    // List all logs
-    $logs = get_option('zoho_detailed_logs', []);
-    $item_logs = array_filter($logs, function($log) {
-        return ($log['type'] ?? '') === 'item';
-    });
-    
-    if (empty($item_logs)) {
-        echo '<p>No item sync logs yet.</p>';
-        return;
-    }
-    
-    echo '<table class="wp-list-table widefat fixed striped">';
-    echo '<thead><tr>
-        <th style="width: 50px;">Expand</th>
-        <th>Woo Object</th>
-        <th>Woo Object Id</th>
-        <th>Zoho Inventory Object</th>
-        <th>Zoho Inventory Object Id</th>
-        <th>Time</th>
-    </tr></thead><tbody>';
-    
-    foreach (array_reverse($item_logs) as $log) {
-        echo '<tr>';
-        echo '<td><a href="'.admin_url('admin.php?page=zoho-logs&tab=items&view_log='.esc_attr($log['id'])).'" class="button button-small">-</a></td>';
-        echo '<td>'.esc_html($log['woo_object'] ?? 'product').'</td>';
-        echo '<td>'.esc_html($log['woo_object_id'] ?? '-').'</td>';
-        echo '<td>'.esc_html($log['zoho_object'] ?? 'items-inventory').'</td>';
-        echo '<td><a href="https://inventory.zoho.com/app#/inventory/items/'.esc_attr($log['zoho_object_id'] ?? '').'" target="_blank">'.esc_html($log['zoho_object_id'] ?? '-').'</a></td>';
-        echo '<td>'.esc_html($log['time'] ?? '-').'</td>';
-        echo '</tr>';
-    }
-    
-    echo '</tbody></table>';
+    zoho_render_logs_tab('item', 'items', 'product', 'items-inventory');
 }
 
 /* ======================================================
    LOGS - INVOICES TAB
 ====================================================== */
 function zoho_logs_invoices_tab() {
-    // View single log detail
-    if (isset($_GET['view_log'])) {
-        $logs = get_option('zoho_detailed_logs', []);
-        $log_id = sanitize_text_field($_GET['view_log']);
-        
-        foreach ($logs as $log) {
-            if (isset($log['id']) && $log['id'] === $log_id) {
-                echo '<div style="margin-bottom: 20px;">';
-                echo '<a href="'.admin_url('admin.php?page=zoho-logs&tab=invoices').'" class="button">&larr; Back to Logs</a>';
-                echo '</div>';
-                
-                echo '<div style="background: #fff; border: 1px solid #ddd; padding: 20px; margin-bottom: 20px; border-radius: 4px;">';
-                echo '<h2 style="margin-top: 0;">Log Details</h2>';
-                echo '<table class="form-table">';
-                echo '<tr><th>Time</th><td>'.esc_html($log['time']).'</td></tr>';
-                echo '<tr><th>Woo Object</th><td>'.esc_html($log['woo_object'] ?? 'order').'</td></tr>';
-                echo '<tr><th>Woo Object Id</th><td>'.esc_html($log['woo_object_id'] ?? '-').'</td></tr>';
-                echo '<tr><th>Zoho Inventory Object</th><td>'.esc_html($log['zoho_object'] ?? 'invoice').'</td></tr>';
-                echo '<tr><th>Zoho Inventory Object Id</th><td>'.esc_html($log['zoho_object_id'] ?? '-').'</td></tr>';
-                echo '</table>';
-                echo '</div>';
-                
-                // Request
-                echo '<div style="background: #fff; border: 1px solid #ddd; padding: 20px; margin-bottom: 20px; border-radius: 4px;">';
-                echo '<h3 style="margin-top: 0;">Request</h3>';
-                echo '<pre style="background: #f5f5f5; padding: 15px; overflow-x: auto; white-space: pre-wrap; word-wrap: break-word;">'.esc_html(json_encode(json_decode($log['request'] ?? '{}'), JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES)).'</pre>';
-                echo '</div>';
-                
-                // Response
-                echo '<div style="background: #fff; border: 1px solid #ddd; padding: 20px; margin-bottom: 20px; border-radius: 4px;">';
-                echo '<h3 style="margin-top: 0;">Response</h3>';
-                echo '<pre style="background: #f5f5f5; padding: 15px; overflow-x: auto; white-space: pre-wrap; word-wrap: break-word;">'.esc_html(json_encode(json_decode($log['response'] ?? '{}'), JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES)).'</pre>';
-                echo '</div>';
-                
-                return;
-            }
-        }
-        echo '<p>Log not found.</p>';
-        return;
-    }
-    
-    // List all logs
-    $logs = get_option('zoho_detailed_logs', []);
-    $invoice_logs = array_filter($logs, function($log) {
-        return ($log['type'] ?? '') === 'invoice';
-    });
-    
-    if (empty($invoice_logs)) {
-        echo '<p>No invoice sync logs yet.</p>';
-        return;
-    }
-    
-    echo '<table class="wp-list-table widefat fixed striped">';
-    echo '<thead><tr>
-        <th style="width: 50px;">Expand</th>
-        <th>Woo Object</th>
-        <th>Woo Object Id</th>
-        <th>Zoho Inventory Object</th>
-        <th>Zoho Inventory Object Id</th>
-        <th>Time</th>
-    </tr></thead><tbody>';
-    
-    foreach (array_reverse($invoice_logs) as $log) {
-        echo '<tr>';
-        echo '<td><a href="'.admin_url('admin.php?page=zoho-logs&tab=invoices&view_log='.esc_attr($log['id'])).'" class="button button-small">-</a></td>';
-        echo '<td>'.esc_html($log['woo_object'] ?? 'order').'</td>';
-        echo '<td>'.esc_html($log['woo_object_id'] ?? '-').'</td>';
-        echo '<td>'.esc_html($log['zoho_object'] ?? 'invoice').'</td>';
-        echo '<td>'.esc_html($log['zoho_object_id'] ?? '-').'</td>';
-        echo '<td>'.esc_html($log['time'] ?? '-').'</td>';
-        echo '</tr>';
-    }
-    
-    echo '</tbody></table>';
+    zoho_render_logs_tab('invoice', 'invoices', 'order', 'invoice');
 }
 
 /* ======================================================
    LOGS - CONTACTS TAB
 ====================================================== */
 function zoho_logs_contacts_tab() {
+    zoho_render_logs_tab('contact', 'contacts', 'customer', 'contact');
+}
+
+/* ======================================================
+   LOGS - RENDER TAB WITH PAGINATION
+====================================================== */
+function zoho_render_logs_tab($type, $tab_name, $woo_object_default, $zoho_object_default) {
+    $per_page = 20;
+    $current_page = isset($_GET['paged']) ? max(1, intval($_GET['paged'])) : 1;
+    
     // View single log detail
     if (isset($_GET['view_log'])) {
         $logs = get_option('zoho_detailed_logs', []);
@@ -2446,16 +2249,16 @@ function zoho_logs_contacts_tab() {
         foreach ($logs as $log) {
             if (isset($log['id']) && $log['id'] === $log_id) {
                 echo '<div style="margin-bottom: 20px;">';
-                echo '<a href="'.admin_url('admin.php?page=zoho-logs&tab=contacts').'" class="button">&larr; Back to Logs</a>';
+                echo '<a href="'.admin_url('admin.php?page=zoho-logs&tab='.$tab_name).'" class="button">&larr; Back to Logs</a>';
                 echo '</div>';
                 
                 echo '<div style="background: #fff; border: 1px solid #ddd; padding: 20px; margin-bottom: 20px; border-radius: 4px;">';
                 echo '<h2 style="margin-top: 0;">Log Details</h2>';
                 echo '<table class="form-table">';
                 echo '<tr><th>Time</th><td>'.esc_html($log['time']).'</td></tr>';
-                echo '<tr><th>Woo Object</th><td>'.esc_html($log['woo_object'] ?? 'customer').'</td></tr>';
+                echo '<tr><th>Woo Object</th><td>'.esc_html($log['woo_object'] ?? $woo_object_default).'</td></tr>';
                 echo '<tr><th>Woo Object Id</th><td>'.esc_html($log['woo_object_id'] ?? '-').'</td></tr>';
-                echo '<tr><th>Zoho Inventory Object</th><td>'.esc_html($log['zoho_object'] ?? 'contact').'</td></tr>';
+                echo '<tr><th>Zoho Inventory Object</th><td>'.esc_html($log['zoho_object'] ?? $zoho_object_default).'</td></tr>';
                 echo '<tr><th>Zoho Inventory Object Id</th><td>'.esc_html($log['zoho_object_id'] ?? '-').'</td></tr>';
                 echo '</table>';
                 echo '</div>';
@@ -2463,13 +2266,13 @@ function zoho_logs_contacts_tab() {
                 // Request
                 echo '<div style="background: #fff; border: 1px solid #ddd; padding: 20px; margin-bottom: 20px; border-radius: 4px;">';
                 echo '<h3 style="margin-top: 0;">Request</h3>';
-                echo '<pre style="background: #f5f5f5; padding: 15px; overflow-x: auto; white-space: pre-wrap; word-wrap: break-word;">'.esc_html(json_encode(json_decode($log['request'] ?? '{}'), JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES)).'</pre>';
+                echo '<pre style="background: #f5f5f5; padding: 15px; overflow-x: auto; white-space: pre-wrap; word-wrap: break-word; max-height: 400px;">'.esc_html(json_encode(json_decode($log['request'] ?? '{}'), JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES)).'</pre>';
                 echo '</div>';
                 
                 // Response
                 echo '<div style="background: #fff; border: 1px solid #ddd; padding: 20px; margin-bottom: 20px; border-radius: 4px;">';
                 echo '<h3 style="margin-top: 0;">Response</h3>';
-                echo '<pre style="background: #f5f5f5; padding: 15px; overflow-x: auto; white-space: pre-wrap; word-wrap: break-word;">'.esc_html(json_encode(json_decode($log['response'] ?? '{}'), JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES)).'</pre>';
+                echo '<pre style="background: #f5f5f5; padding: 15px; overflow-x: auto; white-space: pre-wrap; word-wrap: break-word; max-height: 400px;">'.esc_html(json_encode(json_decode($log['response'] ?? '{}'), JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES)).'</pre>';
                 echo '</div>';
                 
                 return;
@@ -2479,16 +2282,29 @@ function zoho_logs_contacts_tab() {
         return;
     }
     
-    // List all logs
-    $logs = get_option('zoho_detailed_logs', []);
-    $contact_logs = array_filter($logs, function($log) {
-        return ($log['type'] ?? '') === 'contact';
-    });
+    // Get all logs and filter by type
+    $all_logs = get_option('zoho_detailed_logs', []);
+    $filtered_logs = array_values(array_filter($all_logs, function($log) use ($type) {
+        return ($log['type'] ?? '') === $type;
+    }));
     
-    if (empty($contact_logs)) {
-        echo '<p>No contact sync logs yet.</p>';
+    // Reverse for newest first
+    $filtered_logs = array_reverse($filtered_logs);
+    
+    $total_logs = count($filtered_logs);
+    $total_pages = ceil($total_logs / $per_page);
+    
+    if ($total_logs == 0) {
+        echo '<p>No '.str_replace('_', ' ', $type).' sync logs yet.</p>';
         return;
     }
+    
+    // Get logs for current page
+    $offset = ($current_page - 1) * $per_page;
+    $page_logs = array_slice($filtered_logs, $offset, $per_page);
+    
+    // Show count
+    echo '<p style="margin-bottom: 15px;">Showing '.($offset + 1).' - '.min($offset + $per_page, $total_logs).' of '.$total_logs.' logs</p>';
     
     echo '<table class="wp-list-table widefat fixed striped">';
     echo '<thead><tr>
@@ -2500,18 +2316,56 @@ function zoho_logs_contacts_tab() {
         <th>Time</th>
     </tr></thead><tbody>';
     
-    foreach (array_reverse($contact_logs) as $log) {
+    foreach ($page_logs as $log) {
+        $zoho_link = $log['zoho_object_id'] ?? '-';
+        if ($type == 'item' && !empty($log['zoho_object_id'])) {
+            $zoho_link = '<a href="https://inventory.zoho.com/app#/inventory/items/'.esc_attr($log['zoho_object_id']).'" target="_blank">'.esc_html($log['zoho_object_id']).'</a>';
+        } else {
+            $zoho_link = esc_html($log['zoho_object_id'] ?? '-');
+        }
+        
         echo '<tr>';
-        echo '<td><a href="'.admin_url('admin.php?page=zoho-logs&tab=contacts&view_log='.esc_attr($log['id'])).'" class="button button-small">-</a></td>';
-        echo '<td>'.esc_html($log['woo_object'] ?? 'customer').'</td>';
+        echo '<td><a href="'.admin_url('admin.php?page=zoho-logs&tab='.$tab_name.'&view_log='.esc_attr($log['id'])).'" class="button button-small">-</a></td>';
+        echo '<td>'.esc_html($log['woo_object'] ?? $woo_object_default).'</td>';
         echo '<td>'.esc_html($log['woo_object_id'] ?? '-').'</td>';
-        echo '<td>'.esc_html($log['zoho_object'] ?? 'contact').'</td>';
-        echo '<td>'.esc_html($log['zoho_object_id'] ?? '-').'</td>';
+        echo '<td>'.esc_html($log['zoho_object'] ?? $zoho_object_default).'</td>';
+        echo '<td>'.$zoho_link.'</td>';
         echo '<td>'.esc_html($log['time'] ?? '-').'</td>';
         echo '</tr>';
     }
     
     echo '</tbody></table>';
+    
+    // Pagination
+    if ($total_pages > 1) {
+        echo '<div class="tablenav bottom"><div class="tablenav-pages">';
+        echo '<span class="displaying-num">'.$total_logs.' items</span>';
+        echo '<span class="pagination-links">';
+        
+        // First page
+        if ($current_page > 1) {
+            echo '<a class="first-page button" href="'.admin_url('admin.php?page=zoho-logs&tab='.$tab_name.'&paged=1').'">«</a> ';
+            echo '<a class="prev-page button" href="'.admin_url('admin.php?page=zoho-logs&tab='.$tab_name.'&paged='.($current_page - 1)).'">‹</a> ';
+        } else {
+            echo '<span class="tablenav-pages-navspan button disabled">«</span> ';
+            echo '<span class="tablenav-pages-navspan button disabled">‹</span> ';
+        }
+        
+        echo '<span class="paging-input">';
+        echo '<span class="tablenav-paging-text"> '.$current_page.' of <span class="total-pages">'.$total_pages.'</span></span>';
+        echo '</span>';
+        
+        // Next/Last page
+        if ($current_page < $total_pages) {
+            echo ' <a class="next-page button" href="'.admin_url('admin.php?page=zoho-logs&tab='.$tab_name.'&paged='.($current_page + 1)).'">›</a>';
+            echo ' <a class="last-page button" href="'.admin_url('admin.php?page=zoho-logs&tab='.$tab_name.'&paged='.$total_pages).'">»</a>';
+        } else {
+            echo ' <span class="tablenav-pages-navspan button disabled">›</span>';
+            echo ' <span class="tablenav-pages-navspan button disabled">»</span>';
+        }
+        
+        echo '</span></div></div>';
+    }
 }
 
 /* ======================================================
