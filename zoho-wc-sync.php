@@ -386,6 +386,9 @@ function zoho_inventory_sync_page() {
                 // Set status to publish
                 $product->set_status('publish');
                 
+                // Set catalog visibility to visible
+                $product->set_catalog_visibility('visible');
+                
                 $created++;
             } else {
                 // Update existing product
@@ -419,7 +422,9 @@ function zoho_inventory_sync_page() {
         
         // Flush rewrite rules after creating new products to ensure permalinks work
         if ($created > 0) {
-            flush_rewrite_rules(false);
+            // Force flush rewrite rules
+            global $wp_rewrite;
+            $wp_rewrite->flush_rules(true);
         }
 
         zoho_add_sync_log($total,$synced,$synced_skus,$pending_skus,$created,$updated);
@@ -428,6 +433,12 @@ function zoho_inventory_sync_page() {
             <p><strong>Sync Completed!</strong></p>
             <p>Total: '.$total.' | Synced: '.$synced.' | Created: '.$created.' | Updated: '.$updated.' | Pending: '.count($pending_skus).'</p>
         </div>';
+        
+        if ($created > 0) {
+            echo '<div class="notice notice-info">
+                <p><strong>Note:</strong> If product pages show 404, please go to <a href="'.admin_url('options-permalink.php').'">Settings → Permalinks</a> and click "Save Changes" to refresh permalinks.</p>
+            </div>';
+        }
     }
 
     echo '<form method="post">
