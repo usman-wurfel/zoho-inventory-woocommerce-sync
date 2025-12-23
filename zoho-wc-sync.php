@@ -1827,7 +1827,7 @@ function zoho_sync_woo_to_zoho($offset, $total, $synced, $created, $updated) {
         
         zoho_write_log('Starting WooCommerce to Zoho sync - fetching products...');
         
-        // Use direct SQL query - simplest and most reliable
+        // Use direct SQL query to get ALL products (published, draft, private, pending)
         global $wpdb;
         $product_ids = $wpdb->get_col("
             SELECT ID FROM {$wpdb->posts} 
@@ -1839,13 +1839,12 @@ function zoho_sync_woo_to_zoho($offset, $total, $synced, $created, $updated) {
         $sql_count = count($product_ids);
         zoho_write_log("SQL Query found {$sql_count} products");
         
-        // Also try WC function as backup
+        // Also verify using WooCommerce function
         $wc_product_ids = wc_get_products(array(
             'status' => array('publish', 'draft', 'private', 'pending'),
             'limit' => -1,
             'return' => 'ids'
         ));
-        
         $wc_count = count($wc_product_ids);
         zoho_write_log("WC Function found {$wc_count} products");
         
@@ -1857,7 +1856,7 @@ function zoho_sync_woo_to_zoho($offset, $total, $synced, $created, $updated) {
             zoho_write_log("Using SQL query results ({$sql_count} products)");
         }
         
-        // Verify count in database
+        // Verify total count from database
         $db_count = $wpdb->get_var("
             SELECT COUNT(*) FROM {$wpdb->posts} 
             WHERE post_type = 'product' 
@@ -1867,23 +1866,18 @@ function zoho_sync_woo_to_zoho($offset, $total, $synced, $created, $updated) {
         
         $total = count($product_ids);
         zoho_write_log("Final product count to sync: {$total}");
-        zoho_write_log("Database total: {$db_count}");
-        
-        // Store the DB count in transient for later reference
-        set_transient('zoho_woo_sync_db_total', $db_count, 600);
         
         if ($total == 0) {
             zoho_write_log('ERROR: No products found in WooCommerce');
-            wp_send_json_error('No products found in WooCommerce. Total in DB: ' . $db_count);
+            wp_send_json_error('No products found in WooCommerce');
             return;
         }
         
         if ($total < $db_count) {
-            zoho_write_log("WARNING: Product count mismatch! Expected {$db_count}, got {$total} - This will be shown in sync results");
+            zoho_write_log("WARNING: Product count mismatch! Expected {$db_count}, got {$total}");
         }
 
         // Store product IDs in transient for batch processing (10 minutes for large syncs)
-        // Store as array to avoid serialization issues
         $saved = set_transient('zoho_woo_sync_products', $product_ids, 600);
         $retrieved = get_transient('zoho_woo_sync_products');
         $retrieved_count = is_array($retrieved) ? count($retrieved) : 0;
@@ -2040,12 +2034,9 @@ function zoho_sync_woo_to_zoho($offset, $total, $synced, $created, $updated) {
         $failure_reasons[] = $fail['sku'] . ': ' . $fail['reason'];
     }
     
-    // Get expected total from DB if available
-    $db_total = get_transient('zoho_woo_sync_db_total');
+    zoho_write_log("Batch completed - Offset: {$new_offset}, Total: {$total}, Synced: {$new_synced}, Created: {$new_created}, Updated: {$new_updated}, Has More: " . ($has_more ? 'YES' : 'NO'));
     
-    zoho_write_log("Batch completed - Offset: {$new_offset}, Total: {$total}" . ($db_total ? " (Expected: {$db_total})" : '') . ", Synced: {$new_synced}, Created: {$new_created}, Updated: {$new_updated}, Has More: " . ($has_more ? 'YES' : 'NO'));
-    
-    $response_data = array(
+    wp_send_json_success(array(
         'offset' => $new_offset,
         'total' => $total,
         'synced' => $new_synced,
@@ -2054,15 +2045,7 @@ function zoho_sync_woo_to_zoho($offset, $total, $synced, $created, $updated) {
         'pending' => count($stats['pending_skus']),
         'failed_reasons' => $failure_reasons,
         'has_more' => $has_more
-    );
-    
-    // Add DB total if available and different
-    if ($db_total && $db_total > $total) {
-        $response_data['db_total'] = $db_total;
-        $response_data['mismatch_warning'] = "Database has {$db_total} products but only {$total} are being synced. Check log: wp-content/uploads/zoho-sync-logs/";
-    }
-    
-    wp_send_json_success($response_data);
+    ));
 }
 
 /* ======================================================
@@ -3092,32 +3075,23 @@ function zoho_get_wc_customer_by_zoho_contact($zoho_contact_id) {
    HELPERS
 ====================================================== */
 function zoho_write_log($message) {
-    // Use WordPress uploads directory which is always writable
-    $upload_dir = wp_upload_dir();
-    $log_dir = $upload_dir['basedir'] . '/zoho-sync-logs';
-    
-    // Create directory if it doesn't exist
-    if (!file_exists($log_dir)) {
-        @wp_mkdir_p($log_dir);
+    // Use WooCommerce logs directory
+    if (function_exists('wc_get_log_file_path')) {
+        $log_file = WC_LOG_DIR . 'zoho-sync-debug-' . date('Y-m-d') . '.log';
+    } else {
+        $upload_dir = wp_upload_dir();
+        $log_file = $upload_dir['basedir'] . '/wc-logs/zoho-sync-debug-' . date('Y-m-d') . '.log';
+        
+        // Create wc-logs directory if it doesn't exist
+        $log_dir = dirname($log_file);
+        if (!file_exists($log_dir)) {
+            @wp_mkdir_p($log_dir);
+        }
     }
     
-    $log_file = $log_dir . '/zoho-sync-debug-' . date('Y-m-d') . '.log';
     $timestamp = date('Y-m-d H:i:s');
     $log_entry = "[{$timestamp}] {$message}" . PHP_EOL;
-    
-    // Try to write log
-    $result = @file_put_contents($log_file, $log_entry, FILE_APPEND);
-    
-    // If that fails, try plugin directory as fallback
-    if ($result === false) {
-        $log_file_fallback = plugin_dir_path(__FILE__) . 'zoho-sync-debug.log';
-        @file_put_contents($log_file_fallback, $log_entry, FILE_APPEND);
-    }
-    
-    // Also log to WordPress debug.log if enabled
-    if (defined('WP_DEBUG') && WP_DEBUG) {
-        error_log('Zoho Sync: ' . $message);
-    }
+    @file_put_contents($log_file, $log_entry, FILE_APPEND);
 }
 
 function zoho_render_sku_table($skus) {
