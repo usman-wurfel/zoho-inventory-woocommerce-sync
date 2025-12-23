@@ -1841,8 +1841,8 @@ function zoho_sync_woo_to_zoho($offset, $total, $synced, $created, $updated) {
         
         if ($total == 0) {
             wp_send_json_error('No products found in WooCommerce');
-            return;
-        }
+        return;
+    }
 
         // Store product IDs in transient for batch processing (10 minutes for large syncs)
         set_transient('zoho_woo_sync_products', $product_ids, 600);
@@ -2475,8 +2475,11 @@ function zoho_sync_customers_to_contacts($offset, $total, $synced, $created, $up
         // Build contact data from field mappings
         $contact_data = zoho_build_contact_data_from_customer($customer);
         
+        // Log the data being sent
+        error_log('Zoho Contact Sync - User ID: ' . $user_id . ' - Data: ' . json_encode($contact_data));
+        
         if (empty($contact_data['contact_name'])) {
-            $batch_failed[] = array('id' => $user_id, 'reason' => 'No contact name');
+            $batch_failed[] = array('id' => $user_id, 'reason' => 'No contact name (email: ' . $customer->get_email() . ')');
             continue;
         }
         
@@ -2493,6 +2496,9 @@ function zoho_sync_customers_to_contacts($offset, $total, $synced, $created, $up
             $action = 'created';
         }
         
+        // Log the response
+        error_log('Zoho Contact Sync - Response: ' . json_encode($response));
+        
         $zoho_contact_id = '';
         if (isset($response['contact']['contact_id'])) {
             $zoho_contact_id = $response['contact']['contact_id'];
@@ -2501,9 +2507,24 @@ function zoho_sync_customers_to_contacts($offset, $total, $synced, $created, $up
         
         zoho_add_detailed_log('contact', 'customer', $user_id, 'contact', $zoho_contact_id, $request_data, json_encode($response));
         
-        if (is_wp_error($response) || (isset($response['code']) && $response['code'] != 0)) {
-            $error_msg = is_wp_error($response) ? $response->get_error_message() : ($response['message'] ?? 'Unknown error');
+        // Check for errors - handle both WP_Error and API error responses
+        $has_error = false;
+        $error_msg = '';
+        
+        if (is_wp_error($response)) {
+            $has_error = true;
+            $error_msg = $response->get_error_message();
+        } elseif (isset($response['error'])) {
+            $has_error = true;
+            $error_msg = $response['error'];
+        } elseif (isset($response['code']) && $response['code'] != 0) {
+            $has_error = true;
+            $error_msg = 'API Code ' . $response['code'] . ': ' . ($response['message'] ?? 'Unknown error');
+        }
+        
+        if ($has_error) {
             $batch_failed[] = array('id' => $user_id, 'reason' => $error_msg);
+            error_log('Zoho Contact Sync FAILED - User ID: ' . $user_id . ' - Error: ' . $error_msg);
         } else {
             if ($action == 'created') $batch_created++;
             else $batch_updated++;
@@ -2526,6 +2547,12 @@ function zoho_sync_customers_to_contacts($offset, $total, $synced, $created, $up
         delete_transient('zoho_contact_sync_stats');
     }
     
+    // Get failure reasons for display
+    $failure_reasons = array();
+    foreach ($stats['failed'] as $fail) {
+        $failure_reasons[] = 'ID ' . $fail['id'] . ': ' . $fail['reason'];
+    }
+    
     wp_send_json_success(array(
         'offset' => $new_offset,
         'total' => $total,
@@ -2533,6 +2560,7 @@ function zoho_sync_customers_to_contacts($offset, $total, $synced, $created, $up
         'created' => $new_created,
         'updated' => $new_updated,
         'failed' => count($stats['failed']),
+        'failed_reasons' => $failure_reasons,
         'has_more' => $has_more
     ));
 }
@@ -3149,16 +3177,30 @@ function zoho_contact_sync_page() {
                             $('#contact-progress-bar').css('width', '100%');
                             $('#contact-progress-percentage').text('100%');
                             $('#contact-progress-text').text('Sync completed!');
-                            $('#zoho-contact-sync-result').html('<strong>Sync Completed!</strong> Total: ' + data.total + ' | Synced: ' + data.synced + ' | Created: ' + data.created + ' | Updated: ' + data.updated + ' | Failed: ' + data.failed).show();
+                            
+                            var resultHtml = '<strong>Sync Completed!</strong> Total: ' + data.total + ' | Synced: ' + data.synced + ' | Created: ' + data.created + ' | Updated: ' + data.updated + ' | Failed: ' + data.failed;
+                            
+                            // Show failure reasons if any
+                            if (data.failed > 0 && data.failed_reasons && data.failed_reasons.length > 0) {
+                                resultHtml += '<br><br><strong>Failure Details:</strong><ul style="margin-top:5px;">';
+                                for (var i = 0; i < data.failed_reasons.length; i++) {
+                                    resultHtml += '<li>' + data.failed_reasons[i] + '</li>';
+                                }
+                                resultHtml += '</ul>';
+                            }
+                            
+                            $('#zoho-contact-sync-result').html(resultHtml).show();
                             $('#zoho-start-contact-sync').prop('disabled', false).text('Sync Contacts Now');
                         }
                     } else {
                         $('#contact-progress-text').text('Error: ' + (response.data || 'Unknown error'));
+                        $('#zoho-contact-sync-result').html('<strong style="color:red;">Error:</strong> ' + (response.data || 'Unknown error')).css({'background': '#f8d7da', 'border-color': '#f5c6cb'}).show();
                         $('#zoho-start-contact-sync').prop('disabled', false).text('Sync Contacts Now');
                     }
                 },
                 error: function(xhr, status, error) {
                     $('#contact-progress-text').text('Error: ' + error);
+                    $('#zoho-contact-sync-result').html('<strong style="color:red;">Error:</strong> ' + error).css({'background': '#f8d7da', 'border-color': '#f5c6cb'}).show();
                     $('#zoho-start-contact-sync').prop('disabled', false).text('Sync Contacts Now');
                 }
             });
