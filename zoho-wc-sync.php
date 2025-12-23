@@ -2505,8 +2505,19 @@ function zoho_sync_customers_to_contacts($offset, $total, $synced, $created, $up
             continue;
         }
         
-        // Check if contact exists
+        // Check if contact exists - first by saved ID, then by email search in Zoho
         $existing_contact_id = get_user_meta($user_id, '_zoho_contact_id', true);
+        
+        // If no saved ID, search Zoho by email
+        if (empty($existing_contact_id) && !empty($contact_data['email'])) {
+            $search_response = zoho_api_get('contacts?email=' . urlencode($contact_data['email']));
+            if (!is_wp_error($search_response) && isset($search_response['contacts']) && !empty($search_response['contacts'])) {
+                $existing_contact_id = $search_response['contacts'][0]['contact_id'];
+                // Save it for future
+                update_user_meta($user_id, '_zoho_contact_id', $existing_contact_id);
+                error_log('Zoho Contact Sync - Found existing contact by email: ' . $existing_contact_id);
+            }
+        }
         
         $request_data = json_encode($contact_data);
         
@@ -2700,19 +2711,48 @@ function zoho_sync_contacts_to_customers($offset, $total, $synced, $created, $up
         $shipping_zip = $shipping_address['zip'] ?? ($shipping_address['zipcode'] ?? $billing_zip);
         $shipping_country = $shipping_address['country'] ?? $billing_country;
         
-        // Check if user exists
-        $existing_user = get_user_by('email', $email);
+        // Check if user exists - first by Zoho contact ID, then by email
+        $existing_user = null;
+        $user_id = null;
+        
+        // 1. First check by Zoho contact ID (already synced users)
+        global $wpdb;
+        $existing_user_id = $wpdb->get_var($wpdb->prepare(
+            "SELECT user_id FROM {$wpdb->usermeta} WHERE meta_key = '_zoho_contact_id' AND meta_value = %s LIMIT 1",
+            $zoho_contact_id
+        ));
+        
+        if ($existing_user_id) {
+            $existing_user = get_user_by('ID', $existing_user_id);
+        }
+        
+        // 2. If not found by Zoho ID, try by email
+        if (!$existing_user && !empty($email)) {
+            $existing_user = get_user_by('email', $email);
+        }
+        
+        // 3. If not found by email, try by contact name (username might match)
+        if (!$existing_user && !empty($contact_name)) {
+            $existing_user = get_user_by('login', sanitize_user($contact_name));
+        }
         
         if ($existing_user) {
             $user_id = $existing_user->ID;
             $action = 'Updated';
             $batch_updated++;
         } else {
-            // Create new user
-            $username = sanitize_user($email);
+            // Create new user - need a valid email for WooCommerce
+            $create_email = $email;
+            if (empty($create_email)) {
+                // Generate unique email from contact name/ID
+                $slug = sanitize_title($contact_name ?: 'contact-' . $zoho_contact_id);
+                $create_email = $slug . '-' . substr(md5($zoho_contact_id), 0, 6) . '@zoho-import.local';
+            }
+            
+            $username = sanitize_user($create_email);
             $password = wp_generate_password();
             
-            $user_id = wc_create_new_customer($email, $username, $password);
+            $user_id = wc_create_new_customer($create_email, $username, $password);
             
             if (is_wp_error($user_id)) {
                 $batch_failed[] = array('id' => $zoho_contact_id, 'reason' => $user_id->get_error_message());
