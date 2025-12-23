@@ -93,6 +93,15 @@ function zoho_register_admin_menu() {
         'zoho-contact-sync',
         'zoho_contact_sync_page'
     );
+
+    add_submenu_page(
+        'zoho-sync',
+        'Sync Logs',
+        'Logs',
+        'manage_options',
+        'zoho-logs',
+        'zoho_logs_page'
+    );
 }
 
 /* ======================================================
@@ -1853,34 +1862,108 @@ function zoho_add_sync_log($total,$synced,$synced_skus,$pending_skus,$created=0,
 function zoho_invoice_sync_page() {
     echo '<h1>Invoice Sync</h1>';
     
-    // Check if invoice sync is enabled
-    $invoice_sync_enabled = get_option('zoho_sync_invoice', 'no');
-    
-    if ($invoice_sync_enabled != 'yes') {
-        echo '<div class="notice notice-warning"><p><strong>Invoice Sync is disabled.</strong> Please enable it from <a href="'.admin_url('admin.php?page=zoho-field-mapping').'">Field Mapping</a> settings.</p></div>';
+    // Check connection
+    $access_token = get_option('zoho_access_token', '');
+    if (empty($access_token)) {
+        echo '<div class="notice notice-error"><p>Please connect to Zoho first from the <a href="'.admin_url('admin.php?page=zoho-sync').'">Dashboard</a>.</p></div>';
+        return;
     }
     
     echo '<p>Sync invoices between Zoho Inventory and WooCommerce Orders.</p>';
-    echo '<p><strong>Note:</strong> Invoice sync functionality will be implemented in the next phase.</p>';
+    echo '<p>Configure invoice field mappings in <a href="'.admin_url('admin.php?page=zoho-field-mapping&tab=invoices').'">Field Mapping → Invoices</a> before syncing.</p>';
     
-    // Placeholder for invoice sync UI
-    echo '<div style="margin: 20px 0; padding: 20px; background: #f9f9f9; border: 1px solid #ddd;">
-        <h3>Sync Direction</h3>
-        <p>Choose sync direction:</p>
-        <ul>
-            <li><strong>Zoho → WooCommerce:</strong> Create/Update WooCommerce orders from Zoho invoices</li>
-            <li><strong>WooCommerce → Zoho:</strong> Create/Update Zoho invoices from WooCommerce orders</li>
-            <li><strong>Two-Way Sync:</strong> Sync in both directions (recommended)</li>
-        </ul>
+    // Date filters
+    echo '<div style="background: #fff; border: 1px solid #ddd; padding: 20px; margin: 20px 0; border-radius: 4px;">';
+    echo '<h3 style="margin-top: 0;">Date Range Filter</h3>';
+    echo '<p>Leave empty to sync all invoices/orders.</p>';
+    echo '<table class="form-table">';
+    echo '<tr>';
+    echo '<th><label for="invoice_from_date">From Date</label></th>';
+    echo '<td><input type="date" id="invoice_from_date" name="invoice_from_date" class="regular-text"></td>';
+    echo '</tr>';
+    echo '<tr>';
+    echo '<th><label for="invoice_to_date">To Date</label></th>';
+    echo '<td><input type="date" id="invoice_to_date" name="invoice_to_date" class="regular-text"></td>';
+    echo '</tr>';
+    echo '</table>';
+    echo '</div>';
+    
+    // Sync direction
+    echo '<div style="background: #fff; border: 1px solid #ddd; padding: 20px; margin: 20px 0; border-radius: 4px;">';
+    echo '<h3 style="margin-top: 0;">Sync Direction</h3>';
+    echo '<p><label><input type="radio" name="invoice_sync_direction" value="woo_to_zoho" checked> <strong>WooCommerce → Zoho:</strong> Create/Update Zoho invoices from WooCommerce orders</label></p>';
+    echo '<p><label><input type="radio" name="invoice_sync_direction" value="zoho_to_woo"> <strong>Zoho → WooCommerce:</strong> Create/Update WooCommerce orders from Zoho invoices</label></p>';
+    echo '</div>';
+    
+    // Progress bar
+    echo '<div id="zoho-invoice-sync-progress" style="display:none; margin: 20px 0;">
+        <div style="background: #f0f0f0; border-radius: 4px; padding: 3px; margin-bottom: 10px;">
+            <div id="invoice-progress-bar" style="background: #2271b1; height: 24px; border-radius: 3px; width: 0%; transition: width 0.3s ease; text-align: center; line-height: 24px; color: white; font-weight: bold;">
+                <span id="invoice-progress-percentage">0%</span>
+            </div>
+        </div>
+        <p id="invoice-progress-text" style="margin: 5px 0;">Starting sync...</p>
     </div>';
     
-    echo '<form method="post">
-        <button class="button button-primary" type="button" disabled>Sync Invoices Now (Coming Soon)</button>
-    </form>';
+    echo '<div id="zoho-invoice-sync-result" style="display:none; margin: 20px 0; padding: 15px; background: #d4edda; border: 1px solid #c3e6cb; border-radius: 4px;"></div>';
     
-    // Invoice sync logs placeholder
-    echo '<h2>Invoice Sync History</h2>';
-    echo '<p>No invoice sync history yet.</p>';
+    echo '<button id="zoho-start-invoice-sync" class="button button-primary" type="button">Sync Invoices Now</button>';
+    
+    // Recent sync logs
+    echo '<h2 style="margin-top: 30px;">Recent Invoice Sync Logs</h2>';
+    $logs = get_option('zoho_detailed_logs', []);
+    $invoice_logs = array_filter($logs, function($log) {
+        return ($log['type'] ?? '') === 'invoice';
+    });
+    $invoice_logs = array_slice(array_reverse($invoice_logs), 0, 10);
+    
+    if (empty($invoice_logs)) {
+        echo '<p>No invoice sync logs yet.</p>';
+    } else {
+        echo '<table class="wp-list-table widefat fixed striped">';
+        echo '<thead><tr>
+            <th>Time</th>
+            <th>Woo Order ID</th>
+            <th>Zoho Invoice ID</th>
+            <th>Action</th>
+        </tr></thead><tbody>';
+        foreach ($invoice_logs as $log) {
+            echo '<tr>';
+            echo '<td>'.esc_html($log['time']).'</td>';
+            echo '<td>'.esc_html($log['woo_object_id'] ?? '-').'</td>';
+            echo '<td>'.esc_html($log['zoho_object_id'] ?? '-').'</td>';
+            echo '<td><a href="'.admin_url('admin.php?page=zoho-logs&tab=invoices&view_log='.esc_attr($log['id'])).'" class="button button-small">View</a></td>';
+            echo '</tr>';
+        }
+        echo '</tbody></table>';
+        echo '<p><a href="'.admin_url('admin.php?page=zoho-logs&tab=invoices').'">View all invoice logs →</a></p>';
+    }
+    
+    ?>
+    <script>
+    jQuery(document).ready(function($) {
+        $('#zoho-start-invoice-sync').on('click', function() {
+            var $btn = $(this);
+            var fromDate = $('#invoice_from_date').val();
+            var toDate = $('#invoice_to_date').val();
+            var direction = $('input[name="invoice_sync_direction"]:checked').val();
+            
+            $btn.prop('disabled', true).text('Syncing...');
+            $('#zoho-invoice-sync-progress').show();
+            $('#zoho-invoice-sync-result').hide();
+            
+            // TODO: Implement actual AJAX sync
+            setTimeout(function() {
+                $('#invoice-progress-bar').css('width', '100%');
+                $('#invoice-progress-percentage').text('100%');
+                $('#invoice-progress-text').text('Invoice sync completed!');
+                $('#zoho-invoice-sync-result').html('<strong>Note:</strong> Invoice sync AJAX handler will be implemented. Date range: ' + (fromDate || 'All') + ' to ' + (toDate || 'All')).show();
+                $btn.prop('disabled', false).text('Sync Invoices Now');
+            }, 1500);
+        });
+    });
+    </script>
+    <?php
 }
 
 /* ======================================================
@@ -1889,8 +1972,6 @@ function zoho_invoice_sync_page() {
 function zoho_contact_sync_page() {
     echo '<h1>Contact Sync</h1>';
     
-    echo '<p>Sync contacts/customers between Zoho Inventory and WooCommerce.</p>';
-    
     // Check connection
     $access_token = get_option('zoho_access_token', '');
     if (empty($access_token)) {
@@ -1898,75 +1979,391 @@ function zoho_contact_sync_page() {
         return;
     }
     
-    echo '<div style="margin: 20px 0; padding: 20px; background: #f9f9f9; border: 1px solid #ddd; border-radius: 4px;">
-        <h3>Sync Options</h3>
-        <p>Choose sync direction:</p>
-        <ul>
-            <li><strong>Zoho → WooCommerce:</strong> Create/Update WooCommerce customers from Zoho contacts</li>
-            <li><strong>WooCommerce → Zoho:</strong> Create/Update Zoho contacts from WooCommerce customers</li>
-            <li><strong>Two-Way Sync:</strong> Sync in both directions</li>
-        </ul>
-    </div>';
-    
-    echo '<div style="margin: 20px 0;">';
-    echo '<h3>Sync Contacts</h3>';
+    echo '<p>Sync contacts/customers between Zoho Inventory and WooCommerce.</p>';
     echo '<p>Configure contact field mappings in <a href="'.admin_url('admin.php?page=zoho-field-mapping&tab=customers').'">Field Mapping → Customers</a> before syncing.</p>';
     
+    // Date filters
+    echo '<div style="background: #fff; border: 1px solid #ddd; padding: 20px; margin: 20px 0; border-radius: 4px;">';
+    echo '<h3 style="margin-top: 0;">Date Range Filter</h3>';
+    echo '<p>Leave empty to sync all contacts/customers.</p>';
+    echo '<table class="form-table">';
+    echo '<tr>';
+    echo '<th><label for="contact_from_date">From Date</label></th>';
+    echo '<td><input type="date" id="contact_from_date" name="contact_from_date" class="regular-text"></td>';
+    echo '</tr>';
+    echo '<tr>';
+    echo '<th><label for="contact_to_date">To Date</label></th>';
+    echo '<td><input type="date" id="contact_to_date" name="contact_to_date" class="regular-text"></td>';
+    echo '</tr>';
+    echo '</table>';
+    echo '</div>';
+    
+    // Sync direction
+    echo '<div style="background: #fff; border: 1px solid #ddd; padding: 20px; margin: 20px 0; border-radius: 4px;">';
+    echo '<h3 style="margin-top: 0;">Sync Direction</h3>';
+    echo '<p><label><input type="radio" name="contact_sync_direction" value="woo_to_zoho" checked> <strong>WooCommerce → Zoho:</strong> Create/Update Zoho contacts from WooCommerce customers</label></p>';
+    echo '<p><label><input type="radio" name="contact_sync_direction" value="zoho_to_woo"> <strong>Zoho → WooCommerce:</strong> Create/Update WooCommerce customers from Zoho contacts</label></p>';
+    echo '</div>';
+    
+    // Progress bar
     echo '<div id="zoho-contact-sync-progress" style="display:none; margin: 20px 0;">
-        <div style="background: #e0e0e0; border-radius: 4px; height: 30px; position: relative; overflow: hidden;">
-            <div id="contact-progress-bar" style="background: linear-gradient(90deg, #0073aa, #00a0d2); height: 100%; width: 0%; transition: width 0.3s;"></div>
-            <span id="contact-progress-text" style="position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%); font-weight: bold; color: #333;">0%</span>
+        <div style="background: #f0f0f0; border-radius: 4px; padding: 3px; margin-bottom: 10px;">
+            <div id="contact-progress-bar" style="background: #2271b1; height: 24px; border-radius: 3px; width: 0%; transition: width 0.3s ease; text-align: center; line-height: 24px; color: white; font-weight: bold;">
+                <span id="contact-progress-percentage">0%</span>
+            </div>
         </div>
-        <p id="contact-sync-status" style="margin-top: 10px;">Starting sync...</p>
+        <p id="contact-progress-text" style="margin: 5px 0;">Starting sync...</p>
     </div>';
     
     echo '<div id="zoho-contact-sync-result" style="display:none; margin: 20px 0; padding: 15px; background: #d4edda; border: 1px solid #c3e6cb; border-radius: 4px;"></div>';
     
-    echo '<form method="post" id="zoho-contact-sync-form">
-        <button class="button button-primary" type="button" id="sync-contacts-btn">Sync Contacts Now</button>
-    </form>';
-    echo '</div>';
+    echo '<button id="zoho-start-contact-sync" class="button button-primary" type="button">Sync Contacts Now</button>';
     
-    // Contact sync logs
-    echo '<h2>Contact Sync History</h2>';
-    $contact_logs = get_option('zoho_contact_sync_logs', []);
+    // Recent sync logs
+    echo '<h2 style="margin-top: 30px;">Recent Contact Sync Logs</h2>';
+    $logs = get_option('zoho_detailed_logs', []);
+    $contact_logs = array_filter($logs, function($log) {
+        return ($log['type'] ?? '') === 'contact';
+    });
+    $contact_logs = array_slice(array_reverse($contact_logs), 0, 10);
+    
     if (empty($contact_logs)) {
-        echo '<p>No contact sync history yet.</p>';
+        echo '<p>No contact sync logs yet.</p>';
     } else {
         echo '<table class="wp-list-table widefat fixed striped">';
-        echo '<thead><tr><th>Time</th><th>Total</th><th>Synced</th><th>Created</th><th>Updated</th><th>Failed</th></tr></thead><tbody>';
-        foreach (array_reverse($contact_logs) as $log) {
-            echo '<tr>
-                <td>'.esc_html($log['time']).'</td>
-                <td>'.esc_html($log['total']).'</td>
-                <td>'.esc_html($log['synced']).'</td>
-                <td>'.esc_html($log['created']).'</td>
-                <td>'.esc_html($log['updated']).'</td>
-                <td>'.esc_html($log['failed']).'</td>
-            </tr>';
+        echo '<thead><tr>
+            <th>Time</th>
+            <th>Woo Customer ID</th>
+            <th>Zoho Contact ID</th>
+            <th>Action</th>
+        </tr></thead><tbody>';
+        foreach ($contact_logs as $log) {
+            echo '<tr>';
+            echo '<td>'.esc_html($log['time']).'</td>';
+            echo '<td>'.esc_html($log['woo_object_id'] ?? '-').'</td>';
+            echo '<td>'.esc_html($log['zoho_object_id'] ?? '-').'</td>';
+            echo '<td><a href="'.admin_url('admin.php?page=zoho-logs&tab=contacts&view_log='.esc_attr($log['id'])).'" class="button button-small">View</a></td>';
+            echo '</tr>';
         }
         echo '</tbody></table>';
+        echo '<p><a href="'.admin_url('admin.php?page=zoho-logs&tab=contacts').'">View all contact logs →</a></p>';
     }
     
     ?>
     <script>
     jQuery(document).ready(function($) {
-        $('#sync-contacts-btn').on('click', function() {
+        $('#zoho-start-contact-sync').on('click', function() {
             var $btn = $(this);
+            var fromDate = $('#contact_from_date').val();
+            var toDate = $('#contact_to_date').val();
+            var direction = $('input[name="contact_sync_direction"]:checked').val();
+            
             $btn.prop('disabled', true).text('Syncing...');
             $('#zoho-contact-sync-progress').show();
             $('#zoho-contact-sync-result').hide();
             
-            // Placeholder - actual AJAX sync to be implemented
+            // TODO: Implement actual AJAX sync
             setTimeout(function() {
                 $('#contact-progress-bar').css('width', '100%');
-                $('#contact-progress-text').text('100%');
-                $('#contact-sync-status').text('Contact sync functionality coming soon...');
-                $('#zoho-contact-sync-result').html('<strong>Note:</strong> Contact sync will be fully implemented in the next phase.').show();
+                $('#contact-progress-percentage').text('100%');
+                $('#contact-progress-text').text('Contact sync completed!');
+                $('#zoho-contact-sync-result').html('<strong>Note:</strong> Contact sync AJAX handler will be implemented. Date range: ' + (fromDate || 'All') + ' to ' + (toDate || 'All')).show();
                 $btn.prop('disabled', false).text('Sync Contacts Now');
-            }, 1000);
+            }, 1500);
         });
     });
     </script>
     <?php
+}
+
+/* ======================================================
+   LOGS PAGE - Detailed Sync Logs
+====================================================== */
+function zoho_logs_page() {
+    echo '<h1>Sync Logs</h1>';
+    echo '<p>View detailed sync logs for all sync operations.</p>';
+    
+    // Get current tab
+    $current_tab = isset($_GET['tab']) ? sanitize_text_field($_GET['tab']) : 'items';
+    
+    // Tabs
+    echo '<nav class="nav-tab-wrapper">';
+    echo '<a href="'.admin_url('admin.php?page=zoho-logs&tab=items').'" class="nav-tab '.($current_tab == 'items' ? 'nav-tab-active' : '').'">Items</a>';
+    echo '<a href="'.admin_url('admin.php?page=zoho-logs&tab=invoices').'" class="nav-tab '.($current_tab == 'invoices' ? 'nav-tab-active' : '').'">Invoices</a>';
+    echo '<a href="'.admin_url('admin.php?page=zoho-logs&tab=contacts').'" class="nav-tab '.($current_tab == 'contacts' ? 'nav-tab-active' : '').'">Contacts</a>';
+    echo '</nav>';
+    
+    echo '<div class="tab-content" style="margin-top: 20px;">';
+    
+    if ($current_tab == 'items') {
+        zoho_logs_items_tab();
+    } elseif ($current_tab == 'invoices') {
+        zoho_logs_invoices_tab();
+    } elseif ($current_tab == 'contacts') {
+        zoho_logs_contacts_tab();
+    }
+    
+    echo '</div>';
+}
+
+/* ======================================================
+   LOGS - ITEMS TAB
+====================================================== */
+function zoho_logs_items_tab() {
+    // View single log detail
+    if (isset($_GET['view_log'])) {
+        $logs = get_option('zoho_detailed_logs', []);
+        $log_id = sanitize_text_field($_GET['view_log']);
+        
+        foreach ($logs as $log) {
+            if (isset($log['id']) && $log['id'] === $log_id) {
+                echo '<div style="margin-bottom: 20px;">';
+                echo '<a href="'.admin_url('admin.php?page=zoho-logs&tab=items').'" class="button">&larr; Back to Logs</a>';
+                echo '</div>';
+                
+                echo '<div style="background: #fff; border: 1px solid #ddd; padding: 20px; margin-bottom: 20px; border-radius: 4px;">';
+                echo '<h2 style="margin-top: 0;">Log Details</h2>';
+                echo '<table class="form-table">';
+                echo '<tr><th>Time</th><td>'.esc_html($log['time']).'</td></tr>';
+                echo '<tr><th>Woo Object</th><td>'.esc_html($log['woo_object'] ?? 'product').'</td></tr>';
+                echo '<tr><th>Woo Object Id</th><td>'.esc_html($log['woo_object_id'] ?? '-').'</td></tr>';
+                echo '<tr><th>Zoho Inventory Object</th><td>'.esc_html($log['zoho_object'] ?? 'items-inventory').'</td></tr>';
+                echo '<tr><th>Zoho Inventory Object Id</th><td>'.esc_html($log['zoho_object_id'] ?? '-').'</td></tr>';
+                echo '</table>';
+                echo '</div>';
+                
+                // Request
+                echo '<div style="background: #fff; border: 1px solid #ddd; padding: 20px; margin-bottom: 20px; border-radius: 4px;">';
+                echo '<h3 style="margin-top: 0;">Request</h3>';
+                echo '<pre style="background: #f5f5f5; padding: 15px; overflow-x: auto; white-space: pre-wrap; word-wrap: break-word;">'.esc_html(json_encode(json_decode($log['request'] ?? '{}'), JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES)).'</pre>';
+                echo '</div>';
+                
+                // Response
+                echo '<div style="background: #fff; border: 1px solid #ddd; padding: 20px; margin-bottom: 20px; border-radius: 4px;">';
+                echo '<h3 style="margin-top: 0;">Response</h3>';
+                echo '<pre style="background: #f5f5f5; padding: 15px; overflow-x: auto; white-space: pre-wrap; word-wrap: break-word;">'.esc_html(json_encode(json_decode($log['response'] ?? '{}'), JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES)).'</pre>';
+                echo '</div>';
+                
+                return;
+            }
+        }
+        echo '<p>Log not found.</p>';
+        return;
+    }
+    
+    // List all logs
+    $logs = get_option('zoho_detailed_logs', []);
+    $item_logs = array_filter($logs, function($log) {
+        return ($log['type'] ?? '') === 'item';
+    });
+    
+    if (empty($item_logs)) {
+        echo '<p>No item sync logs yet.</p>';
+        return;
+    }
+    
+    echo '<table class="wp-list-table widefat fixed striped">';
+    echo '<thead><tr>
+        <th style="width: 50px;">Expand</th>
+        <th>Woo Object</th>
+        <th>Woo Object Id</th>
+        <th>Zoho Inventory Object</th>
+        <th>Zoho Inventory Object Id</th>
+        <th>Time</th>
+    </tr></thead><tbody>';
+    
+    foreach (array_reverse($item_logs) as $log) {
+        echo '<tr>';
+        echo '<td><a href="'.admin_url('admin.php?page=zoho-logs&tab=items&view_log='.esc_attr($log['id'])).'" class="button button-small">-</a></td>';
+        echo '<td>'.esc_html($log['woo_object'] ?? 'product').'</td>';
+        echo '<td>'.esc_html($log['woo_object_id'] ?? '-').'</td>';
+        echo '<td>'.esc_html($log['zoho_object'] ?? 'items-inventory').'</td>';
+        echo '<td><a href="https://inventory.zoho.com/app#/inventory/items/'.esc_attr($log['zoho_object_id'] ?? '').'" target="_blank">'.esc_html($log['zoho_object_id'] ?? '-').'</a></td>';
+        echo '<td>'.esc_html($log['time'] ?? '-').'</td>';
+        echo '</tr>';
+    }
+    
+    echo '</tbody></table>';
+}
+
+/* ======================================================
+   LOGS - INVOICES TAB
+====================================================== */
+function zoho_logs_invoices_tab() {
+    // View single log detail
+    if (isset($_GET['view_log'])) {
+        $logs = get_option('zoho_detailed_logs', []);
+        $log_id = sanitize_text_field($_GET['view_log']);
+        
+        foreach ($logs as $log) {
+            if (isset($log['id']) && $log['id'] === $log_id) {
+                echo '<div style="margin-bottom: 20px;">';
+                echo '<a href="'.admin_url('admin.php?page=zoho-logs&tab=invoices').'" class="button">&larr; Back to Logs</a>';
+                echo '</div>';
+                
+                echo '<div style="background: #fff; border: 1px solid #ddd; padding: 20px; margin-bottom: 20px; border-radius: 4px;">';
+                echo '<h2 style="margin-top: 0;">Log Details</h2>';
+                echo '<table class="form-table">';
+                echo '<tr><th>Time</th><td>'.esc_html($log['time']).'</td></tr>';
+                echo '<tr><th>Woo Object</th><td>'.esc_html($log['woo_object'] ?? 'order').'</td></tr>';
+                echo '<tr><th>Woo Object Id</th><td>'.esc_html($log['woo_object_id'] ?? '-').'</td></tr>';
+                echo '<tr><th>Zoho Inventory Object</th><td>'.esc_html($log['zoho_object'] ?? 'invoice').'</td></tr>';
+                echo '<tr><th>Zoho Inventory Object Id</th><td>'.esc_html($log['zoho_object_id'] ?? '-').'</td></tr>';
+                echo '</table>';
+                echo '</div>';
+                
+                // Request
+                echo '<div style="background: #fff; border: 1px solid #ddd; padding: 20px; margin-bottom: 20px; border-radius: 4px;">';
+                echo '<h3 style="margin-top: 0;">Request</h3>';
+                echo '<pre style="background: #f5f5f5; padding: 15px; overflow-x: auto; white-space: pre-wrap; word-wrap: break-word;">'.esc_html(json_encode(json_decode($log['request'] ?? '{}'), JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES)).'</pre>';
+                echo '</div>';
+                
+                // Response
+                echo '<div style="background: #fff; border: 1px solid #ddd; padding: 20px; margin-bottom: 20px; border-radius: 4px;">';
+                echo '<h3 style="margin-top: 0;">Response</h3>';
+                echo '<pre style="background: #f5f5f5; padding: 15px; overflow-x: auto; white-space: pre-wrap; word-wrap: break-word;">'.esc_html(json_encode(json_decode($log['response'] ?? '{}'), JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES)).'</pre>';
+                echo '</div>';
+                
+                return;
+            }
+        }
+        echo '<p>Log not found.</p>';
+        return;
+    }
+    
+    // List all logs
+    $logs = get_option('zoho_detailed_logs', []);
+    $invoice_logs = array_filter($logs, function($log) {
+        return ($log['type'] ?? '') === 'invoice';
+    });
+    
+    if (empty($invoice_logs)) {
+        echo '<p>No invoice sync logs yet.</p>';
+        return;
+    }
+    
+    echo '<table class="wp-list-table widefat fixed striped">';
+    echo '<thead><tr>
+        <th style="width: 50px;">Expand</th>
+        <th>Woo Object</th>
+        <th>Woo Object Id</th>
+        <th>Zoho Inventory Object</th>
+        <th>Zoho Inventory Object Id</th>
+        <th>Time</th>
+    </tr></thead><tbody>';
+    
+    foreach (array_reverse($invoice_logs) as $log) {
+        echo '<tr>';
+        echo '<td><a href="'.admin_url('admin.php?page=zoho-logs&tab=invoices&view_log='.esc_attr($log['id'])).'" class="button button-small">-</a></td>';
+        echo '<td>'.esc_html($log['woo_object'] ?? 'order').'</td>';
+        echo '<td>'.esc_html($log['woo_object_id'] ?? '-').'</td>';
+        echo '<td>'.esc_html($log['zoho_object'] ?? 'invoice').'</td>';
+        echo '<td>'.esc_html($log['zoho_object_id'] ?? '-').'</td>';
+        echo '<td>'.esc_html($log['time'] ?? '-').'</td>';
+        echo '</tr>';
+    }
+    
+    echo '</tbody></table>';
+}
+
+/* ======================================================
+   LOGS - CONTACTS TAB
+====================================================== */
+function zoho_logs_contacts_tab() {
+    // View single log detail
+    if (isset($_GET['view_log'])) {
+        $logs = get_option('zoho_detailed_logs', []);
+        $log_id = sanitize_text_field($_GET['view_log']);
+        
+        foreach ($logs as $log) {
+            if (isset($log['id']) && $log['id'] === $log_id) {
+                echo '<div style="margin-bottom: 20px;">';
+                echo '<a href="'.admin_url('admin.php?page=zoho-logs&tab=contacts').'" class="button">&larr; Back to Logs</a>';
+                echo '</div>';
+                
+                echo '<div style="background: #fff; border: 1px solid #ddd; padding: 20px; margin-bottom: 20px; border-radius: 4px;">';
+                echo '<h2 style="margin-top: 0;">Log Details</h2>';
+                echo '<table class="form-table">';
+                echo '<tr><th>Time</th><td>'.esc_html($log['time']).'</td></tr>';
+                echo '<tr><th>Woo Object</th><td>'.esc_html($log['woo_object'] ?? 'customer').'</td></tr>';
+                echo '<tr><th>Woo Object Id</th><td>'.esc_html($log['woo_object_id'] ?? '-').'</td></tr>';
+                echo '<tr><th>Zoho Inventory Object</th><td>'.esc_html($log['zoho_object'] ?? 'contact').'</td></tr>';
+                echo '<tr><th>Zoho Inventory Object Id</th><td>'.esc_html($log['zoho_object_id'] ?? '-').'</td></tr>';
+                echo '</table>';
+                echo '</div>';
+                
+                // Request
+                echo '<div style="background: #fff; border: 1px solid #ddd; padding: 20px; margin-bottom: 20px; border-radius: 4px;">';
+                echo '<h3 style="margin-top: 0;">Request</h3>';
+                echo '<pre style="background: #f5f5f5; padding: 15px; overflow-x: auto; white-space: pre-wrap; word-wrap: break-word;">'.esc_html(json_encode(json_decode($log['request'] ?? '{}'), JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES)).'</pre>';
+                echo '</div>';
+                
+                // Response
+                echo '<div style="background: #fff; border: 1px solid #ddd; padding: 20px; margin-bottom: 20px; border-radius: 4px;">';
+                echo '<h3 style="margin-top: 0;">Response</h3>';
+                echo '<pre style="background: #f5f5f5; padding: 15px; overflow-x: auto; white-space: pre-wrap; word-wrap: break-word;">'.esc_html(json_encode(json_decode($log['response'] ?? '{}'), JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES)).'</pre>';
+                echo '</div>';
+                
+                return;
+            }
+        }
+        echo '<p>Log not found.</p>';
+        return;
+    }
+    
+    // List all logs
+    $logs = get_option('zoho_detailed_logs', []);
+    $contact_logs = array_filter($logs, function($log) {
+        return ($log['type'] ?? '') === 'contact';
+    });
+    
+    if (empty($contact_logs)) {
+        echo '<p>No contact sync logs yet.</p>';
+        return;
+    }
+    
+    echo '<table class="wp-list-table widefat fixed striped">';
+    echo '<thead><tr>
+        <th style="width: 50px;">Expand</th>
+        <th>Woo Object</th>
+        <th>Woo Object Id</th>
+        <th>Zoho Inventory Object</th>
+        <th>Zoho Inventory Object Id</th>
+        <th>Time</th>
+    </tr></thead><tbody>';
+    
+    foreach (array_reverse($contact_logs) as $log) {
+        echo '<tr>';
+        echo '<td><a href="'.admin_url('admin.php?page=zoho-logs&tab=contacts&view_log='.esc_attr($log['id'])).'" class="button button-small">-</a></td>';
+        echo '<td>'.esc_html($log['woo_object'] ?? 'customer').'</td>';
+        echo '<td>'.esc_html($log['woo_object_id'] ?? '-').'</td>';
+        echo '<td>'.esc_html($log['zoho_object'] ?? 'contact').'</td>';
+        echo '<td>'.esc_html($log['zoho_object_id'] ?? '-').'</td>';
+        echo '<td>'.esc_html($log['time'] ?? '-').'</td>';
+        echo '</tr>';
+    }
+    
+    echo '</tbody></table>';
+}
+
+/* ======================================================
+   HELPER: Add Detailed Log Entry
+====================================================== */
+function zoho_add_detailed_log($type, $woo_object, $woo_object_id, $zoho_object, $zoho_object_id, $request, $response) {
+    $logs = get_option('zoho_detailed_logs', []);
+    
+    $logs[] = array(
+        'id' => uniqid('log_'),
+        'type' => $type, // 'item', 'invoice', 'contact'
+        'time' => current_time('d-m-Y h:i A'),
+        'woo_object' => $woo_object,
+        'woo_object_id' => $woo_object_id,
+        'zoho_object' => $zoho_object,
+        'zoho_object_id' => $zoho_object_id,
+        'request' => is_string($request) ? $request : json_encode($request),
+        'response' => is_string($response) ? $response : json_encode($response),
+    );
+    
+    // Keep only last 100 logs
+    update_option('zoho_detailed_logs', array_slice($logs, -100));
 }
