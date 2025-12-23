@@ -379,6 +379,10 @@ function zoho_inventory_sync_page() {
                 $product_name = !empty($item['name']) ? $item['name'] : $item['sku'];
                 $product->set_name($product_name);
                 
+                // Set slug explicitly from product name
+                $product_slug = sanitize_title($product_name);
+                $product->set_slug($product_slug);
+                
                 // Set status to publish
                 $product->set_status('publish');
                 
@@ -411,6 +415,11 @@ function zoho_inventory_sync_page() {
 
             $synced++;
             $synced_skus[] = $item['sku'];
+        }
+        
+        // Flush rewrite rules after creating new products to ensure permalinks work
+        if ($created > 0) {
+            flush_rewrite_rules(false);
         }
 
         zoho_add_sync_log($total,$synced,$synced_skus,$pending_skus,$created,$updated);
