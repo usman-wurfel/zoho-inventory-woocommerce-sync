@@ -60,6 +60,15 @@ function zoho_register_admin_menu() {
 
     add_submenu_page(
         'zoho-sync',
+        'Field Mapping',
+        'Field Mapping',
+        'manage_options',
+        'zoho-field-mapping',
+        'zoho_field_mapping_page'
+    );
+
+    add_submenu_page(
+        'zoho-sync',
         'Inventory Sync',
         'Inventory Sync',
         'manage_options',
@@ -73,16 +82,19 @@ function zoho_register_admin_menu() {
 ====================================================== */
 add_action('admin_enqueue_scripts', 'zoho_enqueue_sync_scripts');
 function zoho_enqueue_sync_scripts($hook) {
-    // Only load on our sync page
-    if ($hook != 'toplevel_page_zoho-sync' && $hook != 'zoho-sync_page_zoho-inventory-sync') {
+    // Only load on our sync pages
+    if ($hook != 'toplevel_page_zoho-sync' && $hook != 'zoho-sync_page_zoho-inventory-sync' && $hook != 'zoho-sync_page_zoho-field-mapping') {
         return;
     }
     
-    wp_enqueue_script('zoho-sync-script', plugin_dir_url(__FILE__) . 'js/zoho-sync.js', array('jquery'), '1.0.0', true);
-    wp_localize_script('zoho-sync-script', 'zohoSync', array(
-        'ajax_url' => admin_url('admin-ajax.php'),
-        'nonce' => wp_create_nonce('zoho_sync_nonce')
-    ));
+    // Only load sync script on inventory sync page
+    if ($hook == 'zoho-sync_page_zoho-inventory-sync') {
+        wp_enqueue_script('zoho-sync-script', plugin_dir_url(__FILE__) . 'js/zoho-sync.js', array('jquery'), '1.0.0', true);
+        wp_localize_script('zoho-sync-script', 'zohoSync', array(
+            'ajax_url' => admin_url('admin-ajax.php'),
+            'nonce' => wp_create_nonce('zoho_sync_nonce')
+        ));
+    }
 }
 
 /* ======================================================
@@ -243,6 +255,402 @@ function zoho_auth_url() {
 }
 
 /* ======================================================
+   FIELD MAPPING PAGE
+====================================================== */
+add_action('admin_init', function() {
+    if (!current_user_can('manage_options')) return;
+    
+    // Save field mapping settings
+    if (isset($_POST['save_zoho_field_mapping']) && check_admin_referer('zoho_field_mapping_nonce')) {
+        
+        // Save toggle settings
+        $toggle_settings = array(
+            'sync_name' => isset($_POST['sync_name']) ? 'yes' : 'no',
+            'sync_sku' => isset($_POST['sync_sku']) ? 'yes' : 'no',
+            'sync_price' => isset($_POST['sync_price']) ? 'yes' : 'no',
+            'sync_image' => isset($_POST['sync_image']) ? 'yes' : 'no',
+            'sync_description' => isset($_POST['sync_description']) ? 'yes' : 'no',
+            'sync_cost_price' => isset($_POST['sync_cost_price']) ? 'yes' : 'no',
+            'sync_stock' => isset($_POST['sync_stock']) ? 'yes' : 'no',
+            'sync_reorder_point' => isset($_POST['sync_reorder_point']) ? 'yes' : 'no',
+            'sync_weight' => isset($_POST['sync_weight']) ? 'yes' : 'no',
+            'sync_dimensions' => isset($_POST['sync_dimensions']) ? 'yes' : 'no',
+            'sync_tax' => isset($_POST['sync_tax']) ? 'yes' : 'no',
+            'sync_upc' => isset($_POST['sync_upc']) ? 'yes' : 'no',
+            'sync_ean' => isset($_POST['sync_ean']) ? 'yes' : 'no',
+            'sync_isbn' => isset($_POST['sync_isbn']) ? 'yes' : 'no',
+            'sync_mpn' => isset($_POST['sync_mpn']) ? 'yes' : 'no',
+            'sync_brand' => isset($_POST['sync_brand']) ? 'yes' : 'no',
+            'sync_manufacturer' => isset($_POST['sync_manufacturer']) ? 'yes' : 'no',
+        );
+        
+        foreach ($toggle_settings as $key => $value) {
+            update_option('zoho_' . $key, $value);
+        }
+        
+        // Save field mappings
+        $field_mappings = array(
+            'zoho_name_field' => sanitize_text_field($_POST['zoho_name_field'] ?? 'name'),
+            'zoho_sku_field' => sanitize_text_field($_POST['zoho_sku_field'] ?? 'sku'),
+            'zoho_price_field' => sanitize_text_field($_POST['zoho_price_field'] ?? 'rate'),
+            'zoho_image_field' => sanitize_text_field($_POST['zoho_image_field'] ?? 'image'),
+            'zoho_description_field' => sanitize_text_field($_POST['zoho_description_field'] ?? 'description'),
+            'zoho_cost_price_field' => sanitize_text_field($_POST['zoho_cost_price_field'] ?? 'purchase_rate'),
+            'zoho_stock_field' => sanitize_text_field($_POST['zoho_stock_field'] ?? 'stock_on_hand'),
+            'zoho_reorder_point_field' => sanitize_text_field($_POST['zoho_reorder_point_field'] ?? 'reorder_level'),
+            'zoho_weight_field' => sanitize_text_field($_POST['zoho_weight_field'] ?? 'weight'),
+            'zoho_length_field' => sanitize_text_field($_POST['zoho_length_field'] ?? 'length'),
+            'zoho_width_field' => sanitize_text_field($_POST['zoho_width_field'] ?? 'width'),
+            'zoho_height_field' => sanitize_text_field($_POST['zoho_height_field'] ?? 'height'),
+            'zoho_tax_field' => sanitize_text_field($_POST['zoho_tax_field'] ?? 'tax_id'),
+            'zoho_upc_field' => sanitize_text_field($_POST['zoho_upc_field'] ?? 'upc'),
+            'zoho_ean_field' => sanitize_text_field($_POST['zoho_ean_field'] ?? 'ean'),
+            'zoho_isbn_field' => sanitize_text_field($_POST['zoho_isbn_field'] ?? 'isbn'),
+            'zoho_mpn_field' => sanitize_text_field($_POST['zoho_mpn_field'] ?? 'part_number'),
+            'zoho_brand_field' => sanitize_text_field($_POST['zoho_brand_field'] ?? 'brand'),
+            'zoho_manufacturer_field' => sanitize_text_field($_POST['zoho_manufacturer_field'] ?? 'manufacturer'),
+        );
+        
+        foreach ($field_mappings as $key => $value) {
+            update_option($key, $value);
+        }
+        
+        wp_redirect(admin_url('admin.php?page=zoho-field-mapping&saved=1'));
+        exit;
+    }
+});
+
+function zoho_field_mapping_page() {
+    // Show success message
+    if (isset($_GET['saved'])) {
+        echo '<div class="notice notice-success"><p>Field mapping settings saved successfully!</p></div>';
+    }
+    
+    echo '<h1>Field Mapping & Sync Settings</h1>';
+    echo '<p>Configure which attributes to sync and map Zoho fields to WooCommerce fields.</p>';
+    
+    // Get saved settings with defaults
+    $sync_name = get_option('zoho_sync_name', 'yes');
+    $sync_sku = get_option('zoho_sync_sku', 'yes');
+    $sync_price = get_option('zoho_sync_price', 'yes');
+    $sync_image = get_option('zoho_sync_image', 'no');
+    $sync_description = get_option('zoho_sync_description', 'yes');
+    $sync_cost_price = get_option('zoho_sync_cost_price', 'no');
+    $sync_stock = get_option('zoho_sync_stock', 'yes');
+    $sync_reorder_point = get_option('zoho_sync_reorder_point', 'no');
+    $sync_weight = get_option('zoho_sync_weight', 'no');
+    $sync_dimensions = get_option('zoho_sync_dimensions', 'no');
+    $sync_tax = get_option('zoho_sync_tax', 'no');
+    $sync_upc = get_option('zoho_sync_upc', 'no');
+    $sync_ean = get_option('zoho_sync_ean', 'no');
+    $sync_isbn = get_option('zoho_sync_isbn', 'no');
+    $sync_mpn = get_option('zoho_sync_mpn', 'no');
+    $sync_brand = get_option('zoho_sync_brand', 'no');
+    $sync_manufacturer = get_option('zoho_sync_manufacturer', 'no');
+    
+    // Zoho field options
+    $zoho_fields = array(
+        'name' => 'Name',
+        'sku' => 'SKU',
+        'rate' => 'Selling Price (rate)',
+        'purchase_rate' => 'Purchase Rate (Cost Price)',
+        'description' => 'Description',
+        'image' => 'Image',
+        'stock_on_hand' => 'Stock on Hand',
+        'reorder_level' => 'Reorder Level',
+        'weight' => 'Weight',
+        'length' => 'Length',
+        'width' => 'Width',
+        'height' => 'Height',
+        'tax_id' => 'Tax ID',
+        'is_taxable' => 'Is Taxable',
+        'upc' => 'UPC',
+        'ean' => 'EAN',
+        'isbn' => 'ISBN',
+        'part_number' => 'Part Number (MPN)',
+        'brand' => 'Brand',
+        'manufacturer' => 'Manufacturer',
+        'unit' => 'Unit',
+        'hsn_or_sac' => 'HSN/SAC',
+    );
+    
+    // WooCommerce field options
+    $wc_fields = array(
+        'product_name' => 'Product Name',
+        'sku' => 'SKU',
+        'regular_price' => 'Regular Price',
+        'sale_price' => 'Sale Price',
+        'description' => 'Description',
+        'short_description' => 'Short Description',
+        'image' => 'Product Image',
+        'stock_quantity' => 'Stock Quantity',
+        'low_stock_threshold' => 'Low Stock Threshold',
+        'weight' => 'Weight',
+        'length' => 'Length',
+        'width' => 'Width',
+        'height' => 'Height',
+        'tax_status' => 'Tax Status',
+        'tax_class' => 'Tax Class',
+        'gtin' => 'GTIN',
+        'barcode' => 'Barcode',
+        'attribute_brand' => 'Attribute: Brand',
+        'attribute_manufacturer' => 'Attribute: Manufacturer',
+        'cost_of_goods' => 'Cost of Goods (COG)',
+    );
+    
+    echo '<form method="post">';
+    wp_nonce_field('zoho_field_mapping_nonce');
+    
+    echo '<table class="wp-list-table widefat fixed striped">';
+    echo '<thead><tr>
+        <th style="width: 200px;">Attribute</th>
+        <th style="width: 100px;">Enable Sync</th>
+        <th style="width: 250px;">Zoho Field</th>
+        <th style="width: 250px;">WooCommerce Field</th>
+    </tr></thead><tbody>';
+    
+    // Name mapping
+    echo '<tr>
+        <td><strong>Product Name</strong></td>
+        <td><input type="checkbox" name="sync_name" value="1" '.checked($sync_name, 'yes', false).'></td>
+        <td><select name="zoho_name_field">';
+    foreach ($zoho_fields as $field_key => $field_label) {
+        $selected = selected(get_option('zoho_zoho_name_field', 'name'), $field_key, false);
+        echo '<option value="'.esc_attr($field_key).'"'.$selected.'>'.esc_html($field_label).'</option>';
+    }
+    echo '</select></td>
+        <td>Product Name (fixed)</td>
+    </tr>';
+    
+    // SKU mapping
+    echo '<tr>
+        <td><strong>SKU</strong></td>
+        <td><input type="checkbox" name="sync_sku" value="1" '.checked($sync_sku, 'yes', false).'></td>
+        <td><select name="zoho_sku_field">';
+    foreach ($zoho_fields as $field_key => $field_label) {
+        $selected = selected(get_option('zoho_zoho_sku_field', 'sku'), $field_key, false);
+        echo '<option value="'.esc_attr($field_key).'"'.$selected.'>'.esc_html($field_label).'</option>';
+    }
+    echo '</select></td>
+        <td>SKU (fixed)</td>
+    </tr>';
+    
+    // Price mapping
+    echo '<tr>
+        <td><strong>Selling Price</strong></td>
+        <td><input type="checkbox" name="sync_price" value="1" '.checked($sync_price, 'yes', false).'></td>
+        <td><select name="zoho_price_field">';
+    foreach ($zoho_fields as $field_key => $field_label) {
+        $selected = selected(get_option('zoho_zoho_price_field', 'rate'), $field_key, false);
+        echo '<option value="'.esc_attr($field_key).'"'.$selected.'>'.esc_html($field_label).'</option>';
+    }
+    echo '</select></td>
+        <td>Regular Price (fixed)</td>
+    </tr>';
+    
+    // Image mapping
+    echo '<tr>
+        <td><strong>Product Image</strong></td>
+        <td><input type="checkbox" name="sync_image" value="1" '.checked($sync_image, 'yes', false).'></td>
+        <td><select name="zoho_image_field">';
+    foreach ($zoho_fields as $field_key => $field_label) {
+        $selected = selected(get_option('zoho_zoho_image_field', 'image'), $field_key, false);
+        echo '<option value="'.esc_attr($field_key).'"'.$selected.'>'.esc_html($field_label).'</option>';
+    }
+    echo '</select></td>
+        <td>Product Image (fixed)</td>
+    </tr>';
+    
+    // Description mapping
+    echo '<tr>
+        <td><strong>Description</strong></td>
+        <td><input type="checkbox" name="sync_description" value="1" '.checked($sync_description, 'yes', false).'></td>
+        <td><select name="zoho_description_field">';
+    foreach ($zoho_fields as $field_key => $field_label) {
+        $selected = selected(get_option('zoho_zoho_description_field', 'description'), $field_key, false);
+        echo '<option value="'.esc_attr($field_key).'"'.$selected.'>'.esc_html($field_label).'</option>';
+    }
+    echo '</select></td>
+        <td>Description (fixed)</td>
+    </tr>';
+    
+    // Cost Price mapping
+    echo '<tr>
+        <td><strong>Cost Price</strong></td>
+        <td><input type="checkbox" name="sync_cost_price" value="1" '.checked($sync_cost_price, 'yes', false).'></td>
+        <td><select name="zoho_cost_price_field">';
+    foreach ($zoho_fields as $field_key => $field_label) {
+        $selected = selected(get_option('zoho_zoho_cost_price_field', 'purchase_rate'), $field_key, false);
+        echo '<option value="'.esc_attr($field_key).'"'.$selected.'>'.esc_html($field_label).'</option>';
+    }
+    echo '</select></td>
+        <td>Cost of Goods (COG) (fixed)</td>
+    </tr>';
+    
+    // Stock mapping
+    echo '<tr>
+        <td><strong>Stock Quantity</strong></td>
+        <td><input type="checkbox" name="sync_stock" value="1" '.checked($sync_stock, 'yes', false).'></td>
+        <td><select name="zoho_stock_field">';
+    foreach ($zoho_fields as $field_key => $field_label) {
+        $selected = selected(get_option('zoho_zoho_stock_field', 'stock_on_hand'), $field_key, false);
+        echo '<option value="'.esc_attr($field_key).'"'.$selected.'>'.esc_html($field_label).'</option>';
+    }
+    echo '</select></td>
+        <td>Stock Quantity (fixed)</td>
+    </tr>';
+    
+    // Reorder Point mapping
+    echo '<tr>
+        <td><strong>Reorder Point</strong></td>
+        <td><input type="checkbox" name="sync_reorder_point" value="1" '.checked($sync_reorder_point, 'yes', false).'></td>
+        <td><select name="zoho_reorder_point_field">';
+    foreach ($zoho_fields as $field_key => $field_label) {
+        $selected = selected(get_option('zoho_zoho_reorder_point_field', 'reorder_level'), $field_key, false);
+        echo '<option value="'.esc_attr($field_key).'"'.$selected.'>'.esc_html($field_label).'</option>';
+    }
+    echo '</select></td>
+        <td>Low Stock Threshold (fixed)</td>
+    </tr>';
+    
+    // Weight mapping
+    echo '<tr>
+        <td><strong>Weight</strong></td>
+        <td><input type="checkbox" name="sync_weight" value="1" '.checked($sync_weight, 'yes', false).'></td>
+        <td><select name="zoho_weight_field">';
+    foreach ($zoho_fields as $field_key => $field_label) {
+        $selected = selected(get_option('zoho_zoho_weight_field', 'weight'), $field_key, false);
+        echo '<option value="'.esc_attr($field_key).'"'.$selected.'>'.esc_html($field_label).'</option>';
+    }
+    echo '</select></td>
+        <td>Weight (fixed)</td>
+    </tr>';
+    
+    // Dimensions mapping
+    echo '<tr>
+        <td><strong>Dimensions (LxWxH)</strong></td>
+        <td><input type="checkbox" name="sync_dimensions" value="1" '.checked($sync_dimensions, 'yes', false).'></td>
+        <td>
+            Length: <select name="zoho_length_field" style="width: 100px;">';
+    foreach ($zoho_fields as $field_key => $field_label) {
+        $selected = selected(get_option('zoho_zoho_length_field', 'length'), $field_key, false);
+        echo '<option value="'.esc_attr($field_key).'"'.$selected.'>'.esc_html($field_label).'</option>';
+    }
+    echo '</select><br>
+            Width: <select name="zoho_width_field" style="width: 100px;">';
+    foreach ($zoho_fields as $field_key => $field_label) {
+        $selected = selected(get_option('zoho_zoho_width_field', 'width'), $field_key, false);
+        echo '<option value="'.esc_attr($field_key).'"'.$selected.'>'.esc_html($field_label).'</option>';
+    }
+    echo '</select><br>
+            Height: <select name="zoho_height_field" style="width: 100px;">';
+    foreach ($zoho_fields as $field_key => $field_label) {
+        $selected = selected(get_option('zoho_zoho_height_field', 'height'), $field_key, false);
+        echo '<option value="'.esc_attr($field_key).'"'.$selected.'>'.esc_html($field_label).'</option>';
+    }
+    echo '</select>
+        </td>
+        <td>Dimensions (fixed)</td>
+    </tr>';
+    
+    // Tax mapping
+    echo '<tr>
+        <td><strong>Tax Status</strong></td>
+        <td><input type="checkbox" name="sync_tax" value="1" '.checked($sync_tax, 'yes', false).'></td>
+        <td><select name="zoho_tax_field">';
+    foreach ($zoho_fields as $field_key => $field_label) {
+        $selected = selected(get_option('zoho_zoho_tax_field', 'tax_id'), $field_key, false);
+        echo '<option value="'.esc_attr($field_key).'"'.$selected.'>'.esc_html($field_label).'</option>';
+    }
+    echo '</select></td>
+        <td>Tax Status (fixed)</td>
+    </tr>';
+    
+    // UPC mapping
+    echo '<tr>
+        <td><strong>UPC</strong></td>
+        <td><input type="checkbox" name="sync_upc" value="1" '.checked($sync_upc, 'yes', false).'></td>
+        <td><select name="zoho_upc_field">';
+    foreach ($zoho_fields as $field_key => $field_label) {
+        $selected = selected(get_option('zoho_zoho_upc_field', 'upc'), $field_key, false);
+        echo '<option value="'.esc_attr($field_key).'"'.$selected.'>'.esc_html($field_label).'</option>';
+    }
+    echo '</select></td>
+        <td>GTIN/Barcode (fixed)</td>
+    </tr>';
+    
+    // EAN mapping
+    echo '<tr>
+        <td><strong>EAN</strong></td>
+        <td><input type="checkbox" name="sync_ean" value="1" '.checked($sync_ean, 'yes', false).'></td>
+        <td><select name="zoho_ean_field">';
+    foreach ($zoho_fields as $field_key => $field_label) {
+        $selected = selected(get_option('zoho_zoho_ean_field', 'ean'), $field_key, false);
+        echo '<option value="'.esc_attr($field_key).'"'.$selected.'>'.esc_html($field_label).'</option>';
+    }
+    echo '</select></td>
+        <td>GTIN/Barcode (fixed)</td>
+    </tr>';
+    
+    // ISBN mapping
+    echo '<tr>
+        <td><strong>ISBN</strong></td>
+        <td><input type="checkbox" name="sync_isbn" value="1" '.checked($sync_isbn, 'yes', false).'></td>
+        <td><select name="zoho_isbn_field">';
+    foreach ($zoho_fields as $field_key => $field_label) {
+        $selected = selected(get_option('zoho_zoho_isbn_field', 'isbn'), $field_key, false);
+        echo '<option value="'.esc_attr($field_key).'"'.$selected.'>'.esc_html($field_label).'</option>';
+    }
+    echo '</select></td>
+        <td>GTIN/Barcode (fixed)</td>
+    </tr>';
+    
+    // MPN mapping
+    echo '<tr>
+        <td><strong>MPN (Part Number)</strong></td>
+        <td><input type="checkbox" name="sync_mpn" value="1" '.checked($sync_mpn, 'yes', false).'></td>
+        <td><select name="zoho_mpn_field">';
+    foreach ($zoho_fields as $field_key => $field_label) {
+        $selected = selected(get_option('zoho_zoho_mpn_field', 'part_number'), $field_key, false);
+        echo '<option value="'.esc_attr($field_key).'"'.$selected.'>'.esc_html($field_label).'</option>';
+    }
+    echo '</select></td>
+        <td>GTIN/Barcode (fixed)</td>
+    </tr>';
+    
+    // Brand mapping
+    echo '<tr>
+        <td><strong>Brand</strong></td>
+        <td><input type="checkbox" name="sync_brand" value="1" '.checked($sync_brand, 'yes', false).'></td>
+        <td><select name="zoho_brand_field">';
+    foreach ($zoho_fields as $field_key => $field_label) {
+        $selected = selected(get_option('zoho_zoho_brand_field', 'brand'), $field_key, false);
+        echo '<option value="'.esc_attr($field_key).'"'.$selected.'>'.esc_html($field_label).'</option>';
+    }
+    echo '</select></td>
+        <td>Attribute: Brand (fixed)</td>
+    </tr>';
+    
+    // Manufacturer mapping
+    echo '<tr>
+        <td><strong>Manufacturer</strong></td>
+        <td><input type="checkbox" name="sync_manufacturer" value="1" '.checked($sync_manufacturer, 'yes', false).'></td>
+        <td><select name="zoho_manufacturer_field">';
+    foreach ($zoho_fields as $field_key => $field_label) {
+        $selected = selected(get_option('zoho_zoho_manufacturer_field', 'manufacturer'), $field_key, false);
+        echo '<option value="'.esc_attr($field_key).'"'.$selected.'>'.esc_html($field_label).'</option>';
+    }
+    echo '</select></td>
+        <td>Attribute: Manufacturer (fixed)</td>
+    </tr>';
+    
+    echo '</tbody></table>';
+    
+    submit_button('Save Field Mapping Settings', 'primary', 'save_zoho_field_mapping');
+    echo '</form>';
+}
+
+/* ======================================================
    INVENTORY SYNC PAGE
 ====================================================== */
 function zoho_inventory_sync_page() {
@@ -371,6 +779,64 @@ function zoho_inventory_sync_page() {
 }
 
 /* ======================================================
+   HELPER FUNCTIONS FOR PRODUCT SYNC
+====================================================== */
+
+/**
+ * Set product attribute
+ */
+function zoho_set_product_attribute($product, $attribute_name, $attribute_value) {
+    if (empty($attribute_value)) return;
+    
+    $attribute_key = 'pa_' . sanitize_title($attribute_name);
+    
+    // Get existing attributes
+    $attributes = $product->get_attributes();
+    
+    // Create or update attribute
+    if (!isset($attributes[$attribute_key])) {
+        $attribute = new WC_Product_Attribute();
+        $attribute->set_name($attribute_key);
+        $attribute->set_options(array($attribute_value));
+        $attribute->set_visible(true);
+        $attribute->set_variation(false);
+        $attributes[$attribute_key] = $attribute;
+    } else {
+        $attributes[$attribute_key]->set_options(array($attribute_value));
+    }
+    
+    $product->set_attributes($attributes);
+}
+
+/**
+ * Set product image from URL
+ */
+function zoho_set_product_image($product, $image_url) {
+    if (empty($image_url)) return;
+    
+    // Check if image already exists
+    $attachment_id = attachment_url_to_postid($image_url);
+    
+    if (!$attachment_id) {
+        // Download and attach image
+        require_once(ABSPATH . 'wp-admin/includes/media.php');
+        require_once(ABSPATH . 'wp-admin/includes/file.php');
+        require_once(ABSPATH . 'wp-admin/includes/image.php');
+        
+        $attachment_id = media_sideload_image($image_url, $product->get_id(), '', 'id');
+        
+        if (is_wp_error($attachment_id)) {
+            return; // Failed to download image
+        }
+    }
+    
+    // Set as featured image
+    if ($attachment_id) {
+        set_post_thumbnail($product->get_id(), $attachment_id);
+    }
+}
+
+/* ======================================================
    AJAX HANDLER FOR PRODUCT SYNC
 ====================================================== */
 add_action('wp_ajax_zoho_sync_products_ajax', 'zoho_sync_products_ajax_handler');
@@ -446,23 +912,48 @@ function zoho_sync_products_ajax_handler() {
     $batch_synced_skus = array();
     $batch_pending_skus = array();
     
+    // Get field mappings and toggle settings
+    $zoho_name_field = get_option('zoho_zoho_name_field', 'name');
+    $zoho_sku_field = get_option('zoho_zoho_sku_field', 'sku');
+    $zoho_price_field = get_option('zoho_zoho_price_field', 'rate');
+    $zoho_image_field = get_option('zoho_zoho_image_field', 'image');
+    $zoho_description_field = get_option('zoho_zoho_description_field', 'description');
+    $zoho_cost_price_field = get_option('zoho_zoho_cost_price_field', 'purchase_rate');
+    $zoho_stock_field = get_option('zoho_zoho_stock_field', 'stock_on_hand');
+    $zoho_reorder_point_field = get_option('zoho_zoho_reorder_point_field', 'reorder_level');
+    $zoho_weight_field = get_option('zoho_zoho_weight_field', 'weight');
+    $zoho_length_field = get_option('zoho_zoho_length_field', 'length');
+    $zoho_width_field = get_option('zoho_zoho_width_field', 'width');
+    $zoho_height_field = get_option('zoho_zoho_height_field', 'height');
+    $zoho_tax_field = get_option('zoho_zoho_tax_field', 'tax_id');
+    $zoho_upc_field = get_option('zoho_zoho_upc_field', 'upc');
+    $zoho_ean_field = get_option('zoho_zoho_ean_field', 'ean');
+    $zoho_isbn_field = get_option('zoho_zoho_isbn_field', 'isbn');
+    $zoho_mpn_field = get_option('zoho_zoho_mpn_field', 'part_number');
+    $zoho_brand_field = get_option('zoho_zoho_brand_field', 'brand');
+    $zoho_manufacturer_field = get_option('zoho_zoho_manufacturer_field', 'manufacturer');
+    
     foreach ($batch_items as $item) {
-        if (empty($item['sku'])) {
+        // Get SKU from mapped field
+        $sku_value = isset($item[$zoho_sku_field]) ? $item[$zoho_sku_field] : (isset($item['sku']) ? $item['sku'] : '');
+        
+        if (empty($sku_value)) {
             $batch_pending_skus[] = ['sku'=>'(empty)','reason'=>'Missing SKU'];
             continue;
         }
         
-        $product_id = wc_get_product_id_by_sku($item['sku']);
+        $product_id = wc_get_product_id_by_sku($sku_value);
         $is_new_product = false;
         
         if (!$product_id) {
             // Create new product
             $product = new WC_Product_Simple();
-            $product->set_sku($item['sku']);
+            $product->set_sku($sku_value);
             
-            $product_name = !empty($item['name']) ? $item['name'] : $item['sku'];
-            $product->set_name($product_name);
-            $product->set_slug(sanitize_title($product_name));
+            // Get name from mapped field
+            $name_value = isset($item[$zoho_name_field]) ? $item[$zoho_name_field] : (isset($item['name']) ? $item['name'] : $sku_value);
+            $product->set_name($name_value);
+            $product->set_slug(sanitize_title($name_value));
             $product->set_status('publish');
             $product->set_catalog_visibility('visible');
             
@@ -473,21 +964,139 @@ function zoho_sync_products_ajax_handler() {
             $batch_updated++;
         }
         
-        // Set price
-        if (isset($item['rate'])) {
-            $product->set_regular_price($item['rate']);
+        // Sync Name (if enabled)
+        if (get_option('zoho_sync_name', 'yes') == 'yes') {
+            $name_value = isset($item[$zoho_name_field]) ? $item[$zoho_name_field] : '';
+            if (!empty($name_value)) {
+                $product->set_name($name_value);
+            }
         }
         
-        // Set stock
-        if (isset($item['stock_on_hand'])) {
-            $product->set_manage_stock(true);
-            $product->set_stock_quantity($item['stock_on_hand']);
-            $product->set_stock_status('instock');
+        // Sync Price (if enabled)
+        if (get_option('zoho_sync_price', 'yes') == 'yes') {
+            $price_value = isset($item[$zoho_price_field]) ? $item[$zoho_price_field] : '';
+            if (!empty($price_value)) {
+                $product->set_regular_price($price_value);
+            }
         }
         
-        // Set description
-        if (!empty($item['description'])) {
-            $product->set_description($item['description']);
+        // Sync Stock (if enabled)
+        if (get_option('zoho_sync_stock', 'yes') == 'yes') {
+            $stock_value = isset($item[$zoho_stock_field]) ? $item[$zoho_stock_field] : '';
+            if ($stock_value !== '') {
+                $product->set_manage_stock(true);
+                $product->set_stock_quantity(intval($stock_value));
+                $product->set_stock_status($stock_value > 0 ? 'instock' : 'outofstock');
+            }
+        }
+        
+        // Sync Description (if enabled)
+        if (get_option('zoho_sync_description', 'yes') == 'yes') {
+            $desc_value = isset($item[$zoho_description_field]) ? $item[$zoho_description_field] : '';
+            if (!empty($desc_value)) {
+                $product->set_description($desc_value);
+            }
+        }
+        
+        // Sync Cost Price (if enabled)
+        if (get_option('zoho_sync_cost_price', 'no') == 'yes') {
+            $cost_value = isset($item[$zoho_cost_price_field]) ? $item[$zoho_cost_price_field] : '';
+            if (!empty($cost_value) && function_exists('wc_get_product')) {
+                // Cost of Goods plugin support
+                update_post_meta($product->get_id(), '_wc_cog_cost', $cost_value);
+            }
+        }
+        
+        // Sync Reorder Point (if enabled)
+        if (get_option('zoho_sync_reorder_point', 'no') == 'yes') {
+            $reorder_value = isset($item[$zoho_reorder_point_field]) ? $item[$zoho_reorder_point_field] : '';
+            if ($reorder_value !== '') {
+                $product->set_low_stock_amount(intval($reorder_value));
+            }
+        }
+        
+        // Sync Weight (if enabled)
+        if (get_option('zoho_sync_weight', 'no') == 'yes') {
+            $weight_value = isset($item[$zoho_weight_field]) ? $item[$zoho_weight_field] : '';
+            if ($weight_value !== '') {
+                $product->set_weight($weight_value);
+            }
+        }
+        
+        // Sync Dimensions (if enabled)
+        if (get_option('zoho_sync_dimensions', 'no') == 'yes') {
+            $length_value = isset($item[$zoho_length_field]) ? $item[$zoho_length_field] : '';
+            $width_value = isset($item[$zoho_width_field]) ? $item[$zoho_width_field] : '';
+            $height_value = isset($item[$zoho_height_field]) ? $item[$zoho_height_field] : '';
+            
+            if ($length_value !== '') $product->set_length($length_value);
+            if ($width_value !== '') $product->set_width($width_value);
+            if ($height_value !== '') $product->set_height($height_value);
+        }
+        
+        // Sync Tax (if enabled)
+        if (get_option('zoho_sync_tax', 'no') == 'yes') {
+            $tax_value = isset($item[$zoho_tax_field]) ? $item[$zoho_tax_field] : '';
+            if (!empty($tax_value)) {
+                // If tax_id exists, set taxable
+                $product->set_tax_status('taxable');
+                // You can also set tax class if needed
+            } elseif (isset($item['is_taxable']) && !$item['is_taxable']) {
+                $product->set_tax_status('none');
+            }
+        }
+        
+        // Sync UPC/EAN/ISBN/MPN (if enabled)
+        if (get_option('zoho_sync_upc', 'no') == 'yes') {
+            $upc_value = isset($item[$zoho_upc_field]) ? $item[$zoho_upc_field] : '';
+            if (!empty($upc_value)) {
+                update_post_meta($product->get_id(), '_wpm_gtin_code', $upc_value);
+            }
+        }
+        
+        if (get_option('zoho_sync_ean', 'no') == 'yes') {
+            $ean_value = isset($item[$zoho_ean_field]) ? $item[$zoho_ean_field] : '';
+            if (!empty($ean_value)) {
+                update_post_meta($product->get_id(), '_wpm_gtin_code', $ean_value);
+            }
+        }
+        
+        if (get_option('zoho_sync_isbn', 'no') == 'yes') {
+            $isbn_value = isset($item[$zoho_isbn_field]) ? $item[$zoho_isbn_field] : '';
+            if (!empty($isbn_value)) {
+                update_post_meta($product->get_id(), '_wpm_gtin_code', $isbn_value);
+            }
+        }
+        
+        if (get_option('zoho_sync_mpn', 'no') == 'yes') {
+            $mpn_value = isset($item[$zoho_mpn_field]) ? $item[$zoho_mpn_field] : '';
+            if (!empty($mpn_value)) {
+                update_post_meta($product->get_id(), '_wpm_gtin_code', $mpn_value);
+            }
+        }
+        
+        // Sync Brand (if enabled) - as product attribute
+        if (get_option('zoho_sync_brand', 'no') == 'yes') {
+            $brand_value = isset($item[$zoho_brand_field]) ? $item[$zoho_brand_field] : '';
+            if (!empty($brand_value)) {
+                zoho_set_product_attribute($product, 'brand', $brand_value);
+            }
+        }
+        
+        // Sync Manufacturer (if enabled) - as product attribute
+        if (get_option('zoho_sync_manufacturer', 'no') == 'yes') {
+            $manufacturer_value = isset($item[$zoho_manufacturer_field]) ? $item[$zoho_manufacturer_field] : '';
+            if (!empty($manufacturer_value)) {
+                zoho_set_product_attribute($product, 'manufacturer', $manufacturer_value);
+            }
+        }
+        
+        // Sync Image (if enabled)
+        if (get_option('zoho_sync_image', 'no') == 'yes') {
+            $image_value = isset($item[$zoho_image_field]) ? $item[$zoho_image_field] : '';
+            if (!empty($image_value)) {
+                zoho_set_product_image($product, $image_value);
+            }
         }
         
         $product->save();
@@ -503,7 +1112,7 @@ function zoho_sync_products_ajax_handler() {
         }
         
         $processed++;
-        $batch_synced_skus[] = $item['sku'];
+        $batch_synced_skus[] = $sku_value;
     }
     
     // Update stats
