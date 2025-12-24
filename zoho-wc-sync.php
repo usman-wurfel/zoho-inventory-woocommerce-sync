@@ -2,7 +2,7 @@
 /**
  * Plugin Name: Zoho Inventory WooCommerce Sync
  * Description: Zoho Inventory → WooCommerce Inventory Sync
- * Version: 1.2.2
+ * Version: 1.2.3
  * Author: Skyler Rubber
  */
 
@@ -2313,12 +2313,16 @@ function zoho_sync_orders_to_invoices($offset, $total, $synced, $created, $updat
                 continue;
             }
             
-            // Use item_id (preferred method) - don't include name when item_id is present
+            // Use item_id ONLY (Zoho requires item_id, not name)
+            // Never include 'name' field - it causes Code 1002 if item doesn't exist
             $line_item = array(
-                'item_id' => $zoho_item_id,
+                'item_id' => $zoho_item_id, // Only item_id, no name field
                 'quantity' => $item->get_quantity(),
                 'rate' => $item->get_total() / max(1, $item->get_quantity()),
             );
+            
+            // Ensure name is never added
+            unset($line_item['name']);
             
             $line_items[] = $line_item;
         }
