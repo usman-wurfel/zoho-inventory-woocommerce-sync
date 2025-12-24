@@ -1931,6 +1931,22 @@ function zoho_sync_woo_to_zoho($offset, $total, $synced, $created, $updated) {
             // Create new item
             $response = zoho_api_post('items', $item_data);
             $action = 'created';
+            
+            // If "already exists" error (Code 1001), search by name and update
+            if (isset($response['code']) && $response['code'] == 1001) {
+                // Search for item by name
+                $search_response = zoho_api_get('items?search_text=' . urlencode($product->get_name()));
+                if (!is_wp_error($search_response) && isset($search_response['items']) && !empty($search_response['items'])) {
+                    $existing_item = $search_response['items'][0];
+                    $zoho_item_id = $existing_item['item_id'];
+                    
+                    // Update existing item - remove item_type
+                    $update_data = $item_data;
+                    unset($update_data['item_type']);
+                    $response = zoho_api_put('items/' . $zoho_item_id, $update_data);
+                    $action = 'updated';
+                }
+            }
         }
         
         // Log the sync
@@ -2927,6 +2943,19 @@ function zoho_retry_sync_handler() {
         } else {
             $response = zoho_api_post('items', $item_data);
             $action = 'created';
+            
+            // If "already exists" error (Code 1001), search by name and update
+            if (isset($response['code']) && $response['code'] == 1001) {
+                $search_response = zoho_api_get('items?search_text=' . urlencode($product->get_name()));
+                if (!is_wp_error($search_response) && isset($search_response['items']) && !empty($search_response['items'])) {
+                    $existing_item = $search_response['items'][0];
+                    $zoho_item_id = $existing_item['item_id'];
+                    $update_data = $item_data;
+                    unset($update_data['item_type']);
+                    $response = zoho_api_put('items/' . $zoho_item_id, $update_data);
+                    $action = 'updated';
+                }
+            }
         }
         
         // Delete old failed log for this woo_object_id before adding new one
@@ -3077,6 +3106,18 @@ function zoho_retry_all_failed_handler() {
                 $response = zoho_api_put('items/' . $zoho_item_id, $update_data);
             } else {
                 $response = zoho_api_post('items', $item_data);
+                
+                // If "already exists" error (Code 1001), search by name and update
+                if (isset($response['code']) && $response['code'] == 1001) {
+                    $search_response = zoho_api_get('items?search_text=' . urlencode($product->get_name()));
+                    if (!is_wp_error($search_response) && isset($search_response['items']) && !empty($search_response['items'])) {
+                        $existing_item = $search_response['items'][0];
+                        $zoho_item_id = $existing_item['item_id'];
+                        $update_data = $item_data;
+                        unset($update_data['item_type']);
+                        $response = zoho_api_put('items/' . $zoho_item_id, $update_data);
+                    }
+                }
             }
             
             // Delete old logs for this woo_object_id before adding new one
@@ -3831,9 +3872,6 @@ function zoho_is_log_successful($log) {
     $response = json_decode($log['response'] ?? '{}', true);
     $message = isset($response['message']) ? strtolower($response['message']) : '';
     
-    // "Already exists" is SUCCESS - means item needs update, not an error
-    if (strpos($message, 'already exists') !== false) return true;
-    
     // Check for success indicators FIRST
     if (isset($response['code']) && $response['code'] == 0) return true;
     if (isset($response['item']) || isset($response['contact']) || isset($response['invoice'])) return true;
@@ -3841,10 +3879,14 @@ function zoho_is_log_successful($log) {
         strpos($message, 'created') !== false || 
         strpos($message, 'updated') !== false) return true;
     
+    // "Already exists" (Code 1001) is a FAILURE - needs retry to update
+    if (isset($response['code']) && $response['code'] == 1001) return false;
+    if (strpos($message, 'already exists') !== false) return false;
+    
     // Check for error indicators
     if (isset($response['error'])) return false;
     if (isset($response['code']) && $response['code'] != 0) return false;
-    if (strpos($message, 'error') !== false && strpos($message, 'already exists') === false) return false;
+    if (strpos($message, 'error') !== false) return false;
     if (strpos($message, 'failed') !== false) return false;
     
     // Default to successful if no error found
