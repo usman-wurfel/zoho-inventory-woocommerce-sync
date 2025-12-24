@@ -1842,7 +1842,7 @@ function zoho_sync_products_ajax_handler() {
 ====================================================== */
 function zoho_sync_woo_to_zoho($offset, $total, $synced, $created, $updated) {
     // First call - fetch WooCommerce products AND all Zoho items
-    if ($offset == 0 && $total == 0) {
+    if (intval($offset) === 0 && intval($total) === 0) {
         // Clear old transients first to ensure fresh data
         delete_transient('zoho_woo_sync_products');
         delete_transient('zoho_woo_sync_stats');
@@ -1901,16 +1901,33 @@ function zoho_sync_woo_to_zoho($offset, $total, $synced, $created, $updated) {
             
         } while ($has_more_pages && $page <= 50); // Max 50 pages = 10,000 items safety limit
         
-        // Store product IDs and Zoho items map in transient for batch processing (10 minutes for large syncs)
-        set_transient('zoho_woo_sync_products', $product_ids, 600);
-        set_transient('zoho_woo_sync_zoho_items_map', $zoho_items_map, 600);
-        set_transient('zoho_woo_sync_stats', array('synced' => 0, 'created' => 0, 'updated' => 0, 'pending' => 0, 'synced_skus' => array(), 'pending_skus' => array()), 600);
+        // Store product IDs and Zoho items map in transient for batch processing (20 minutes for large syncs)
+        // Ensure map is always an array (even if empty)
+        if (!is_array($zoho_items_map)) {
+            $zoho_items_map = array();
+        }
+        set_transient('zoho_woo_sync_products', $product_ids, 1200); // 20 minutes
+        set_transient('zoho_woo_sync_zoho_items_map', $zoho_items_map, 1200); // 20 minutes
+        set_transient('zoho_woo_sync_stats', array('synced' => 0, 'created' => 0, 'updated' => 0, 'pending' => 0, 'synced_skus' => array(), 'pending_skus' => array()), 1200); // 20 minutes
     } else {
         // Get product IDs and Zoho items map from transient
         $product_ids = get_transient('zoho_woo_sync_products');
         $zoho_items_map = get_transient('zoho_woo_sync_zoho_items_map');
-        if (!$product_ids || !$zoho_items_map) {
-            wp_send_json_error('Sync session expired. Please try again.');
+        // Check if transients exist (false means not set, empty array is valid)
+        if ($product_ids === false) {
+            wp_send_json_error('Sync session expired: Product IDs not found. Please start sync again.');
+            return;
+        }
+        if ($zoho_items_map === false) {
+            wp_send_json_error('Sync session expired: Zoho items map not found. Please start sync again.');
+            return;
+        }
+        // Initialize empty map if not set (shouldn't happen, but safety check)
+        if (!is_array($zoho_items_map)) {
+            $zoho_items_map = array();
+        }
+        if (!is_array($product_ids)) {
+            wp_send_json_error('Sync session expired: Invalid product IDs. Please start sync again.');
             return;
         }
         $total = count($product_ids);
