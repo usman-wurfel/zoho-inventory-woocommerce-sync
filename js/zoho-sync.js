@@ -68,6 +68,7 @@ jQuery(document).ready(function($) {
                         $('#zoho-progress-percentage').text('100%');
                         $('#zoho-progress-text').text('Sync completed!');
                         
+                        
                         // Show success message
                         var successHtml = '<div class="notice notice-success"><p><strong>Sync Completed!</strong></p>' +
                             '<p>Total: ' + data.total + ' | Synced: ' + data.synced + ' | Created: ' + data.created + ' | Updated: ' + data.updated + ' | Pending: ' + data.pending + '</p>';
