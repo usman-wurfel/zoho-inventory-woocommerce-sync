@@ -350,20 +350,28 @@ function zoho_dashboard_page() {
         }
     }
 
-    // Get sync statistics
-    $inventory_logs = get_option('zoho_inventory_logs', []);
-    $total_items_synced = 0;
-    if (!empty($inventory_logs)) {
-        $latest_log = end($inventory_logs);
-        $total_items_synced = isset($latest_log['synced']) ? $latest_log['synced'] : 0;
+    // Get sync statistics from detailed logs
+    $detailed_logs = get_option('zoho_detailed_logs', []);
+    
+    // Count successful syncs by type
+    $items_synced = 0;
+    $invoices_synced = 0;
+    $contacts_synced = 0;
+    
+    foreach ($detailed_logs as $log) {
+        if (zoho_is_log_successful($log)) {
+            $type = $log['type'] ?? '';
+            if ($type === 'item') $items_synced++;
+            elseif ($type === 'invoice') $invoices_synced++;
+            elseif ($type === 'contact') $contacts_synced++;
+        }
     }
     
-    // Count total products in WooCommerce
+    // Also get WooCommerce counts for context
     $total_products = wp_count_posts('product');
     $published_products = $total_products->publish ?? 0;
-
-    // Count total invoices (orders) - placeholder for now
-    $total_invoices = 0; // Will be updated when invoice sync is implemented
+    $total_orders = wp_count_posts('shop_order');
+    $total_customers = count_users()['total_users'] ?? 0;
     
     ?>
     <div class="wrap">
@@ -402,23 +410,26 @@ function zoho_dashboard_page() {
         </div>
         
         <!-- Sync Statistics Cards -->
-        <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(250px, 1fr)); gap: 20px; margin-bottom: 20px;">
+        <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 20px; margin-bottom: 20px;">
             <!-- Items Synced Card -->
             <div class="zoho-stat-card">
                 <h3 class="zoho-stat-label">Items Synced</h3>
-                <div class="zoho-stat-number"><?php echo number_format($published_products); ?></div>
+                <div class="zoho-stat-number"><?php echo number_format($items_synced); ?></div>
+                <div style="font-size: 12px; color: #666; margin-top: 5px;">of <?php echo number_format($published_products); ?> products</div>
             </div>
             
             <!-- Invoices Synced Card -->
             <div class="zoho-stat-card">
                 <h3 class="zoho-stat-label">Invoices Synced</h3>
-                <div class="zoho-stat-number"><?php echo number_format($total_invoices); ?></div>
+                <div class="zoho-stat-number"><?php echo number_format($invoices_synced); ?></div>
+                <div style="font-size: 12px; color: #666; margin-top: 5px;">sync logs (30 days)</div>
             </div>
             
-            <!-- Customers Synced Card -->
+            <!-- Contacts Synced Card -->
             <div class="zoho-stat-card">
-                <h3 class="zoho-stat-label">Customers Synced</h3>
-                <div class="zoho-stat-number">0</div>
+                <h3 class="zoho-stat-label">Contacts Synced</h3>
+                <div class="zoho-stat-number"><?php echo number_format($contacts_synced); ?></div>
+                <div style="font-size: 12px; color: #666; margin-top: 5px;">of <?php echo number_format($total_customers); ?> customers</div>
             </div>
         </div>
         
@@ -624,28 +635,24 @@ function zoho_field_mapping_page() {
         echo '<div class="notice notice-success"><p>Field mapping settings saved successfully!</p></div>';
     }
     
-    // Get current tab
-    $current_tab = isset($_GET['tab']) ? sanitize_text_field($_GET['tab']) : 'items';
-    
     echo '<h1>Field Mapping & Sync Settings</h1>';
-    
-    // Tabs
-    echo '<nav class="nav-tab-wrapper">';
-    echo '<a href="'.admin_url('admin.php?page=zoho-field-mapping&tab=items').'" class="nav-tab '.($current_tab == 'items' ? 'nav-tab-active' : '').'">Items</a>';
-    echo '<a href="'.admin_url('admin.php?page=zoho-field-mapping&tab=invoices').'" class="nav-tab '.($current_tab == 'invoices' ? 'nav-tab-active' : '').'">Invoices</a>';
-    echo '<a href="'.admin_url('admin.php?page=zoho-field-mapping&tab=customers').'" class="nav-tab '.($current_tab == 'customers' ? 'nav-tab-active' : '').'">Customers</a>';
-    echo '</nav>';
+    echo '<p style="color: #666;">Configure how Zoho Inventory fields map to WooCommerce fields for product sync.</p>';
     
     echo '<div class="tab-content" style="margin-top: 20px;">';
     
-    // Show appropriate tab content
-    if ($current_tab == 'items') {
-        zoho_field_mapping_items_tab();
-    } elseif ($current_tab == 'invoices') {
-        zoho_field_mapping_invoices_tab();
-    } elseif ($current_tab == 'customers') {
-        zoho_field_mapping_customers_tab();
-    }
+    // Only show Items field mapping - Invoices and Contacts use standard defaults
+    zoho_field_mapping_items_tab();
+    
+    // Info about Invoices and Contacts
+    echo '<div style="background: #f0f6fc; border: 1px solid #c3c4c7; padding: 15px; margin-top: 30px; border-radius: 4px;">';
+    echo '<h3 style="margin-top: 0;">📋 Invoice & Contact Sync</h3>';
+    echo '<p>Invoice and Contact sync uses <strong>standard field mappings</strong> automatically:</p>';
+    echo '<ul style="margin-left: 20px;">';
+    echo '<li><strong>Invoices:</strong> Order ID, Customer, Date, Line Items, Totals</li>';
+    echo '<li><strong>Contacts:</strong> Name, Email, Phone, Billing Address, Shipping Address</li>';
+    echo '</ul>';
+    echo '<p style="margin-bottom: 0; color: #666;">No custom configuration needed. Use the <strong>Invoice Sync</strong> and <strong>Contact Sync</strong> pages to sync data.</p>';
+    echo '</div>';
     
     echo '</div>';
 }
@@ -1891,16 +1898,20 @@ function zoho_sync_woo_to_zoho($offset, $total, $synced, $created, $updated) {
         }
         
         // Prepare item data for Zoho
+        // Determine item type: service (virtual/downloadable/no stock) or inventory (has stock)
+        $is_service = $product->is_virtual() || $product->is_downloadable() || !$product->get_manage_stock();
+        $item_type = $is_service ? 'service' : 'inventory';
+        
         $item_data = array(
             'name' => $product->get_name(),
             'sku' => $sku,
             'rate' => floatval($product->get_regular_price()) ?: 0,
             'description' => wp_strip_all_tags($product->get_description()),
-            'item_type' => 'inventory',
+            'item_type' => $item_type,
         );
         
-        // Add stock if managing stock
-        if ($product->get_manage_stock()) {
+        // Add stock if managing stock (only for inventory items)
+        if ($product->get_manage_stock() && $item_type === 'inventory') {
             $item_data['initial_stock'] = $product->get_stock_quantity() ?: 0;
             $item_data['initial_stock_rate'] = floatval($product->get_regular_price()) ?: 0;
         }
@@ -2891,12 +2902,15 @@ function zoho_retry_sync_handler() {
         }
         
         $sku = $product->get_sku();
+        // Determine item type: service (virtual/downloadable/no stock) or inventory (has stock)
+        $is_service = $product->is_virtual() || $product->is_downloadable() || !$product->get_manage_stock();
+        
         $item_data = array(
             'name' => $product->get_name(),
             'sku' => $sku,
             'rate' => floatval($product->get_regular_price()) ?: 0,
             'description' => wp_strip_all_tags($product->get_description()),
-            'item_type' => 'inventory',
+            'item_type' => $is_service ? 'service' : 'inventory',
         );
         
         // Check if item exists in Zoho by SKU
@@ -2971,6 +2985,145 @@ function zoho_retry_sync_handler() {
     } else {
         wp_send_json_error($result['message']);
     }
+}
+
+/* ======================================================
+   AJAX HANDLER: Retry All Failed Syncs
+====================================================== */
+add_action('wp_ajax_zoho_retry_all_failed', 'zoho_retry_all_failed_handler');
+function zoho_retry_all_failed_handler() {
+    check_ajax_referer('zoho_logs_nonce', 'nonce');
+    
+    if (!current_user_can('manage_options')) {
+        wp_send_json_error('Unauthorized');
+        return;
+    }
+    
+    $type = isset($_POST['type']) ? sanitize_text_field($_POST['type']) : '';
+    
+    if (empty($type) || !in_array($type, array('item', 'contact'))) {
+        wp_send_json_error('Invalid sync type. Only item and contact retry is supported.');
+        return;
+    }
+    
+    // Get all failed logs of this type
+    $all_logs = get_option('zoho_detailed_logs', []);
+    $failed_logs = array_filter($all_logs, function($log) use ($type) {
+        return ($log['type'] ?? '') === $type && !zoho_is_log_successful($log);
+    });
+    
+    if (empty($failed_logs)) {
+        wp_send_json_error('No failed logs found to retry.');
+        return;
+    }
+    
+    $total = count($failed_logs);
+    $success_count = 0;
+    $fail_count = 0;
+    $processed_log_ids = array();
+    
+    foreach ($failed_logs as $log) {
+        $log_id = $log['id'] ?? '';
+        $woo_id = $log['woo_object_id'] ?? '';
+        
+        if (empty($woo_id)) {
+            $fail_count++;
+            continue;
+        }
+        
+        $retry_success = false;
+        
+        if ($type === 'item') {
+            // Retry item sync
+            $product = wc_get_product($woo_id);
+            if (!$product) {
+                $fail_count++;
+                continue;
+            }
+            
+            $sku = $product->get_sku();
+            if (empty($sku)) {
+                $fail_count++;
+                continue;
+            }
+            
+            // Determine item type: service (virtual/downloadable/no stock) or inventory (has stock)
+            $is_service = $product->is_virtual() || $product->is_downloadable() || !$product->get_manage_stock();
+            
+            $item_data = array(
+                'name' => $product->get_name(),
+                'sku' => $sku,
+                'rate' => floatval($product->get_regular_price()) ?: 0,
+                'description' => wp_strip_all_tags($product->get_description()),
+                'item_type' => $is_service ? 'service' : 'inventory',
+            );
+            
+            $zoho_item_id = zoho_get_item_by_sku($sku);
+            
+            if ($zoho_item_id) {
+                $response = zoho_api_put('items/' . $zoho_item_id, $item_data);
+            } else {
+                $response = zoho_api_post('items', $item_data);
+            }
+            
+            $zoho_object_id = isset($response['item']['item_id']) ? $response['item']['item_id'] : ($zoho_item_id ?: '');
+            zoho_add_detailed_log('item', 'product', $woo_id, 'items-inventory', $zoho_object_id, json_encode($item_data), json_encode($response));
+            
+            if ((isset($response['code']) && $response['code'] == 0) || isset($response['item'])) {
+                $retry_success = true;
+            }
+            
+        } elseif ($type === 'contact') {
+            // Retry contact sync
+            $customer = new WC_Customer($woo_id);
+            if (!$customer->get_id()) {
+                $fail_count++;
+                continue;
+            }
+            
+            $contact_data = zoho_build_contact_data_from_customer($customer);
+            $existing_contact_id = get_user_meta($woo_id, '_zoho_contact_id', true);
+            
+            if ($existing_contact_id) {
+                $response = zoho_api_put('contacts/' . $existing_contact_id, $contact_data);
+            } else {
+                $response = zoho_api_post('contacts', $contact_data);
+                if (isset($response['contact']['contact_id'])) {
+                    update_user_meta($woo_id, '_zoho_contact_id', $response['contact']['contact_id']);
+                }
+            }
+            
+            $zoho_contact_id = isset($response['contact']['contact_id']) ? $response['contact']['contact_id'] : ($existing_contact_id ?: '');
+            zoho_add_detailed_log('contact', 'customer', $woo_id, 'contact', $zoho_contact_id, json_encode($contact_data), json_encode($response));
+            
+            if ((isset($response['code']) && $response['code'] == 0) || isset($response['contact'])) {
+                $retry_success = true;
+            }
+        }
+        
+        if ($retry_success) {
+            $success_count++;
+            // Mark old log for removal
+            $processed_log_ids[] = $log_id;
+        } else {
+            $fail_count++;
+        }
+    }
+    
+    // Remove old failed logs that were successfully retried (new logs were created)
+    if (!empty($processed_log_ids)) {
+        $all_logs = get_option('zoho_detailed_logs', []);
+        $all_logs = array_values(array_filter($all_logs, function($log) use ($processed_log_ids) {
+            return !in_array($log['id'] ?? '', $processed_log_ids);
+        }));
+        update_option('zoho_detailed_logs', $all_logs);
+    }
+    
+    wp_send_json_success(array(
+        'total' => $total,
+        'success' => $success_count,
+        'failed' => $fail_count
+    ));
 }
 
 /* ======================================================
@@ -3581,7 +3734,7 @@ function zoho_logs_page() {
             });
         });
         
-        // Retry failed sync
+        // Retry single failed sync
         $(document).on('click', '.retry-sync-btn', function() {
             var $btn = $(this);
             var logId = $btn.data('log-id');
@@ -3600,6 +3753,38 @@ function zoho_logs_page() {
                     alert('Failed: ' + response.data);
                     $btn.prop('disabled', false).text('Retry');
                 }
+            });
+        });
+        
+        // Retry All failed syncs
+        $(document).on('click', '.retry-all-btn', function() {
+            var $btn = $(this);
+            var syncType = $btn.data('type');
+            var $progress = $('#retry-all-progress');
+            
+            if (!confirm('Are you sure you want to retry all failed ' + syncType + ' syncs?')) return;
+            
+            $btn.prop('disabled', true).text('Retrying All...');
+            $progress.show().text('Starting...');
+            
+            $.post(ajaxUrl, {
+                action: 'zoho_retry_all_failed',
+                nonce: nonce,
+                type: syncType
+            }, function(response) {
+                if (response.success) {
+                    var data = response.data;
+                    alert('Retry All Complete!\n\nTotal: ' + data.total + '\nSuccess: ' + data.success + '\nStill Failed: ' + data.failed);
+                    location.reload();
+                } else {
+                    alert('Error: ' + response.data);
+                    $btn.prop('disabled', false).text('↻ Retry All Failed');
+                    $progress.hide();
+                }
+            }).fail(function() {
+                alert('Request failed. Please try again.');
+                $btn.prop('disabled', false).text('↻ Retry All Failed');
+                $progress.hide();
             });
         });
     });
@@ -3750,7 +3935,13 @@ function zoho_render_logs_tab($type, $tab_name, $woo_object_default, $zoho_objec
     echo '<div style="margin-bottom: 20px; border-bottom: 1px solid #ccc; padding-bottom: 10px;">';
     echo '<a href="'.admin_url('admin.php?page=zoho-logs&tab='.$tab_name.'&status=all').'" class="button '.($status_filter == 'all' ? 'button-primary' : '').'" style="margin-right: 5px;">All ('.count($filtered_logs).')</a>';
     echo '<a href="'.admin_url('admin.php?page=zoho-logs&tab='.$tab_name.'&status=successful').'" class="button '.($status_filter == 'successful' ? 'button-primary' : '').'" style="margin-right: 5px; '.($status_filter != 'successful' ? 'color: #00a32a;' : '').'">✓ Successful ('.count($successful_logs).')</a>';
-    echo '<a href="'.admin_url('admin.php?page=zoho-logs&tab='.$tab_name.'&status=failed').'" class="button '.($status_filter == 'failed' ? 'button-primary' : '').'" style="'.($status_filter != 'failed' ? 'color: #d63638;' : '').'">✕ Failed ('.count($failed_logs).')</a>';
+    echo '<a href="'.admin_url('admin.php?page=zoho-logs&tab='.$tab_name.'&status=failed').'" class="button '.($status_filter == 'failed' ? 'button-primary' : '').'" style="margin-right: 5px; '.($status_filter != 'failed' ? 'color: #d63638;' : '').'">✕ Failed ('.count($failed_logs).')</a>';
+    
+    // Retry All button for failed logs (only for items and contacts)
+    if ($status_filter == 'failed' && count($failed_logs) > 0 && ($type == 'item' || $type == 'contact')) {
+        echo '<button type="button" class="button retry-all-btn" data-type="'.$type.'" style="margin-left: 20px; background: #00a32a; color: #fff; border-color: #00a32a;">↻ Retry All Failed ('.count($failed_logs).')</button>';
+        echo '<span id="retry-all-progress" style="margin-left: 10px; display: none;"></span>';
+    }
     echo '</div>';
     
     // Filter logs based on status
