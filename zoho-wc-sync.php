@@ -1871,12 +1871,10 @@ function zoho_sync_woo_to_zoho($offset, $total, $synced, $created, $updated) {
     $batch_synced_skus = array();
     $batch_pending_skus = array();
     
-    // Get organization ID
-    $org_id = get_option('zoho_organization_id', '');
+    // Check if connected (API wrapper functions handle organization_id automatically)
     $access_token = get_option('zoho_access_token', '');
-    
-    if (empty($org_id) || empty($access_token)) {
-        wp_send_json_error('Zoho connection not configured');
+    if (empty($access_token)) {
+        wp_send_json_error('Zoho not connected. Please connect to Zoho first.');
         return;
     }
     
