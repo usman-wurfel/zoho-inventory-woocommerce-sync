@@ -3348,7 +3348,7 @@ function zoho_contact_sync_page() {
 ====================================================== */
 function zoho_logs_page() {
     echo '<h1>Sync Logs</h1>';
-    echo '<p>View detailed sync logs for all sync operations.</p>';
+    echo '<p style="font-size: 14px; color: #666;">View detailed sync logs for all sync operations. <strong>Showing logs from the past 30 days.</strong></p>';
     
     // Get current tab
     $current_tab = isset($_GET['tab']) ? sanitize_text_field($_GET['tab']) : 'items';
@@ -3534,10 +3534,11 @@ function zoho_render_logs_tab($type, $tab_name, $woo_object_default, $zoho_objec
 function zoho_add_detailed_log($type, $woo_object, $woo_object_id, $zoho_object, $zoho_object_id, $request, $response) {
     $logs = get_option('zoho_detailed_logs', []);
     
-    $logs[] = array(
+    $new_log = array(
         'id' => uniqid('log_'),
         'type' => $type, // 'item', 'invoice', 'contact'
         'time' => current_time('d-m-Y h:i A'),
+        'timestamp' => time(), // Unix timestamp for filtering
         'woo_object' => $woo_object,
         'woo_object_id' => $woo_object_id,
         'zoho_object' => $zoho_object,
@@ -3546,6 +3547,21 @@ function zoho_add_detailed_log($type, $woo_object, $woo_object_id, $zoho_object,
         'response' => is_string($response) ? $response : json_encode($response),
     );
     
-    // Keep only last 100 logs
-    update_option('zoho_detailed_logs', array_slice($logs, -100));
+    $logs[] = $new_log;
+    
+    // Remove logs older than 30 days
+    $thirty_days_ago = time() - (30 * 24 * 60 * 60);
+    $logs = array_filter($logs, function($log) use ($thirty_days_ago) {
+        // Keep log if it has no timestamp (old logs) or timestamp is within 30 days
+        return !isset($log['timestamp']) || $log['timestamp'] >= $thirty_days_ago;
+    });
+    
+    // Re-index array after filtering
+    $logs = array_values($logs);
+    
+    // Keep only last 1000 logs max
+    $logs = array_slice($logs, -1000);
+    
+    // Save logs
+    $result = update_option('zoho_detailed_logs', $logs);
 }
