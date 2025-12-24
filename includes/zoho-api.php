@@ -62,6 +62,22 @@ function zoho_refresh_access_token() {
     return false;
 }
 
+function zoho_is_auth_error($data) {
+    // Check for various authorization error indicators
+    if (isset($data['code']) && $data['code'] == 57) return true;
+    if (isset($data['code']) && $data['code'] == 6041) return true; // Invalid token
+    if (isset($data['code']) && $data['code'] == 6051) return true; // Token expired
+    
+    // Check message for auth-related errors
+    $message = isset($data['message']) ? strtolower($data['message']) : '';
+    if (strpos($message, 'not authorized') !== false) return true;
+    if (strpos($message, 'invalid oauth token') !== false) return true;
+    if (strpos($message, 'token expired') !== false) return true;
+    if (strpos($message, 'oauth token is invalid') !== false) return true;
+    
+    return false;
+}
+
 function zoho_api_get($endpoint, $retry_on_auth_error = true) {
     $token = zoho_get_access_token();
     $org_id = zoho_get_organization_id();
@@ -101,8 +117,8 @@ function zoho_api_get($endpoint, $retry_on_auth_error = true) {
         return ['error' => 'Failed to parse API response: ' . json_last_error_msg()];
     }
     
-    // If authorization error (code 57) and retry allowed, refresh token and retry
-    if (isset($data['code']) && $data['code'] == 57 && $retry_on_auth_error) {
+    // If authorization error and retry allowed, refresh token and retry
+    if (zoho_is_auth_error($data) && $retry_on_auth_error) {
         if (zoho_refresh_access_token()) {
             return zoho_api_get($endpoint, false);
         }
@@ -149,8 +165,8 @@ function zoho_api_post($endpoint, $data, $retry_on_auth_error = true) {
         return ['error' => 'Failed to parse API response: ' . json_last_error_msg()];
     }
     
-    // If authorization error (code 57) and retry allowed, refresh token and retry
-    if (isset($result['code']) && $result['code'] == 57 && $retry_on_auth_error) {
+    // If authorization error and retry allowed, refresh token and retry
+    if (zoho_is_auth_error($result) && $retry_on_auth_error) {
         if (zoho_refresh_access_token()) {
             return zoho_api_post($endpoint, $data, false);
         }
@@ -198,8 +214,8 @@ function zoho_api_put($endpoint, $data, $retry_on_auth_error = true) {
         return ['error' => 'Failed to parse API response: ' . json_last_error_msg()];
     }
     
-    // If authorization error (code 57) and retry allowed, refresh token and retry
-    if (isset($result['code']) && $result['code'] == 57 && $retry_on_auth_error) {
+    // If authorization error and retry allowed, refresh token and retry
+    if (zoho_is_auth_error($result) && $retry_on_auth_error) {
         if (zoho_refresh_access_token()) {
             return zoho_api_put($endpoint, $data, false);
         }
