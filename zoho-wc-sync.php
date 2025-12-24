@@ -1883,8 +1883,9 @@ function zoho_sync_woo_to_zoho($offset, $total, $synced, $created, $updated) {
         $pending_skus = $stats['pending_skus'] ?? array();
     }
     
-    // Process batch (20 products per batch - balanced for API rate limits)
-    $batch_size = 20;
+    // Process batch (3 products per batch to avoid rate limit - each product makes 2 API calls: SKU lookup + create/update)
+    // Zoho rate limit: 7,500 calls/hour (~125/min = ~2/sec). With 3 products/batch = 6 calls/batch + 3 sec delay = safe
+    $batch_size = 3;
     $batch_ids = array_slice($product_ids, $offset, $batch_size);
     $processed = 0;
     $batch_created = 0;
