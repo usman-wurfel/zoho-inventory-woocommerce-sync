@@ -2,7 +2,7 @@
 /**
  * Plugin Name: Zoho Inventory WooCommerce Sync
  * Description: Zoho Inventory → WooCommerce Inventory Sync
- * Version: 1.2.1
+ * Version: 1.2.2
  * Author: Skyler Rubber
  */
 
