@@ -2808,6 +2808,172 @@ function zoho_sync_contacts_to_customers($offset, $total, $synced, $created, $up
 }
 
 /* ======================================================
+   AJAX HANDLER: Clear Logs
+====================================================== */
+add_action('wp_ajax_zoho_clear_logs', 'zoho_clear_logs_handler');
+function zoho_clear_logs_handler() {
+    check_ajax_referer('zoho_logs_nonce', 'nonce');
+    
+    if (!current_user_can('manage_options')) {
+        wp_send_json_error('Unauthorized');
+        return;
+    }
+    
+    $type = isset($_POST['type']) ? sanitize_text_field($_POST['type']) : 'all';
+    
+    if ($type === 'all') {
+        // Clear all logs
+        update_option('zoho_detailed_logs', []);
+    } else {
+        // Clear only specific type logs
+        $logs = get_option('zoho_detailed_logs', []);
+        $logs = array_values(array_filter($logs, function($log) use ($type) {
+            return ($log['type'] ?? '') !== $type;
+        }));
+        update_option('zoho_detailed_logs', $logs);
+    }
+    
+    wp_send_json_success('Logs cleared successfully');
+}
+
+/* ======================================================
+   AJAX HANDLER: Retry Failed Sync
+====================================================== */
+add_action('wp_ajax_zoho_retry_sync', 'zoho_retry_sync_handler');
+function zoho_retry_sync_handler() {
+    check_ajax_referer('zoho_logs_nonce', 'nonce');
+    
+    if (!current_user_can('manage_options')) {
+        wp_send_json_error('Unauthorized');
+        return;
+    }
+    
+    $log_id = isset($_POST['log_id']) ? sanitize_text_field($_POST['log_id']) : '';
+    
+    if (empty($log_id)) {
+        wp_send_json_error('No log ID provided');
+        return;
+    }
+    
+    // Find the log
+    $logs = get_option('zoho_detailed_logs', []);
+    $target_log = null;
+    
+    foreach ($logs as $log) {
+        if (isset($log['id']) && $log['id'] === $log_id) {
+            $target_log = $log;
+            break;
+        }
+    }
+    
+    if (!$target_log) {
+        wp_send_json_error('Log not found');
+        return;
+    }
+    
+    $type = $target_log['type'] ?? '';
+    $woo_id = $target_log['woo_object_id'] ?? '';
+    $request_data = json_decode($target_log['request'] ?? '{}', true);
+    
+    if (empty($woo_id)) {
+        wp_send_json_error('No WooCommerce ID found in log');
+        return;
+    }
+    
+    $result = array('success' => false, 'message' => 'Unknown error');
+    
+    if ($type === 'item') {
+        // Retry item sync
+        $product = wc_get_product($woo_id);
+        if (!$product) {
+            wp_send_json_error('Product not found: ' . $woo_id);
+            return;
+        }
+        
+        $sku = $product->get_sku();
+        $item_data = array(
+            'name' => $product->get_name(),
+            'sku' => $sku,
+            'rate' => floatval($product->get_regular_price()) ?: 0,
+            'description' => wp_strip_all_tags($product->get_description()),
+            'item_type' => 'inventory',
+        );
+        
+        // Check if item exists in Zoho by SKU
+        $zoho_item_id = zoho_get_item_by_sku($sku);
+        
+        if ($zoho_item_id) {
+            $response = zoho_api_put('items/' . $zoho_item_id, $item_data);
+            $action = 'updated';
+        } else {
+            $response = zoho_api_post('items', $item_data);
+            $action = 'created';
+        }
+        
+        // Log the retry
+        $zoho_object_id = isset($response['item']['item_id']) ? $response['item']['item_id'] : ($zoho_item_id ?: '');
+        zoho_add_detailed_log('item', 'product', $woo_id, 'items-inventory', $zoho_object_id, json_encode($item_data), json_encode($response));
+        
+        if (isset($response['code']) && $response['code'] == 0) {
+            $result = array('success' => true, 'message' => 'Item ' . $action . ' successfully!');
+        } elseif (isset($response['item'])) {
+            $result = array('success' => true, 'message' => 'Item ' . $action . ' successfully!');
+        } else {
+            $error_msg = isset($response['message']) ? $response['message'] : (isset($response['error']) ? $response['error'] : 'Unknown error');
+            $result = array('success' => false, 'message' => $error_msg);
+        }
+        
+    } elseif ($type === 'contact') {
+        // Retry contact sync
+        $customer = new WC_Customer($woo_id);
+        if (!$customer->get_id()) {
+            wp_send_json_error('Customer not found: ' . $woo_id);
+            return;
+        }
+        
+        $contact_data = zoho_build_contact_data_from_customer($customer);
+        
+        // Check if contact exists
+        $existing_contact_id = get_user_meta($woo_id, '_zoho_contact_id', true);
+        
+        if ($existing_contact_id) {
+            $response = zoho_api_put('contacts/' . $existing_contact_id, $contact_data);
+            $action = 'updated';
+        } else {
+            $response = zoho_api_post('contacts', $contact_data);
+            $action = 'created';
+            if (isset($response['contact']['contact_id'])) {
+                update_user_meta($woo_id, '_zoho_contact_id', $response['contact']['contact_id']);
+            }
+        }
+        
+        $zoho_contact_id = isset($response['contact']['contact_id']) ? $response['contact']['contact_id'] : ($existing_contact_id ?: '');
+        zoho_add_detailed_log('contact', 'customer', $woo_id, 'contact', $zoho_contact_id, json_encode($contact_data), json_encode($response));
+        
+        if (isset($response['code']) && $response['code'] == 0) {
+            $result = array('success' => true, 'message' => 'Contact ' . $action . ' successfully!');
+        } elseif (isset($response['contact'])) {
+            $result = array('success' => true, 'message' => 'Contact ' . $action . ' successfully!');
+        } else {
+            $error_msg = isset($response['message']) ? $response['message'] : (isset($response['error']) ? $response['error'] : 'Unknown error');
+            $result = array('success' => false, 'message' => $error_msg);
+        }
+        
+    } elseif ($type === 'invoice') {
+        // For invoices, just return a message - too complex to retry individually
+        $result = array('success' => false, 'message' => 'Invoice retry not supported. Please use Invoice Sync page to resync.');
+    } else {
+        $result = array('success' => false, 'message' => 'Unknown sync type: ' . $type);
+    }
+    
+    if ($result['success']) {
+        wp_send_json_success($result['message']);
+    } else {
+        wp_send_json_error($result['message']);
+    }
+}
+
+/* ======================================================
    HELPER: Build Contact Data from WC Customer
 ====================================================== */
 function zoho_build_contact_data_from_customer($customer) {
@@ -3330,11 +3496,18 @@ function zoho_contact_sync_page() {
    LOGS PAGE - Detailed Sync Logs
 ====================================================== */
 function zoho_logs_page() {
+    // Get current tab
+    $current_tab = isset($_GET['tab']) ? sanitize_text_field($_GET['tab']) : 'items';
+    $nonce = wp_create_nonce('zoho_logs_nonce');
+    
     echo '<h1>Sync Logs</h1>';
     echo '<p style="font-size: 14px; color: #666;">View detailed sync logs for all sync operations. <strong>Showing logs from the past 30 days.</strong></p>';
     
-    // Get current tab
-    $current_tab = isset($_GET['tab']) ? sanitize_text_field($_GET['tab']) : 'items';
+    // Clear All Logs button
+    echo '<div style="margin-bottom: 15px;">';
+    echo '<button type="button" class="button" id="clear-current-logs" style="color: #d63638; border-color: #d63638;">Clear '.ucfirst($current_tab).' Logs</button> ';
+    echo '<button type="button" class="button" id="clear-all-logs" style="color: #d63638; border-color: #d63638;">Clear All Logs</button>';
+    echo '</div>';
     
     // Tabs
     echo '<nav class="nav-tab-wrapper">';
@@ -3354,6 +3527,84 @@ function zoho_logs_page() {
     }
     
     echo '</div>';
+    
+    // JavaScript for Clear and Retry
+    ?>
+    <script>
+    jQuery(document).ready(function($) {
+        var ajaxUrl = '<?php echo admin_url('admin-ajax.php'); ?>';
+        var nonce = '<?php echo $nonce; ?>';
+        var currentTab = '<?php echo $current_tab; ?>';
+        var typeMap = {'items': 'item', 'invoices': 'invoice', 'contacts': 'contact'};
+        
+        // Clear current tab logs
+        $('#clear-current-logs').on('click', function() {
+            if (!confirm('Are you sure you want to clear all ' + currentTab + ' logs?')) return;
+            
+            var $btn = $(this);
+            $btn.prop('disabled', true).text('Clearing...');
+            
+            $.post(ajaxUrl, {
+                action: 'zoho_clear_logs',
+                nonce: nonce,
+                type: typeMap[currentTab]
+            }, function(response) {
+                if (response.success) {
+                    alert('Logs cleared successfully!');
+                    location.reload();
+                } else {
+                    alert('Error: ' + response.data);
+                    $btn.prop('disabled', false).text('Clear ' + currentTab.charAt(0).toUpperCase() + currentTab.slice(1) + ' Logs');
+                }
+            });
+        });
+        
+        // Clear all logs
+        $('#clear-all-logs').on('click', function() {
+            if (!confirm('Are you sure you want to clear ALL logs (Items, Invoices, Contacts)?')) return;
+            
+            var $btn = $(this);
+            $btn.prop('disabled', true).text('Clearing...');
+            
+            $.post(ajaxUrl, {
+                action: 'zoho_clear_logs',
+                nonce: nonce,
+                type: 'all'
+            }, function(response) {
+                if (response.success) {
+                    alert('All logs cleared successfully!');
+                    location.reload();
+                } else {
+                    alert('Error: ' + response.data);
+                    $btn.prop('disabled', false).text('Clear All Logs');
+                }
+            });
+        });
+        
+        // Retry failed sync
+        $(document).on('click', '.retry-sync-btn', function() {
+            var $btn = $(this);
+            var logId = $btn.data('log-id');
+            
+            $btn.prop('disabled', true).text('Retrying...');
+            
+            $.post(ajaxUrl, {
+                action: 'zoho_retry_sync',
+                nonce: nonce,
+                log_id: logId
+            }, function(response) {
+                if (response.success) {
+                    alert('Success: ' + response.data);
+                    location.reload();
+                } else {
+                    alert('Failed: ' + response.data);
+                    $btn.prop('disabled', false).text('Retry');
+                }
+            });
+        });
+    });
+    </script>
+    <?php
 }
 
 /* ======================================================
@@ -3383,19 +3634,23 @@ function zoho_logs_contacts_tab() {
 // Helper function to check if log is successful or failed
 function zoho_is_log_successful($log) {
     $response = json_decode($log['response'] ?? '{}', true);
+    $message = isset($response['message']) ? strtolower($response['message']) : '';
+    
+    // "Already exists" is SUCCESS - means item needs update, not an error
+    if (strpos($message, 'already exists') !== false) return true;
+    
+    // Check for success indicators FIRST
+    if (isset($response['code']) && $response['code'] == 0) return true;
+    if (isset($response['item']) || isset($response['contact']) || isset($response['invoice'])) return true;
+    if (strpos($message, 'success') !== false || 
+        strpos($message, 'created') !== false || 
+        strpos($message, 'updated') !== false) return true;
     
     // Check for error indicators
     if (isset($response['error'])) return false;
     if (isset($response['code']) && $response['code'] != 0) return false;
-    if (isset($response['message']) && stripos($response['message'], 'error') !== false) return false;
-    if (isset($response['message']) && stripos($response['message'], 'failed') !== false) return false;
-    
-    // Check for success indicators
-    if (isset($response['code']) && $response['code'] == 0) return true;
-    if (isset($response['item']) || isset($response['contact']) || isset($response['invoice'])) return true;
-    if (isset($response['message']) && (stripos($response['message'], 'success') !== false || 
-        stripos($response['message'], 'created') !== false || 
-        stripos($response['message'], 'updated') !== false)) return true;
+    if (strpos($message, 'error') !== false && strpos($message, 'already exists') === false) return false;
+    if (strpos($message, 'failed') !== false) return false;
     
     // Default to successful if no error found
     return true;
@@ -3528,22 +3783,29 @@ function zoho_render_logs_tab($type, $tab_name, $woo_object_default, $zoho_objec
     // Show count
     echo '<p style="margin-bottom: 15px;">Showing '.($offset + 1).' - '.min($offset + $per_page, $total_logs).' of '.$total_logs.' logs</p>';
     
-    // Different table header for failed logs (includes Error column)
+    // Different table header for failed logs (includes Error column and Retry button)
     if ($status_filter == 'failed') {
         echo '<table class="wp-list-table widefat fixed striped">';
         echo '<thead><tr>
-            <th style="width: 50px;">View</th>
+            <th style="width: 100px;">Actions</th>
             <th>Woo Object Id</th>
             <th>Zoho Object Id</th>
-            <th style="width: 35%;">Error Message</th>
+            <th style="width: 30%;">Error Message</th>
             <th>Time</th>
         </tr></thead><tbody>';
         
         foreach ($page_logs as $log) {
             $error_msg = zoho_get_error_message($log);
+            $log_type = $log['type'] ?? '';
+            $can_retry = ($log_type === 'item' || $log_type === 'contact'); // Invoice retry not supported
             
             echo '<tr style="background: #fff5f5;">';
-            echo '<td><a href="'.admin_url('admin.php?page=zoho-logs&tab='.$tab_name.'&status='.$status_filter.'&view_log='.esc_attr($log['id'])).'" class="button button-small">View</a></td>';
+            echo '<td>';
+            echo '<a href="'.admin_url('admin.php?page=zoho-logs&tab='.$tab_name.'&status='.$status_filter.'&view_log='.esc_attr($log['id'])).'" class="button button-small">View</a> ';
+            if ($can_retry) {
+                echo '<button class="button button-small retry-sync-btn" data-log-id="'.esc_attr($log['id']).'" style="color: #00a32a;">Retry</button>';
+            }
+            echo '</td>';
             echo '<td>'.esc_html($log['woo_object_id'] ?? '-').'</td>';
             echo '<td>'.esc_html($log['zoho_object_id'] ?? '-').'</td>';
             echo '<td style="color: #d63638;">'.esc_html($error_msg).'</td>';
@@ -3553,7 +3815,7 @@ function zoho_render_logs_tab($type, $tab_name, $woo_object_default, $zoho_objec
     } else {
         echo '<table class="wp-list-table widefat fixed striped">';
         echo '<thead><tr>
-            <th style="width: 50px;">View</th>
+            <th style="width: 100px;">Actions</th>
             <th style="width: 60px;">Status</th>
             <th>Woo Object</th>
             <th>Woo Object Id</th>
@@ -3576,8 +3838,16 @@ function zoho_render_logs_tab($type, $tab_name, $woo_object_default, $zoho_objec
                 ? '<span style="color: #00a32a; font-weight: bold;">✓</span>' 
                 : '<span style="color: #d63638; font-weight: bold;">✕</span>';
             
+            $log_type = $log['type'] ?? '';
+            $can_retry = !$is_success && ($log_type === 'item' || $log_type === 'contact');
+            
             echo '<tr style="'.$row_style.'">';
-            echo '<td><a href="'.admin_url('admin.php?page=zoho-logs&tab='.$tab_name.'&status='.$status_filter.'&view_log='.esc_attr($log['id'])).'" class="button button-small">View</a></td>';
+            echo '<td>';
+            echo '<a href="'.admin_url('admin.php?page=zoho-logs&tab='.$tab_name.'&status='.$status_filter.'&view_log='.esc_attr($log['id'])).'" class="button button-small">View</a>';
+            if ($can_retry) {
+                echo ' <button class="button button-small retry-sync-btn" data-log-id="'.esc_attr($log['id']).'" style="color: #00a32a;">Retry</button>';
+            }
+            echo '</td>';
             echo '<td style="text-align: center;">'.$status_icon.'</td>';
             echo '<td>'.esc_html($log['woo_object'] ?? $woo_object_default).'</td>';
             echo '<td>'.esc_html($log['woo_object_id'] ?? '-').'</td>';
