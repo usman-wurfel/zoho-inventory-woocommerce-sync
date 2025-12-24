@@ -2373,6 +2373,19 @@ function zoho_sync_orders_to_invoices($offset, $total, $synced, $created, $updat
         
         if (is_wp_error($response) || (isset($response['code']) && $response['code'] != 0)) {
             $error_msg = is_wp_error($response) ? $response->get_error_message() : ($response['message'] ?? 'Unknown error');
+            $error_code = isset($response['code']) ? $response['code'] : '';
+            
+            // Add detailed info for Code 1002 (Resource does not exist)
+            if ($error_code == 1002) {
+                $item_ids = array();
+                foreach ($line_items as $li) {
+                    if (isset($li['item_id'])) {
+                        $item_ids[] = $li['item_id'];
+                    }
+                }
+                $error_msg .= ' | Customer ID: ' . $zoho_customer_id . ' | Item IDs: ' . implode(', ', $item_ids);
+            }
+            
             $batch_failed[] = array('id' => $order_id, 'reason' => $error_msg);
         } else {
             if ($action == 'created') $batch_created++;
