@@ -1959,19 +1959,24 @@ function zoho_sync_woo_to_zoho($offset, $total, $synced, $created, $updated) {
             $response = zoho_api_post('items', $item_data);
             $action = 'created';
             
-            // If "already exists" error (Code 1001), search by name and update
+            // If "already exists" error (Code 1001), search by SKU (unique identifier) and update
             if (isset($response['code']) && $response['code'] == 1001) {
-                // Search for item by name
-                $search_response = zoho_api_get('items?search_text=' . urlencode($product->get_name()));
+                // Search for item by SKU (more reliable than name since SKU is unique)
+                $search_response = zoho_api_get('items?sku=' . urlencode($sku));
                 if (!is_wp_error($search_response) && isset($search_response['items']) && !empty($search_response['items'])) {
-                    $existing_item = $search_response['items'][0];
-                    $zoho_item_id = $existing_item['item_id'];
-                    
-                    // Update existing item - remove item_type
-                    $update_data = $item_data;
-                    unset($update_data['item_type']);
-                    $response = zoho_api_put('items/' . $zoho_item_id, $update_data);
-                    $action = 'updated';
+                    // Find exact SKU match (API might return multiple)
+                    foreach ($search_response['items'] as $item) {
+                        if (isset($item['sku']) && strtolower($item['sku']) === strtolower($sku)) {
+                            $zoho_item_id = $item['item_id'];
+                            
+                            // Update existing item - remove item_type
+                            $update_data = $item_data;
+                            unset($update_data['item_type']);
+                            $response = zoho_api_put('items/' . $zoho_item_id, $update_data);
+                            $action = 'updated';
+                            break;
+                        }
+                    }
                 }
             }
             
@@ -2996,16 +3001,22 @@ function zoho_retry_sync_handler() {
             $response = zoho_api_post('items', $item_data);
             $action = 'created';
             
-            // If "already exists" error (Code 1001), search by name and update
+            // If "already exists" error (Code 1001), search by SKU (unique identifier) and update
             if (isset($response['code']) && $response['code'] == 1001) {
-                $search_response = zoho_api_get('items?search_text=' . urlencode($product->get_name()));
+                // Search for item by SKU (more reliable than name since SKU is unique)
+                $search_response = zoho_api_get('items?sku=' . urlencode($sku));
                 if (!is_wp_error($search_response) && isset($search_response['items']) && !empty($search_response['items'])) {
-                    $existing_item = $search_response['items'][0];
-                    $zoho_item_id = $existing_item['item_id'];
-                    $update_data = $item_data;
-                    unset($update_data['item_type']);
-                    $response = zoho_api_put('items/' . $zoho_item_id, $update_data);
-                    $action = 'updated';
+                    // Find exact SKU match (API might return multiple)
+                    foreach ($search_response['items'] as $item) {
+                        if (isset($item['sku']) && strtolower($item['sku']) === strtolower($sku)) {
+                            $zoho_item_id = $item['item_id'];
+                            $update_data = $item_data;
+                            unset($update_data['item_type']);
+                            $response = zoho_api_put('items/' . $zoho_item_id, $update_data);
+                            $action = 'updated';
+                            break;
+                        }
+                    }
                 }
             }
             
@@ -3176,15 +3187,21 @@ function zoho_retry_all_failed_handler() {
             } else {
                 $response = zoho_api_post('items', $item_data);
                 
-                // If "already exists" error (Code 1001), search by name and update
+                // If "already exists" error (Code 1001), search by SKU (unique identifier) and update
                 if (isset($response['code']) && $response['code'] == 1001) {
-                    $search_response = zoho_api_get('items?search_text=' . urlencode($product->get_name()));
+                    // Search for item by SKU (more reliable than name since SKU is unique)
+                    $search_response = zoho_api_get('items?sku=' . urlencode($sku));
                     if (!is_wp_error($search_response) && isset($search_response['items']) && !empty($search_response['items'])) {
-                        $existing_item = $search_response['items'][0];
-                        $zoho_item_id = $existing_item['item_id'];
-                        $update_data = $item_data;
-                        unset($update_data['item_type']);
-                        $response = zoho_api_put('items/' . $zoho_item_id, $update_data);
+                        // Find exact SKU match (API might return multiple)
+                        foreach ($search_response['items'] as $item) {
+                            if (isset($item['sku']) && strtolower($item['sku']) === strtolower($sku)) {
+                                $zoho_item_id = $item['item_id'];
+                                $update_data = $item_data;
+                                unset($update_data['item_type']);
+                                $response = zoho_api_put('items/' . $zoho_item_id, $update_data);
+                                break;
+                            }
+                        }
                     }
                 }
                 
