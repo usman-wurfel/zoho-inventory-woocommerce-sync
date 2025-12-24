@@ -1471,10 +1471,6 @@ function zoho_set_product_image($product, $image_url) {
 ====================================================== */
 add_action('wp_ajax_zoho_sync_products_ajax', 'zoho_sync_products_ajax_handler');
 function zoho_sync_products_ajax_handler() {
-    // Debug: Log that handler was called
-    error_log('=== ZOHO SYNC AJAX HANDLER CALLED ===');
-    error_log('POST data: ' . print_r($_POST, true));
-    
     check_ajax_referer('zoho_sync_nonce', 'nonce');
     
     if (!current_user_can('manage_options')) {
@@ -1489,16 +1485,11 @@ function zoho_sync_products_ajax_handler() {
     $updated = isset($_POST['updated']) ? intval($_POST['updated']) : 0;
     $direction = isset($_POST['direction']) ? sanitize_text_field($_POST['direction']) : 'zoho_to_woo';
     
-    error_log('Direction received: ' . $direction);
-    
     // Handle WooCommerce to Zoho sync
     if ($direction === 'woo_to_zoho') {
-        error_log('Calling zoho_sync_woo_to_zoho function...');
         zoho_sync_woo_to_zoho($offset, $total, $synced, $created, $updated);
         return;
     }
-    
-    error_log('Calling Zoho to WooCommerce sync...');
     
     // Zoho to WooCommerce sync (default) - First call - fetch ALL items from API with pagination
     if ($offset == 0 && $total == 0) {
@@ -1829,13 +1820,8 @@ function zoho_sync_products_ajax_handler() {
    WOOCOMMERCE TO ZOHO SYNC FUNCTION
 ====================================================== */
 function zoho_sync_woo_to_zoho($offset, $total, $synced, $created, $updated) {
-    error_log('=== zoho_sync_woo_to_zoho FUNCTION STARTED ===');
-    error_log('Parameters: offset=' . $offset . ', total=' . $total . ', synced=' . $synced);
-    
     // First call - fetch WooCommerce products using WP_Query (same as WordPress admin panel)
     if ($offset == 0 && $total == 0) {
-        error_log('First call - fetching all WooCommerce products...');
-        
         // Clear old transients first to ensure fresh data
         delete_transient('zoho_woo_sync_products');
         delete_transient('zoho_woo_sync_stats');
@@ -1850,16 +1836,8 @@ function zoho_sync_woo_to_zoho($offset, $total, $synced, $created, $updated) {
             'fields' => 'ids' // Only get IDs for better performance
         );
         
-        error_log('WP_Query args: ' . print_r($args, true));
-        
         $query = new WP_Query($args);
         $product_ids = $query->posts;
-        
-        // Log the count for debugging
-        error_log('=== WP_QUERY RESULTS ===');
-        error_log('WP_Query found_posts: ' . $query->found_posts);
-        error_log('WP_Query post count: ' . count($product_ids));
-        error_log('First 10 product IDs: ' . implode(', ', array_slice($product_ids, 0, 10)));
         
         $total = count($product_ids);
         
