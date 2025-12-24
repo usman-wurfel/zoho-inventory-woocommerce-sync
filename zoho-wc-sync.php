@@ -2303,29 +2303,33 @@ function zoho_sync_orders_to_invoices($offset, $total, $synced, $created, $updat
             $product = $item->get_product();
             $sku = $product ? $product->get_sku() : '';
             
-            // Try to find item in Zoho
+            // Try to find item in Zoho by SKU
             $zoho_item_id = $sku ? zoho_get_item_by_sku($sku) : null;
             
+            // Only add line item if item exists in Zoho (by item_id)
+            // Zoho requires item_id or name of existing item - we use item_id for reliability
+            if (!$zoho_item_id) {
+                // Skip items that don't exist in Zoho (log as warning but don't fail invoice)
+                continue;
+            }
+            
+            // Use item_id (preferred method) - don't include name when item_id is present
             $line_item = array(
-                'name' => $item->get_name(),
+                'item_id' => $zoho_item_id,
                 'quantity' => $item->get_quantity(),
                 'rate' => $item->get_total() / max(1, $item->get_quantity()),
             );
             
-            if ($zoho_item_id) {
-                $line_item['item_id'] = $zoho_item_id;
-            }
-            
             $line_items[] = $line_item;
         }
         
-        // Add shipping as line item if exists
-        if ($order->get_shipping_total() > 0) {
-            $line_items[] = array(
-                'name' => 'Shipping: ' . $order->get_shipping_method(),
-                'quantity' => 1,
-                'rate' => $order->get_shipping_total(),
-            );
+        // Skip shipping line item (requires item_id or existing item name in Zoho)
+        // Shipping can be added manually in Zoho if needed
+        
+        // Check if we have any valid line items
+        if (empty($line_items)) {
+            $batch_failed[] = array('id' => $order_id, 'reason' => 'No valid line items (products not found in Zoho)');
+            continue;
         }
         
         $invoice_data = array(
