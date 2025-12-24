@@ -3639,6 +3639,10 @@ function zoho_build_contact_data_from_customer_with_mapping($customer) {
 function zoho_get_or_create_contact($order) {
     $email = $order->get_billing_email();
     
+    if (empty($email)) {
+        return null;
+    }
+    
     // Check if contact exists by email
     $response = zoho_api_get('contacts?email=' . urlencode($email));
     
@@ -3646,38 +3650,98 @@ function zoho_get_or_create_contact($order) {
         return $response['contacts'][0]['contact_id'];
     }
     
+    // Build contact name (fallback to email if name is empty)
+    $first_name = $order->get_billing_first_name();
+    $last_name = $order->get_billing_last_name();
+    $contact_name = trim($first_name . ' ' . $last_name);
+    
+    if (empty($contact_name)) {
+        $contact_name = $order->get_billing_company() ?: $email;
+    }
+    
     // Create new contact
     $contact_data = array(
-        'contact_name' => $order->get_billing_first_name() . ' ' . $order->get_billing_last_name(),
+        'contact_name' => $contact_name,
         'contact_type' => 'customer',
         'customer_sub_type' => 'individual',
-        'first_name' => $order->get_billing_first_name(),
-        'last_name' => $order->get_billing_last_name(),
         'email' => $email,
-        'company_name' => $order->get_billing_company(),
-        'billing_address' => array(
-            'address' => $order->get_billing_address_1(),
-            'street2' => $order->get_billing_address_2(),
-            'city' => $order->get_billing_city(),
-            'state' => $order->get_billing_state(),
-            'zip' => $order->get_billing_postcode(),
-            'country' => $order->get_billing_country(),
-            'phone' => $order->get_billing_phone(),
-        ),
-        'shipping_address' => array(
-            'address' => $order->get_shipping_address_1(),
-            'street2' => $order->get_shipping_address_2(),
-            'city' => $order->get_shipping_city(),
-            'state' => $order->get_shipping_state(),
-            'zip' => $order->get_shipping_postcode(),
-            'country' => $order->get_shipping_country(),
-        ),
     );
+    
+    // Add name fields if available
+    if (!empty($first_name)) {
+        $contact_data['first_name'] = $first_name;
+    }
+    if (!empty($last_name)) {
+        $contact_data['last_name'] = $last_name;
+    }
+    
+    // Add company if available
+    if (!empty($order->get_billing_company())) {
+        $contact_data['company_name'] = $order->get_billing_company();
+    }
+    
+    // Add billing address if available
+    $billing_address = array();
+    if (!empty($order->get_billing_address_1())) {
+        $billing_address['address'] = $order->get_billing_address_1();
+    }
+    if (!empty($order->get_billing_address_2())) {
+        $billing_address['street2'] = $order->get_billing_address_2();
+    }
+    if (!empty($order->get_billing_city())) {
+        $billing_address['city'] = $order->get_billing_city();
+    }
+    if (!empty($order->get_billing_state())) {
+        $billing_address['state'] = $order->get_billing_state();
+    }
+    if (!empty($order->get_billing_postcode())) {
+        $billing_address['zip'] = $order->get_billing_postcode();
+    }
+    if (!empty($order->get_billing_country())) {
+        $billing_address['country'] = $order->get_billing_country();
+    }
+    if (!empty($order->get_billing_phone())) {
+        $billing_address['phone'] = $order->get_billing_phone();
+    }
+    if (!empty($billing_address)) {
+        $contact_data['billing_address'] = $billing_address;
+    }
+    
+    // Add shipping address if available
+    $shipping_address = array();
+    if (!empty($order->get_shipping_address_1())) {
+        $shipping_address['address'] = $order->get_shipping_address_1();
+    }
+    if (!empty($order->get_shipping_address_2())) {
+        $shipping_address['street2'] = $order->get_shipping_address_2();
+    }
+    if (!empty($order->get_shipping_city())) {
+        $shipping_address['city'] = $order->get_shipping_city();
+    }
+    if (!empty($order->get_shipping_state())) {
+        $shipping_address['state'] = $order->get_shipping_state();
+    }
+    if (!empty($order->get_shipping_postcode())) {
+        $shipping_address['zip'] = $order->get_shipping_postcode();
+    }
+    if (!empty($order->get_shipping_country())) {
+        $shipping_address['country'] = $order->get_shipping_country();
+    }
+    if (!empty($shipping_address)) {
+        $contact_data['shipping_address'] = $shipping_address;
+    }
     
     $response = zoho_api_post('contacts', $contact_data);
     
     if (!is_wp_error($response) && isset($response['contact']['contact_id'])) {
         return $response['contact']['contact_id'];
+    }
+    
+    // Log the failure for debugging
+    if (is_wp_error($response)) {
+        error_log('Zoho Contact Create Error: ' . $response->get_error_message());
+    } elseif (isset($response['code'])) {
+        error_log('Zoho Contact Create Error (Code ' . $response['code'] . '): ' . ($response['message'] ?? 'Unknown error'));
     }
     
     return null;
