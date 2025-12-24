@@ -1919,9 +1919,9 @@ function zoho_sync_woo_to_zoho($offset, $total, $synced, $created, $updated) {
         }
         
         // Prepare item data for Zoho
-        // Determine item type: service (virtual/downloadable/no stock) or inventory (has stock)
+        // Determine item type: service (virtual/downloadable/no stock) or goods (has stock)
         $is_service = $product->is_virtual() || $product->is_downloadable() || !$product->get_manage_stock();
-        $item_type = $is_service ? 'service' : 'inventory';
+        $item_type = $is_service ? 'service' : 'goods';
         
         $item_data = array(
             'name' => $product->get_name(),
@@ -1931,8 +1931,8 @@ function zoho_sync_woo_to_zoho($offset, $total, $synced, $created, $updated) {
             'item_type' => $item_type,
         );
         
-        // Add stock for inventory items (null/empty/"-" = 0)
-        if ($item_type === 'inventory') {
+        // Add stock for goods items (null/empty/"-" = 0)
+        if ($item_type === 'goods') {
             $stock = $product->get_stock_quantity();
             // Handle null, empty, "-", non-numeric, or negative as 0
             $stock_value = (is_numeric($stock) && $stock !== '') ? intval($stock) : 0;
@@ -2952,10 +2952,10 @@ function zoho_retry_sync_handler() {
         }
         
         $sku = $product->get_sku();
-        // Determine item type: service (virtual/downloadable/no stock) or inventory (has stock)
+        // Determine item type: service (virtual/downloadable/no stock) or goods (has stock)
         $is_service = $product->is_virtual() || $product->is_downloadable() || !$product->get_manage_stock();
         
-        $item_type = $is_service ? 'service' : 'inventory';
+        $item_type = $is_service ? 'service' : 'goods';
         $item_data = array(
             'name' => $product->get_name(),
             'sku' => $sku,
@@ -2964,8 +2964,8 @@ function zoho_retry_sync_handler() {
             'item_type' => $item_type,
         );
         
-        // Add stock for inventory items (null/empty/"-" = 0)
-        if ($item_type === 'inventory') {
+        // Add stock for goods items (null/empty/"-" = 0)
+        if ($item_type === 'goods') {
             $stock = $product->get_stock_quantity();
             $stock_value = (is_numeric($stock) && $stock !== '') ? intval($stock) : 0;
             $item_data['initial_stock'] = max(0, $stock_value); // Never negative
@@ -3127,10 +3127,10 @@ function zoho_retry_all_failed_handler() {
                 continue;
             }
             
-            // Determine item type: service (virtual/downloadable/no stock) or inventory (has stock)
+            // Determine item type: service (virtual/downloadable/no stock) or goods (has stock)
             $is_service = $product->is_virtual() || $product->is_downloadable() || !$product->get_manage_stock();
             
-            $item_type = $is_service ? 'service' : 'inventory';
+            $item_type = $is_service ? 'service' : 'goods';
             $item_data = array(
                 'name' => $product->get_name(),
                 'sku' => $sku,
@@ -3139,8 +3139,8 @@ function zoho_retry_all_failed_handler() {
                 'item_type' => $item_type,
             );
             
-            // Add stock for inventory items (null/empty/"-" = 0)
-            if ($item_type === 'inventory') {
+            // Add stock for goods items (null/empty/"-" = 0)
+            if ($item_type === 'goods') {
                 $stock = $product->get_stock_quantity();
                 $stock_value = (is_numeric($stock) && $stock !== '') ? intval($stock) : 0;
                 $item_data['initial_stock'] = max(0, $stock_value); // Never negative
