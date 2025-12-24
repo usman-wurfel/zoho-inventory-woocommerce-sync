@@ -1862,8 +1862,8 @@ function zoho_sync_woo_to_zoho($offset, $total, $synced, $created, $updated) {
         $pending_skus = $stats['pending_skus'] ?? array();
     }
     
-    // Process batch (10 products per batch for API calls)
-    $batch_size = 10;
+    // Process batch (20 products per batch - balanced for API rate limits)
+    $batch_size = 20;
     $batch_ids = array_slice($product_ids, $offset, $batch_size);
     $processed = 0;
     $batch_created = 0;
@@ -2097,8 +2097,8 @@ function zoho_sync_orders_to_invoices($offset, $total, $synced, $created, $updat
         $total = count($order_ids);
     }
     
-    // Process batch (5 orders per batch for API calls)
-    $batch_size = 5;
+    // Process batch (10 orders per batch - balanced for API rate limits)
+    $batch_size = 10;
     $batch_ids = array_slice($order_ids, $offset, $batch_size);
     $batch_created = 0;
     $batch_updated = 0;
@@ -2306,8 +2306,8 @@ function zoho_sync_invoices_to_orders($offset, $total, $synced, $created, $updat
         $total = count($all_invoices);
     }
     
-    // Process batch
-    $batch_size = 5;
+    // Process batch (10 invoices per batch - balanced for performance)
+    $batch_size = 10;
     $batch_invoices = array_slice($all_invoices, $offset, $batch_size);
     $batch_created = 0;
     $batch_updated = 0;
@@ -2484,8 +2484,8 @@ function zoho_sync_customers_to_contacts($offset, $total, $synced, $created, $up
         $total = count($users);
     }
     
-    // Process batch
-    $batch_size = 10;
+    // Process batch (20 customers per batch - balanced for API rate limits)
+    $batch_size = 20;
     $batch_ids = array_slice($users, $offset, $batch_size);
     $batch_created = 0;
     $batch_updated = 0;
@@ -2654,8 +2654,8 @@ function zoho_sync_contacts_to_customers($offset, $total, $synced, $created, $up
         $total = count($contacts);
     }
     
-    // Process batch
-    $batch_size = 10;
+    // Process batch (20 contacts per batch - balanced for performance)
+    $batch_size = 20;
     $batch_contacts = array_slice($contacts, $offset, $batch_size);
     $batch_created = 0;
     $batch_updated = 0;
