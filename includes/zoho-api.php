@@ -6,7 +6,6 @@ function zoho_get_access_token() {
     $expires_at = get_option('zoho_token_expires_at', 0);
     if ($expires_at > 0 && time() > ($expires_at - 300)) {
         // Token expired or expiring soon - try to refresh
-        error_log('Zoho API: Token expired or expiring soon, refreshing...');
         zoho_refresh_access_token();
     }
     return get_option('zoho_access_token');
@@ -22,11 +21,8 @@ function zoho_refresh_access_token() {
     $client_secret = get_option('zoho_client_secret');
     
     if (empty($refresh_token) || empty($client_id) || empty($client_secret)) {
-        error_log('Zoho API: Cannot refresh token - missing credentials');
         return false;
     }
-    
-    error_log('Zoho API: Attempting token refresh...');
     
     // Try multiple Zoho domains (different regions use different domains)
     $zoho_domains = array(
@@ -48,31 +44,21 @@ function zoho_refresh_access_token() {
         ]);
         
         if (is_wp_error($response)) {
-            error_log('Zoho API: Token refresh failed for ' . $token_url . ' - ' . $response->get_error_message());
             continue;
         }
         
         $body = wp_remote_retrieve_body($response);
         $data = json_decode($body, true);
         
-        error_log('Zoho API: Token refresh response from ' . $token_url . ' - ' . $body);
-        
         if (isset($data['access_token'])) {
             update_option('zoho_access_token', $data['access_token']);
             if (isset($data['expires_in'])) {
                 update_option('zoho_token_expires_at', time() + $data['expires_in']);
             }
-            error_log('Zoho API: Token refreshed successfully!');
             return true;
-        }
-        
-        // If we get an error response, it might be the wrong domain - continue trying
-        if (isset($data['error'])) {
-            error_log('Zoho API: Token refresh error: ' . ($data['error_description'] ?? $data['error']));
         }
     }
     
-    error_log('Zoho API: Token refresh failed on all domains');
     return false;
 }
 
@@ -104,7 +90,6 @@ function zoho_api_get($endpoint, $retry_on_auth_error = true) {
     
     // Check for WP_Error
     if (is_wp_error($response)) {
-        error_log('Zoho API GET Error: ' . $response->get_error_message());
         return $response;
     }
     
@@ -118,11 +103,8 @@ function zoho_api_get($endpoint, $retry_on_auth_error = true) {
     
     // If authorization error (code 57) and retry allowed, refresh token and retry
     if (isset($data['code']) && $data['code'] == 57 && $retry_on_auth_error) {
-        error_log('Zoho API: Got Code 57, refreshing token and retrying GET to ' . $endpoint);
         if (zoho_refresh_access_token()) {
             return zoho_api_get($endpoint, false);
-        } else {
-            error_log('Zoho API: Token refresh failed, cannot retry');
         }
     }
     
@@ -157,7 +139,6 @@ function zoho_api_post($endpoint, $data, $retry_on_auth_error = true) {
     ]);
     
     if (is_wp_error($response)) {
-        error_log('Zoho API POST Error: ' . $response->get_error_message());
         return $response;
     }
     
@@ -170,11 +151,8 @@ function zoho_api_post($endpoint, $data, $retry_on_auth_error = true) {
     
     // If authorization error (code 57) and retry allowed, refresh token and retry
     if (isset($result['code']) && $result['code'] == 57 && $retry_on_auth_error) {
-        error_log('Zoho API: Got Code 57, refreshing token and retrying POST to ' . $endpoint);
         if (zoho_refresh_access_token()) {
             return zoho_api_post($endpoint, $data, false);
-        } else {
-            error_log('Zoho API: Token refresh failed, cannot retry');
         }
     }
     
@@ -210,7 +188,6 @@ function zoho_api_put($endpoint, $data, $retry_on_auth_error = true) {
     ]);
     
     if (is_wp_error($response)) {
-        error_log('Zoho API PUT Error: ' . $response->get_error_message());
         return $response;
     }
     
@@ -223,11 +200,8 @@ function zoho_api_put($endpoint, $data, $retry_on_auth_error = true) {
     
     // If authorization error (code 57) and retry allowed, refresh token and retry
     if (isset($result['code']) && $result['code'] == 57 && $retry_on_auth_error) {
-        error_log('Zoho API: Got Code 57, refreshing token and retrying PUT to ' . $endpoint);
         if (zoho_refresh_access_token()) {
             return zoho_api_put($endpoint, $data, false);
-        } else {
-            error_log('Zoho API: Token refresh failed, cannot retry');
         }
     }
     

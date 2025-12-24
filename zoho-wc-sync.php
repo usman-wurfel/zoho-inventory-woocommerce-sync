@@ -1531,7 +1531,6 @@ function zoho_sync_products_ajax_handler() {
         }
         
         $total = count($all_items);
-        error_log('Zoho Sync: Found ' . $total . ' items from Zoho API');
         
         // Store items in transient for batch processing
         set_transient('zoho_sync_items', $all_items, 600); // 10 minutes for large syncs
@@ -1910,7 +1909,6 @@ function zoho_sync_woo_to_zoho($offset, $total, $synced, $created, $updated) {
         $zoho_item_id = zoho_get_item_by_sku($sku);
         
         $request_data = json_encode($item_data);
-        error_log('Zoho Item Sync - SKU: ' . $sku . ' - Zoho ID: ' . ($zoho_item_id ?: 'NEW') . ' - Data: ' . $request_data);
         
         if ($zoho_item_id) {
             // Update existing item
@@ -1921,8 +1919,6 @@ function zoho_sync_woo_to_zoho($offset, $total, $synced, $created, $updated) {
             $response = zoho_api_post('items', $item_data);
             $action = 'created';
         }
-        
-        error_log('Zoho Item Sync - Response: ' . json_encode($response));
         
         // Log the sync
         $zoho_object_id = '';
@@ -1957,7 +1953,6 @@ function zoho_sync_woo_to_zoho($offset, $total, $synced, $created, $updated) {
         
         if ($has_error) {
             $batch_pending_skus[] = array('sku' => $sku, 'reason' => $error_msg);
-            error_log('Zoho Item Sync FAILED - SKU: ' . $sku . ' - Error: ' . $error_msg);
         } else {
             $batch_synced_skus[] = $sku;
             if ($action == 'updated') $batch_updated++;
@@ -2078,8 +2073,6 @@ function zoho_sync_orders_to_invoices($offset, $total, $synced, $created, $updat
         
         $order_ids = wc_get_orders($args);
         $total = count($order_ids);
-        
-        error_log('Zoho Sync: Found ' . $total . ' orders to sync (WooCommerce to Zoho)');
         
         if ($total == 0) {
             wp_send_json_error('No orders found in WooCommerce');
@@ -2288,7 +2281,6 @@ function zoho_sync_invoices_to_orders($offset, $total, $synced, $created, $updat
         } while ($has_more_pages && $page <= 50);
         
         $total = count($all_invoices);
-        error_log('Zoho Sync: Found ' . $total . ' invoices from Zoho API');
         
         if ($total == 0) {
             wp_send_json_error('No invoices found in Zoho');
@@ -2466,8 +2458,6 @@ function zoho_sync_customers_to_contacts($offset, $total, $synced, $created, $up
         $users = get_users($args);
         $total = count($users);
         
-        error_log('Zoho Sync: Found ' . $total . ' customers to sync (WooCommerce to Zoho)');
-        
         if ($total == 0) {
             wp_send_json_error('No customers found in WooCommerce');
             return;
@@ -2497,8 +2487,6 @@ function zoho_sync_customers_to_contacts($offset, $total, $synced, $created, $up
         // Build contact data from field mappings
         $contact_data = zoho_build_contact_data_from_customer($customer);
         
-        // Log the data being sent
-        error_log('Zoho Contact Sync - User ID: ' . $user_id . ' - Data: ' . json_encode($contact_data));
         
         if (empty($contact_data['contact_name'])) {
             $batch_failed[] = array('id' => $user_id, 'reason' => 'No contact name (email: ' . $customer->get_email() . ')');
@@ -2515,7 +2503,6 @@ function zoho_sync_customers_to_contacts($offset, $total, $synced, $created, $up
                 $existing_contact_id = $search_response['contacts'][0]['contact_id'];
                 // Save it for future
                 update_user_meta($user_id, '_zoho_contact_id', $existing_contact_id);
-                error_log('Zoho Contact Sync - Found existing contact by email: ' . $existing_contact_id);
             }
         }
         
@@ -2529,8 +2516,6 @@ function zoho_sync_customers_to_contacts($offset, $total, $synced, $created, $up
             $action = 'created';
         }
         
-        // Log the response
-        error_log('Zoho Contact Sync - Response: ' . json_encode($response));
         
         $zoho_contact_id = '';
         if (isset($response['contact']['contact_id'])) {
@@ -2557,7 +2542,6 @@ function zoho_sync_customers_to_contacts($offset, $total, $synced, $created, $up
         
         if ($has_error) {
             $batch_failed[] = array('id' => $user_id, 'reason' => $error_msg);
-            error_log('Zoho Contact Sync FAILED - User ID: ' . $user_id . ' - Error: ' . $error_msg);
         } else {
             if ($action == 'created') $batch_created++;
             else $batch_updated++;
@@ -2635,7 +2619,6 @@ function zoho_sync_contacts_to_customers($offset, $total, $synced, $created, $up
         } while ($has_more_pages && $page <= 50);
         
         $total = count($all_contacts);
-        error_log('Zoho Sync: Found ' . $total . ' contacts from Zoho API');
         
         if ($total == 0) {
             wp_send_json_error('No contacts found in Zoho');
@@ -3397,9 +3380,42 @@ function zoho_logs_contacts_tab() {
 /* ======================================================
    LOGS - RENDER TAB WITH PAGINATION
 ====================================================== */
+// Helper function to check if log is successful or failed
+function zoho_is_log_successful($log) {
+    $response = json_decode($log['response'] ?? '{}', true);
+    
+    // Check for error indicators
+    if (isset($response['error'])) return false;
+    if (isset($response['code']) && $response['code'] != 0) return false;
+    if (isset($response['message']) && stripos($response['message'], 'error') !== false) return false;
+    if (isset($response['message']) && stripos($response['message'], 'failed') !== false) return false;
+    
+    // Check for success indicators
+    if (isset($response['code']) && $response['code'] == 0) return true;
+    if (isset($response['item']) || isset($response['contact']) || isset($response['invoice'])) return true;
+    if (isset($response['message']) && (stripos($response['message'], 'success') !== false || 
+        stripos($response['message'], 'created') !== false || 
+        stripos($response['message'], 'updated') !== false)) return true;
+    
+    // Default to successful if no error found
+    return true;
+}
+
+// Helper function to extract error message from log
+function zoho_get_error_message($log) {
+    $response = json_decode($log['response'] ?? '{}', true);
+    
+    if (isset($response['error'])) return $response['error'];
+    if (isset($response['message'])) return $response['message'];
+    if (isset($response['code']) && $response['code'] != 0) return 'Error Code: ' . $response['code'];
+    
+    return 'Unknown error';
+}
+
 function zoho_render_logs_tab($type, $tab_name, $woo_object_default, $zoho_object_default) {
     $per_page = 20;
     $current_page = isset($_GET['paged']) ? max(1, intval($_GET['paged'])) : 1;
+    $status_filter = isset($_GET['status']) ? sanitize_text_field($_GET['status']) : 'all';
     
     // View single log detail
     if (isset($_GET['view_log'])) {
@@ -3408,18 +3424,33 @@ function zoho_render_logs_tab($type, $tab_name, $woo_object_default, $zoho_objec
         
         foreach ($logs as $log) {
             if (isset($log['id']) && $log['id'] === $log_id) {
+                $is_success = zoho_is_log_successful($log);
+                $back_url = admin_url('admin.php?page=zoho-logs&tab='.$tab_name.'&status='.$status_filter);
+                
                 echo '<div style="margin-bottom: 20px;">';
-                echo '<a href="'.admin_url('admin.php?page=zoho-logs&tab='.$tab_name).'" class="button">&larr; Back to Logs</a>';
+                echo '<a href="'.$back_url.'" class="button">&larr; Back to Logs</a>';
                 echo '</div>';
                 
+                // Status badge
+                $status_badge = $is_success 
+                    ? '<span style="background: #00a32a; color: #fff; padding: 3px 10px; border-radius: 3px; font-size: 12px;">✓ Successful</span>'
+                    : '<span style="background: #d63638; color: #fff; padding: 3px 10px; border-radius: 3px; font-size: 12px;">✕ Failed</span>';
+                
                 echo '<div style="background: #fff; border: 1px solid #ddd; padding: 20px; margin-bottom: 20px; border-radius: 4px;">';
-                echo '<h2 style="margin-top: 0;">Log Details</h2>';
+                echo '<h2 style="margin-top: 0;">Log Details '.$status_badge.'</h2>';
                 echo '<table class="form-table">';
                 echo '<tr><th>Time</th><td>'.esc_html($log['time']).'</td></tr>';
+                echo '<tr><th>Status</th><td>'.($is_success ? '<span style="color: #00a32a;">Successful</span>' : '<span style="color: #d63638;">Failed</span>').'</td></tr>';
                 echo '<tr><th>Woo Object</th><td>'.esc_html($log['woo_object'] ?? $woo_object_default).'</td></tr>';
                 echo '<tr><th>Woo Object Id</th><td>'.esc_html($log['woo_object_id'] ?? '-').'</td></tr>';
                 echo '<tr><th>Zoho Inventory Object</th><td>'.esc_html($log['zoho_object'] ?? $zoho_object_default).'</td></tr>';
                 echo '<tr><th>Zoho Inventory Object Id</th><td>'.esc_html($log['zoho_object_id'] ?? '-').'</td></tr>';
+                
+                // Show error message prominently for failed logs
+                if (!$is_success) {
+                    echo '<tr><th style="color: #d63638;">Error Message</th><td style="color: #d63638; font-weight: bold;">'.esc_html(zoho_get_error_message($log)).'</td></tr>';
+                }
+                
                 echo '</table>';
                 echo '</div>';
                 
@@ -3430,9 +3461,10 @@ function zoho_render_logs_tab($type, $tab_name, $woo_object_default, $zoho_objec
                 echo '</div>';
                 
                 // Response
-                echo '<div style="background: #fff; border: 1px solid #ddd; padding: 20px; margin-bottom: 20px; border-radius: 4px;">';
-                echo '<h3 style="margin-top: 0;">Response</h3>';
-                echo '<pre style="background: #f5f5f5; padding: 15px; overflow-x: auto; white-space: pre-wrap; word-wrap: break-word; max-height: 400px;">'.esc_html(json_encode(json_decode($log['response'] ?? '{}'), JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES)).'</pre>';
+                $response_bg = $is_success ? '#f5f5f5' : '#ffe6e6';
+                echo '<div style="background: #fff; border: 1px solid '.($is_success ? '#ddd' : '#d63638').'; padding: 20px; margin-bottom: 20px; border-radius: 4px;">';
+                echo '<h3 style="margin-top: 0; '.($is_success ? '' : 'color: #d63638;').'">Response</h3>';
+                echo '<pre style="background: '.$response_bg.'; padding: 15px; overflow-x: auto; white-space: pre-wrap; word-wrap: break-word; max-height: 400px;">'.esc_html(json_encode(json_decode($log['response'] ?? '{}'), JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES)).'</pre>';
                 echo '</div>';
                 
                 return;
@@ -3451,47 +3483,109 @@ function zoho_render_logs_tab($type, $tab_name, $woo_object_default, $zoho_objec
     // Reverse for newest first
     $filtered_logs = array_reverse($filtered_logs);
     
-    $total_logs = count($filtered_logs);
+    // Separate successful and failed logs
+    $successful_logs = array_values(array_filter($filtered_logs, function($log) {
+        return zoho_is_log_successful($log);
+    }));
+    $failed_logs = array_values(array_filter($filtered_logs, function($log) {
+        return !zoho_is_log_successful($log);
+    }));
+    
+    // Sub-tabs for Successful/Failed
+    echo '<div style="margin-bottom: 20px; border-bottom: 1px solid #ccc; padding-bottom: 10px;">';
+    echo '<a href="'.admin_url('admin.php?page=zoho-logs&tab='.$tab_name.'&status=all').'" class="button '.($status_filter == 'all' ? 'button-primary' : '').'" style="margin-right: 5px;">All ('.count($filtered_logs).')</a>';
+    echo '<a href="'.admin_url('admin.php?page=zoho-logs&tab='.$tab_name.'&status=successful').'" class="button '.($status_filter == 'successful' ? 'button-primary' : '').'" style="margin-right: 5px; '.($status_filter != 'successful' ? 'color: #00a32a;' : '').'">✓ Successful ('.count($successful_logs).')</a>';
+    echo '<a href="'.admin_url('admin.php?page=zoho-logs&tab='.$tab_name.'&status=failed').'" class="button '.($status_filter == 'failed' ? 'button-primary' : '').'" style="'.($status_filter != 'failed' ? 'color: #d63638;' : '').'">✕ Failed ('.count($failed_logs).')</a>';
+    echo '</div>';
+    
+    // Filter logs based on status
+    if ($status_filter == 'successful') {
+        $display_logs = $successful_logs;
+    } elseif ($status_filter == 'failed') {
+        $display_logs = $failed_logs;
+    } else {
+        $display_logs = $filtered_logs;
+    }
+    
+    $total_logs = count($display_logs);
     $total_pages = ceil($total_logs / $per_page);
     
     if ($total_logs == 0) {
-        echo '<p>No '.str_replace('_', ' ', $type).' sync logs yet.</p>';
+        if ($status_filter == 'failed') {
+            echo '<p style="color: #00a32a;">✓ No failed logs! All syncs were successful.</p>';
+        } elseif ($status_filter == 'successful') {
+            echo '<p>No successful '.str_replace('_', ' ', $type).' sync logs yet.</p>';
+        } else {
+            echo '<p>No '.str_replace('_', ' ', $type).' sync logs yet.</p>';
+        }
         return;
     }
     
     // Get logs for current page
     $offset = ($current_page - 1) * $per_page;
-    $page_logs = array_slice($filtered_logs, $offset, $per_page);
+    $page_logs = array_slice($display_logs, $offset, $per_page);
     
     // Show count
     echo '<p style="margin-bottom: 15px;">Showing '.($offset + 1).' - '.min($offset + $per_page, $total_logs).' of '.$total_logs.' logs</p>';
     
-    echo '<table class="wp-list-table widefat fixed striped">';
-    echo '<thead><tr>
-        <th style="width: 50px;">Expand</th>
-        <th>Woo Object</th>
-        <th>Woo Object Id</th>
-        <th>Zoho Inventory Object</th>
-        <th>Zoho Inventory Object Id</th>
-        <th>Time</th>
-    </tr></thead><tbody>';
-    
-    foreach ($page_logs as $log) {
-        $zoho_link = $log['zoho_object_id'] ?? '-';
-        if ($type == 'item' && !empty($log['zoho_object_id'])) {
-            $zoho_link = '<a href="https://inventory.zoho.com/app#/inventory/items/'.esc_attr($log['zoho_object_id']).'" target="_blank">'.esc_html($log['zoho_object_id']).'</a>';
-        } else {
-            $zoho_link = esc_html($log['zoho_object_id'] ?? '-');
-        }
+    // Different table header for failed logs (includes Error column)
+    if ($status_filter == 'failed') {
+        echo '<table class="wp-list-table widefat fixed striped">';
+        echo '<thead><tr>
+            <th style="width: 50px;">View</th>
+            <th>Woo Object Id</th>
+            <th>Zoho Object Id</th>
+            <th style="width: 35%;">Error Message</th>
+            <th>Time</th>
+        </tr></thead><tbody>';
         
-        echo '<tr>';
-        echo '<td><a href="'.admin_url('admin.php?page=zoho-logs&tab='.$tab_name.'&view_log='.esc_attr($log['id'])).'" class="button button-small">-</a></td>';
-        echo '<td>'.esc_html($log['woo_object'] ?? $woo_object_default).'</td>';
-        echo '<td>'.esc_html($log['woo_object_id'] ?? '-').'</td>';
-        echo '<td>'.esc_html($log['zoho_object'] ?? $zoho_object_default).'</td>';
-        echo '<td>'.$zoho_link.'</td>';
-        echo '<td>'.esc_html($log['time'] ?? '-').'</td>';
-        echo '</tr>';
+        foreach ($page_logs as $log) {
+            $error_msg = zoho_get_error_message($log);
+            
+            echo '<tr style="background: #fff5f5;">';
+            echo '<td><a href="'.admin_url('admin.php?page=zoho-logs&tab='.$tab_name.'&status='.$status_filter.'&view_log='.esc_attr($log['id'])).'" class="button button-small">View</a></td>';
+            echo '<td>'.esc_html($log['woo_object_id'] ?? '-').'</td>';
+            echo '<td>'.esc_html($log['zoho_object_id'] ?? '-').'</td>';
+            echo '<td style="color: #d63638;">'.esc_html($error_msg).'</td>';
+            echo '<td>'.esc_html($log['time'] ?? '-').'</td>';
+            echo '</tr>';
+        }
+    } else {
+        echo '<table class="wp-list-table widefat fixed striped">';
+        echo '<thead><tr>
+            <th style="width: 50px;">View</th>
+            <th style="width: 60px;">Status</th>
+            <th>Woo Object</th>
+            <th>Woo Object Id</th>
+            <th>Zoho Object</th>
+            <th>Zoho Object Id</th>
+            <th>Time</th>
+        </tr></thead><tbody>';
+        
+        foreach ($page_logs as $log) {
+            $is_success = zoho_is_log_successful($log);
+            $zoho_link = $log['zoho_object_id'] ?? '-';
+            if ($type == 'item' && !empty($log['zoho_object_id'])) {
+                $zoho_link = '<a href="https://inventory.zoho.com/app#/inventory/items/'.esc_attr($log['zoho_object_id']).'" target="_blank">'.esc_html($log['zoho_object_id']).'</a>';
+            } else {
+                $zoho_link = esc_html($log['zoho_object_id'] ?? '-');
+            }
+            
+            $row_style = $is_success ? '' : 'background: #fff5f5;';
+            $status_icon = $is_success 
+                ? '<span style="color: #00a32a; font-weight: bold;">✓</span>' 
+                : '<span style="color: #d63638; font-weight: bold;">✕</span>';
+            
+            echo '<tr style="'.$row_style.'">';
+            echo '<td><a href="'.admin_url('admin.php?page=zoho-logs&tab='.$tab_name.'&status='.$status_filter.'&view_log='.esc_attr($log['id'])).'" class="button button-small">View</a></td>';
+            echo '<td style="text-align: center;">'.$status_icon.'</td>';
+            echo '<td>'.esc_html($log['woo_object'] ?? $woo_object_default).'</td>';
+            echo '<td>'.esc_html($log['woo_object_id'] ?? '-').'</td>';
+            echo '<td>'.esc_html($log['zoho_object'] ?? $zoho_object_default).'</td>';
+            echo '<td>'.$zoho_link.'</td>';
+            echo '<td>'.esc_html($log['time'] ?? '-').'</td>';
+            echo '</tr>';
+        }
     }
     
     echo '</tbody></table>';
@@ -3504,8 +3598,8 @@ function zoho_render_logs_tab($type, $tab_name, $woo_object_default, $zoho_objec
         
         // First page
         if ($current_page > 1) {
-            echo '<a class="first-page button" href="'.admin_url('admin.php?page=zoho-logs&tab='.$tab_name.'&paged=1').'">«</a> ';
-            echo '<a class="prev-page button" href="'.admin_url('admin.php?page=zoho-logs&tab='.$tab_name.'&paged='.($current_page - 1)).'">‹</a> ';
+            echo '<a class="first-page button" href="'.admin_url('admin.php?page=zoho-logs&tab='.$tab_name.'&status='.$status_filter.'&paged=1').'">«</a> ';
+            echo '<a class="prev-page button" href="'.admin_url('admin.php?page=zoho-logs&tab='.$tab_name.'&status='.$status_filter.'&paged='.($current_page - 1)).'">‹</a> ';
         } else {
             echo '<span class="tablenav-pages-navspan button disabled">«</span> ';
             echo '<span class="tablenav-pages-navspan button disabled">‹</span> ';
@@ -3517,8 +3611,8 @@ function zoho_render_logs_tab($type, $tab_name, $woo_object_default, $zoho_objec
         
         // Next/Last page
         if ($current_page < $total_pages) {
-            echo ' <a class="next-page button" href="'.admin_url('admin.php?page=zoho-logs&tab='.$tab_name.'&paged='.($current_page + 1)).'">›</a>';
-            echo ' <a class="last-page button" href="'.admin_url('admin.php?page=zoho-logs&tab='.$tab_name.'&paged='.$total_pages).'">»</a>';
+            echo ' <a class="next-page button" href="'.admin_url('admin.php?page=zoho-logs&tab='.$tab_name.'&status='.$status_filter.'&paged='.($current_page + 1)).'">›</a>';
+            echo ' <a class="last-page button" href="'.admin_url('admin.php?page=zoho-logs&tab='.$tab_name.'&status='.$status_filter.'&paged='.$total_pages).'">»</a>';
         } else {
             echo ' <span class="tablenav-pages-navspan button disabled">›</span>';
             echo ' <span class="tablenav-pages-navspan button disabled">»</span>';
