@@ -1924,9 +1924,10 @@ function zoho_sync_woo_to_zoho($offset, $total, $synced, $created, $updated) {
         $is_service = $product->is_virtual() || $product->is_downloadable() || !$product->get_manage_stock();
         $item_type = $is_service ? 'service' : 'goods';
         
-        // Append SKU to name to ensure uniqueness in Zoho (same names can exist)
+        // Only append SKU to name if name and SKU are different (to ensure uniqueness in Zoho)
         $item_name = $product->get_name();
-        if (!empty($sku) && strpos($item_name, ' - ' . $sku) === false) {
+        // Only append SKU if name and SKU are different
+        if (!empty($sku) && strtolower(trim($item_name)) !== strtolower(trim($sku)) && strpos($item_name, ' - ' . $sku) === false) {
             $item_name = $item_name . ' - ' . $sku;
         }
         
@@ -3007,9 +3008,10 @@ function zoho_retry_sync_handler() {
         
         $item_type = $is_service ? 'service' : 'goods';
         
-        // Append SKU to name to ensure uniqueness in Zoho (same names can exist)
+        // Only append SKU to name if name and SKU are different (to ensure uniqueness in Zoho)
         $item_name = $product->get_name();
-        if (!empty($sku) && strpos($item_name, ' - ' . $sku) === false) {
+        // Only append SKU if name and SKU are different
+        if (!empty($sku) && strtolower(trim($item_name)) !== strtolower(trim($sku)) && strpos($item_name, ' - ' . $sku) === false) {
             $item_name = $item_name . ' - ' . $sku;
         }
         
@@ -3290,24 +3292,12 @@ function zoho_retry_all_failed_handler() {
                     if (!is_wp_error($search_response) && isset($search_response['items']) && !empty($search_response['items'])) {
                         // Find item with matching base name (exact match)
                         foreach ($search_response['items'] as $item) {
-                            $item_name = $item['name'] ?? '';
-                            // Check if base name matches (item might have SKU appended already or not)
-                            if ($item_name === $base_name || stripos($item_name, $base_name) === 0) {
-                                $existing_sku = $item['sku'] ?? '';
-                                $existing_item_id = $item['item_id'];
-                                
-                                // If SKU is same, update existing item
-                                if (strtolower($existing_sku) === strtolower($sku)) {
-                                    $update_data = $item_data;
-                                    unset($update_data['item_type']);
-                                    $response = zoho_api_put('items/' . $existing_item_id, $update_data);
-                                    break;
-                                } else {
-                                    // SKU different → Create new with "Name - SKU" (will be unique)
-                                    // The item_data already has "Name - SKU", so just retry create
-                                    $response = zoho_api_post('items', $item_data);
-                                    break;
-                                }
+                            if (isset($item['sku']) && strtolower($item['sku']) === strtolower($sku)) {
+                                $zoho_item_id = $item['item_id'];
+                                $update_data = $item_data;
+                                unset($update_data['item_type']);
+                                $response = zoho_api_put('items/' . $zoho_item_id, $update_data);
+                                break;
                             }
                         }
                     }
