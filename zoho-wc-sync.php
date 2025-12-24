@@ -1841,11 +1841,12 @@ function zoho_sync_products_ajax_handler() {
    WOOCOMMERCE TO ZOHO SYNC FUNCTION
 ====================================================== */
 function zoho_sync_woo_to_zoho($offset, $total, $synced, $created, $updated) {
-    // First call - fetch WooCommerce products using WP_Query (same as WordPress admin panel)
+    // First call - fetch WooCommerce products AND all Zoho items
     if ($offset == 0 && $total == 0) {
         // Clear old transients first to ensure fresh data
         delete_transient('zoho_woo_sync_products');
         delete_transient('zoho_woo_sync_stats');
+        delete_transient('zoho_woo_sync_zoho_items_map');
         
         // Use WP_Query to get ALL products (same query as WordPress admin edit.php?post_type=product)
         $args = array(
@@ -1867,13 +1868,48 @@ function zoho_sync_woo_to_zoho($offset, $total, $synced, $created, $updated) {
         return;
     }
 
-        // Store product IDs in transient for batch processing (10 minutes for large syncs)
+        // OPTIMIZATION: Fetch ALL Zoho items once and create SKU lookup map
+        // This eliminates per-product SKU lookup API calls (reduces from 2 calls/product to 1 call/product)
+        $zoho_items_map = array(); // SKU => item_id
+        $page = 1;
+        $per_page = 200; // Zoho default limit
+        
+        do {
+            $response = zoho_api_get('items?page=' . $page . '&per_page=' . $per_page);
+            
+            if (is_wp_error($response)) {
+                wp_send_json_error('Failed to fetch Zoho items: ' . $response->get_error_message());
+                return;
+            }
+            
+            if (isset($response['error']) || (isset($response['code']) && $response['code'] != 0)) {
+                $error_msg = $response['message'] ?? ($response['error'] ?? 'Unknown error');
+                wp_send_json_error('Zoho API Error: ' . $error_msg);
+                return;
+            }
+            
+            $items = $response['items'] ?? array();
+            foreach ($items as $item) {
+                $item_sku = $item['sku'] ?? '';
+                if (!empty($item_sku)) {
+                    $zoho_items_map[strtolower($item_sku)] = $item['item_id']; // Store as lowercase for case-insensitive lookup
+                }
+            }
+            
+            $has_more_pages = isset($response['page_context']['has_more_page']) ? $response['page_context']['has_more_page'] : (count($items) >= $per_page);
+            $page++;
+            
+        } while ($has_more_pages && $page <= 50); // Max 50 pages = 10,000 items safety limit
+        
+        // Store product IDs and Zoho items map in transient for batch processing (10 minutes for large syncs)
         set_transient('zoho_woo_sync_products', $product_ids, 600);
+        set_transient('zoho_woo_sync_zoho_items_map', $zoho_items_map, 600);
         set_transient('zoho_woo_sync_stats', array('synced' => 0, 'created' => 0, 'updated' => 0, 'pending' => 0, 'synced_skus' => array(), 'pending_skus' => array()), 600);
     } else {
-        // Get product IDs from transient
+        // Get product IDs and Zoho items map from transient
         $product_ids = get_transient('zoho_woo_sync_products');
-        if (!$product_ids) {
+        $zoho_items_map = get_transient('zoho_woo_sync_zoho_items_map');
+        if (!$product_ids || !$zoho_items_map) {
             wp_send_json_error('Sync session expired. Please try again.');
             return;
         }
@@ -1883,9 +1919,9 @@ function zoho_sync_woo_to_zoho($offset, $total, $synced, $created, $updated) {
         $pending_skus = $stats['pending_skus'] ?? array();
     }
     
-    // Process batch (3 products per batch to avoid rate limit - each product makes 2 API calls: SKU lookup + create/update)
-    // Zoho rate limit: 7,500 calls/hour (~125/min = ~2/sec). With 3 products/batch = 6 calls/batch + 3 sec delay = safe
-    $batch_size = 3;
+    // Process batch (10 products per batch - OPTIMIZED: each product makes only 1 API call: create/update (SKU lookup uses pre-fetched map))
+    // Zoho rate limit: 7,500 calls/hour (~125/min = ~2/sec). With 10 products/batch = 10 calls/batch + 3 sec delay = safe
+    $batch_size = 10;
     $batch_ids = array_slice($product_ids, $offset, $batch_size);
     $processed = 0;
     $batch_created = 0;
@@ -1949,8 +1985,8 @@ function zoho_sync_woo_to_zoho($offset, $total, $synced, $created, $updated) {
             $item_data['initial_stock_rate'] = floatval($product->get_regular_price()) ?: 0;
         }
         
-        // Check if item exists in Zoho by SKU first (SKU is unique identifier)
-        $zoho_item_id = zoho_get_item_by_sku($sku);
+        // OPTIMIZED: Check if item exists in Zoho by SKU using pre-fetched map (no API call needed)
+        $zoho_item_id = isset($zoho_items_map[strtolower($sku)]) ? $zoho_items_map[strtolower($sku)] : null;
         
         // Only update if found by SKU (don't search by name - name can be duplicate, SKU cannot)
         // If SKU doesn't match, we'll create new item
@@ -2080,6 +2116,7 @@ function zoho_sync_woo_to_zoho($offset, $total, $synced, $created, $updated) {
         zoho_add_sync_log($total, $new_synced, $stats['synced_skus'], $stats['pending_skus'], $new_created, $new_updated);
         delete_transient('zoho_woo_sync_products');
         delete_transient('zoho_woo_sync_stats');
+        delete_transient('zoho_woo_sync_zoho_items_map');
     }
     
     // Get failure reasons for display
