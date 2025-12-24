@@ -2022,14 +2022,25 @@ function zoho_sync_woo_to_zoho($offset, $total, $synced, $created, $updated) {
             // If SKU same → Update existing
             if (isset($response['code']) && $response['code'] == 1001) {
                 $base_name = $product->get_name();
-                $search_response = zoho_api_get('items?search_text=' . urlencode($base_name));
+                $exact_name_sent = $item_data['name']; // The exact name we tried to create
+                
+                // Search by the exact name we sent (or base name as fallback)
+                $search_response = zoho_api_get('items?search_text=' . urlencode($exact_name_sent));
+                if (is_wp_error($search_response) || empty($search_response['items'])) {
+                    // Fallback to base name search
+                    $search_response = zoho_api_get('items?search_text=' . urlencode($base_name));
+                }
+                
                 if (!is_wp_error($search_response) && isset($search_response['items']) && !empty($search_response['items'])) {
+                    $found_matching_item = false;
                     foreach ($search_response['items'] as $item) {
                         $existing_item_name = $item['name'] ?? '';
-                        // Find item with matching base name (exact match)
-                        if ($existing_item_name === $base_name) {
-                            $existing_sku = $item['sku'] ?? '';
+                        $existing_sku = $item['sku'] ?? '';
+                        
+                        // Check if name matches (exact match with the name we sent OR base name)
+                        if ($existing_item_name === $exact_name_sent || $existing_item_name === $base_name) {
                             $existing_item_id = $item['item_id'];
+                            $found_matching_item = true;
                             
                             // If SKU is same, update existing item
                             if (strtolower($existing_sku) === strtolower($sku)) {
@@ -2039,8 +2050,8 @@ function zoho_sync_woo_to_zoho($offset, $total, $synced, $created, $updated) {
                                 $action = 'updated';
                                 break;
                             } else {
-                                // SKU different → Append SKU to name and create new
-                                $item_data['name'] = $item_name . ' - ' . $sku;
+                                // SKU different → Append SKU to original name and create new
+                                $item_data['name'] = $base_name . ' - ' . $sku;
                                 $response = zoho_api_post('items', $item_data);
                                 $action = 'created';
                                 $request_data = json_encode($item_data); // Update request data for logging
@@ -2048,6 +2059,21 @@ function zoho_sync_woo_to_zoho($offset, $total, $synced, $created, $updated) {
                             }
                         }
                     }
+                    
+                    // If we didn't find exact match but Code 1001 came, it means name exists with different SKU
+                    // Append SKU and create new
+                    if (!$found_matching_item) {
+                        $item_data['name'] = $base_name . ' - ' . $sku;
+                        $response = zoho_api_post('items', $item_data);
+                        $action = 'created';
+                        $request_data = json_encode($item_data);
+                    }
+                } else {
+                    // If search fails, just append SKU and retry create (safe fallback)
+                    $item_data['name'] = $base_name . ' - ' . $sku;
+                    $response = zoho_api_post('items', $item_data);
+                    $action = 'created';
+                    $request_data = json_encode($item_data);
                 }
             }
             
@@ -3086,14 +3112,25 @@ function zoho_retry_sync_handler() {
             // If SKU same → Update existing
             if (isset($response['code']) && $response['code'] == 1001) {
                 $base_name = $product->get_name();
-                $search_response = zoho_api_get('items?search_text=' . urlencode($base_name));
+                $exact_name_sent = $item_data['name']; // The exact name we tried to create
+                
+                // Search by the exact name we sent (or base name as fallback)
+                $search_response = zoho_api_get('items?search_text=' . urlencode($exact_name_sent));
+                if (is_wp_error($search_response) || empty($search_response['items'])) {
+                    // Fallback to base name search
+                    $search_response = zoho_api_get('items?search_text=' . urlencode($base_name));
+                }
+                
                 if (!is_wp_error($search_response) && isset($search_response['items']) && !empty($search_response['items'])) {
+                    $found_matching_item = false;
                     foreach ($search_response['items'] as $item) {
                         $existing_item_name = $item['name'] ?? '';
-                        // Find item with matching base name (exact match)
-                        if ($existing_item_name === $base_name) {
-                            $existing_sku = $item['sku'] ?? '';
+                        $existing_sku = $item['sku'] ?? '';
+                        
+                        // Check if name matches (exact match with the name we sent OR base name)
+                        if ($existing_item_name === $exact_name_sent || $existing_item_name === $base_name) {
                             $existing_item_id = $item['item_id'];
+                            $found_matching_item = true;
                             
                             // If SKU is same, update existing item
                             if (strtolower($existing_sku) === strtolower($sku)) {
@@ -3103,14 +3140,27 @@ function zoho_retry_sync_handler() {
                                 $action = 'updated';
                                 break;
                             } else {
-                                // SKU different → Append SKU to name and create new
-                                $item_data['name'] = $item_name . ' - ' . $sku;
+                                // SKU different → Append SKU to original name and create new
+                                $item_data['name'] = $base_name . ' - ' . $sku;
                                 $response = zoho_api_post('items', $item_data);
                                 $action = 'created';
                                 break;
                             }
                         }
                     }
+                    
+                    // If we didn't find exact match but Code 1001 came, it means name exists with different SKU
+                    // Append SKU and create new
+                    if (!$found_matching_item) {
+                        $item_data['name'] = $base_name . ' - ' . $sku;
+                        $response = zoho_api_post('items', $item_data);
+                        $action = 'created';
+                    }
+                } else {
+                    // If search fails, just append SKU and retry create (safe fallback)
+                    $item_data['name'] = $base_name . ' - ' . $sku;
+                    $response = zoho_api_post('items', $item_data);
+                    $action = 'created';
                 }
             }
             
@@ -3294,17 +3344,26 @@ function zoho_retry_all_failed_handler() {
                 // If SKU different → Create new with "Name - SKU" (will be unique)
                 // If SKU same → Update existing
                 if (isset($response['code']) && $response['code'] == 1001) {
-                    // Search by base name (original product name)
                     $base_name = $product->get_name();
-                    $search_response = zoho_api_get('items?search_text=' . urlencode($base_name));
+                    $exact_name_sent = $item_data['name']; // The exact name we tried to create
+                    
+                    // Search by the exact name we sent (or base name as fallback)
+                    $search_response = zoho_api_get('items?search_text=' . urlencode($exact_name_sent));
+                    if (is_wp_error($search_response) || empty($search_response['items'])) {
+                        // Fallback to base name search
+                        $search_response = zoho_api_get('items?search_text=' . urlencode($base_name));
+                    }
+                    
                     if (!is_wp_error($search_response) && isset($search_response['items']) && !empty($search_response['items'])) {
-                        // Find item with matching base name (exact match)
+                        $found_matching_item = false;
                         foreach ($search_response['items'] as $item) {
                             $existing_item_name = $item['name'] ?? '';
-                            // Check if base name matches (exact match only)
-                            if ($existing_item_name === $base_name) {
-                                $existing_sku = $item['sku'] ?? '';
+                            $existing_sku = $item['sku'] ?? '';
+                            
+                            // Check if name matches (exact match with the name we sent OR base name)
+                            if ($existing_item_name === $exact_name_sent || $existing_item_name === $base_name) {
                                 $existing_item_id = $item['item_id'];
+                                $found_matching_item = true;
                                 
                                 // If SKU is same, update existing item
                                 if (strtolower($existing_sku) === strtolower($sku)) {
@@ -3313,13 +3372,24 @@ function zoho_retry_all_failed_handler() {
                                     $response = zoho_api_put('items/' . $existing_item_id, $update_data);
                                     break;
                                 } else {
-                                    // SKU different → Append SKU to name and create new
-                                    $item_data['name'] = $item_name . ' - ' . $sku;
+                                    // SKU different → Append SKU to original name and create new
+                                    $item_data['name'] = $base_name . ' - ' . $sku;
                                     $response = zoho_api_post('items', $item_data);
                                     break;
                                 }
                             }
                         }
+                        
+                        // If we didn't find exact match but Code 1001 came, it means name exists with different SKU
+                        // Append SKU and create new
+                        if (!$found_matching_item) {
+                            $item_data['name'] = $base_name . ' - ' . $sku;
+                            $response = zoho_api_post('items', $item_data);
+                        }
+                    } else {
+                        // If search fails, just append SKU and retry create (safe fallback)
+                        $item_data['name'] = $base_name . ' - ' . $sku;
+                        $response = zoho_api_post('items', $item_data);
                     }
                 }
                 
