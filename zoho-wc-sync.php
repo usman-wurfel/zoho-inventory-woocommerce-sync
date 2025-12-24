@@ -1922,8 +1922,10 @@ function zoho_sync_woo_to_zoho($offset, $total, $synced, $created, $updated) {
         $request_data = json_encode($item_data);
         
         if ($zoho_item_id) {
-            // Update existing item
-            $response = zoho_api_put('items/' . $zoho_item_id, $item_data);
+            // Update existing item - remove item_type as it can't be changed
+            $update_data = $item_data;
+            unset($update_data['item_type']);
+            $response = zoho_api_put('items/' . $zoho_item_id, $update_data);
             $action = 'updated';
         } else {
             // Create new item
@@ -2917,12 +2919,18 @@ function zoho_retry_sync_handler() {
         $zoho_item_id = zoho_get_item_by_sku($sku);
         
         if ($zoho_item_id) {
-            $response = zoho_api_put('items/' . $zoho_item_id, $item_data);
+            // Update existing - remove item_type as it can't be changed
+            $update_data = $item_data;
+            unset($update_data['item_type']);
+            $response = zoho_api_put('items/' . $zoho_item_id, $update_data);
             $action = 'updated';
         } else {
             $response = zoho_api_post('items', $item_data);
             $action = 'created';
         }
+        
+        // Delete old failed log for this woo_object_id before adding new one
+        zoho_delete_logs_by_woo_id('item', $woo_id);
         
         // Log the retry
         $zoho_object_id = isset($response['item']['item_id']) ? $response['item']['item_id'] : ($zoho_item_id ?: '');
@@ -2960,6 +2968,9 @@ function zoho_retry_sync_handler() {
                 update_user_meta($woo_id, '_zoho_contact_id', $response['contact']['contact_id']);
             }
         }
+        
+        // Delete old logs for this woo_object_id before adding new one
+        zoho_delete_logs_by_woo_id('contact', $woo_id);
         
         $zoho_contact_id = isset($response['contact']['contact_id']) ? $response['contact']['contact_id'] : ($existing_contact_id ?: '');
         zoho_add_detailed_log('contact', 'customer', $woo_id, 'contact', $zoho_contact_id, json_encode($contact_data), json_encode($response));
@@ -3020,7 +3031,6 @@ function zoho_retry_all_failed_handler() {
     $total = count($failed_logs);
     $success_count = 0;
     $fail_count = 0;
-    $processed_log_ids = array();
     
     foreach ($failed_logs as $log) {
         $log_id = $log['id'] ?? '';
@@ -3061,10 +3071,16 @@ function zoho_retry_all_failed_handler() {
             $zoho_item_id = zoho_get_item_by_sku($sku);
             
             if ($zoho_item_id) {
-                $response = zoho_api_put('items/' . $zoho_item_id, $item_data);
+                // Update existing - remove item_type as it can't be changed
+                $update_data = $item_data;
+                unset($update_data['item_type']);
+                $response = zoho_api_put('items/' . $zoho_item_id, $update_data);
             } else {
                 $response = zoho_api_post('items', $item_data);
             }
+            
+            // Delete old logs for this woo_object_id before adding new one
+            zoho_delete_logs_by_woo_id('item', $woo_id);
             
             $zoho_object_id = isset($response['item']['item_id']) ? $response['item']['item_id'] : ($zoho_item_id ?: '');
             zoho_add_detailed_log('item', 'product', $woo_id, 'items-inventory', $zoho_object_id, json_encode($item_data), json_encode($response));
@@ -3093,6 +3109,9 @@ function zoho_retry_all_failed_handler() {
                 }
             }
             
+            // Delete old logs for this woo_object_id before adding new one
+            zoho_delete_logs_by_woo_id('contact', $woo_id);
+            
             $zoho_contact_id = isset($response['contact']['contact_id']) ? $response['contact']['contact_id'] : ($existing_contact_id ?: '');
             zoho_add_detailed_log('contact', 'customer', $woo_id, 'contact', $zoho_contact_id, json_encode($contact_data), json_encode($response));
             
@@ -3103,21 +3122,12 @@ function zoho_retry_all_failed_handler() {
         
         if ($retry_success) {
             $success_count++;
-            // Mark old log for removal
-            $processed_log_ids[] = $log_id;
         } else {
             $fail_count++;
         }
     }
     
-    // Remove old failed logs that were successfully retried (new logs were created)
-    if (!empty($processed_log_ids)) {
-        $all_logs = get_option('zoho_detailed_logs', []);
-        $all_logs = array_values(array_filter($all_logs, function($log) use ($processed_log_ids) {
-            return !in_array($log['id'] ?? '', $processed_log_ids);
-        }));
-        update_option('zoho_detailed_logs', $all_logs);
-    }
+    // Old logs are already deleted by zoho_delete_logs_by_woo_id() during retry
     
     wp_send_json_success(array(
         'total' => $total,
@@ -4081,6 +4091,20 @@ function zoho_render_logs_tab($type, $tab_name, $woo_object_default, $zoho_objec
         
         echo '</span></div></div>';
     }
+}
+
+/* ======================================================
+   HELPER: Delete Logs by WooCommerce Object ID
+====================================================== */
+function zoho_delete_logs_by_woo_id($type, $woo_object_id) {
+    $logs = get_option('zoho_detailed_logs', []);
+    
+    // Remove all logs matching type and woo_object_id
+    $logs = array_values(array_filter($logs, function($log) use ($type, $woo_object_id) {
+        return !(($log['type'] ?? '') === $type && ($log['woo_object_id'] ?? '') == $woo_object_id);
+    }));
+    
+    update_option('zoho_detailed_logs', $logs);
 }
 
 /* ======================================================
