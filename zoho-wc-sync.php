@@ -1920,8 +1920,11 @@ function zoho_sync_woo_to_zoho($offset, $total, $synced, $created, $updated) {
         
         // Prepare item data for Zoho
         // Determine item type: service (virtual/downloadable/no stock) or goods (has stock)
+        // Zoho valid values: goods, service
         $is_service = $product->is_virtual() || $product->is_downloadable() || !$product->get_manage_stock();
         $item_type = $is_service ? 'service' : 'goods';
+        
+        // Only set item_type for new items, not for updates (Zoho doesn't allow changing type)
         
         $item_data = array(
             'name' => $product->get_name(),
@@ -1970,6 +1973,14 @@ function zoho_sync_woo_to_zoho($offset, $total, $synced, $created, $updated) {
                     $response = zoho_api_put('items/' . $zoho_item_id, $update_data);
                     $action = 'updated';
                 }
+            }
+            
+            // If "Invalid item_type" error (Code 2), retry without item_type
+            if (isset($response['code']) && $response['code'] == 2 && strpos(strtolower($response['message'] ?? ''), 'item_type') !== false) {
+                $item_data_no_type = $item_data;
+                unset($item_data_no_type['item_type']);
+                $response = zoho_api_post('items', $item_data_no_type);
+                $action = 'created';
             }
         }
         
@@ -2997,6 +3008,14 @@ function zoho_retry_sync_handler() {
                     $action = 'updated';
                 }
             }
+            
+            // If "Invalid item_type" error (Code 2), retry without item_type
+            if (isset($response['code']) && $response['code'] == 2 && strpos(strtolower($response['message'] ?? ''), 'item_type') !== false) {
+                $item_data_no_type = $item_data;
+                unset($item_data_no_type['item_type']);
+                $response = zoho_api_post('items', $item_data_no_type);
+                $action = 'created';
+            }
         }
         
         // Delete old failed log for this woo_object_id before adding new one
@@ -3167,6 +3186,13 @@ function zoho_retry_all_failed_handler() {
                         unset($update_data['item_type']);
                         $response = zoho_api_put('items/' . $zoho_item_id, $update_data);
                     }
+                }
+                
+                // If "Invalid item_type" error (Code 2), retry without item_type
+                if (isset($response['code']) && $response['code'] == 2 && strpos(strtolower($response['message'] ?? ''), 'item_type') !== false) {
+                    $item_data_no_type = $item_data;
+                    unset($item_data_no_type['item_type']);
+                    $response = zoho_api_post('items', $item_data_no_type);
                 }
             }
             
