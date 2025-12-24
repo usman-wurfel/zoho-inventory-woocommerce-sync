@@ -2316,25 +2316,57 @@ function zoho_sync_orders_to_invoices($offset, $total, $synced, $created, $updat
             if (!is_wp_error($contact_create_response) && isset($contact_create_response['contact']['contact_id'])) {
                 $zoho_customer_id = $contact_create_response['contact']['contact_id'];
             } else {
-                // Log detailed contact creation error
-                $contact_error = is_wp_error($contact_create_response) 
-                    ? $contact_create_response->get_error_message() 
-                    : (isset($contact_create_response['message']) ? 'Code ' . ($contact_create_response['code'] ?? '') . ': ' . $contact_create_response['message'] : 'Unknown error');
+                // Check if contact already exists (Code 3062)
+                if (isset($contact_create_response['code']) && $contact_create_response['code'] == 3062) {
+                    // Contact already exists - search by name to get existing contact
+                    $contact_name = $contact_data['contact_name'];
+                    $name_search_response = zoho_api_get('contacts?search_text=' . urlencode($contact_name));
+                    
+                    if (!is_wp_error($name_search_response) && isset($name_search_response['contacts']) && !empty($name_search_response['contacts'])) {
+                        // Find exact match by name
+                        foreach ($name_search_response['contacts'] as $contact) {
+                            if (isset($contact['contact_name']) && $contact['contact_name'] === $contact_name) {
+                                $zoho_customer_id = $contact['contact_id'];
+                                break;
+                            }
+                        }
+                        
+                        // If no exact match, use first result
+                        if (!$zoho_customer_id && isset($name_search_response['contacts'][0]['contact_id'])) {
+                            $zoho_customer_id = $name_search_response['contacts'][0]['contact_id'];
+                        }
+                    }
+                    
+                    // If still not found, try search by email again
+                    if (!$zoho_customer_id) {
+                        $email_search_response = zoho_api_get('contacts?email=' . urlencode($customer_email));
+                        if (!is_wp_error($email_search_response) && isset($email_search_response['contacts']) && !empty($email_search_response['contacts'])) {
+                            $zoho_customer_id = $email_search_response['contacts'][0]['contact_id'];
+                        }
+                    }
+                }
                 
-                $error_reason = 'Failed to create customer: ' . $contact_error;
-                $batch_failed[] = array('id' => $order_id, 'reason' => $error_reason);
-                
-                // Log the failure with detailed error
-                zoho_add_detailed_log(
-                    'invoice',
-                    'order',
-                    $order_id,
-                    'invoice',
-                    '',
-                    json_encode(array('order_id' => $order_id, 'customer_email' => $customer_email, 'contact_data' => $contact_data)),
-                    json_encode(array('error' => $error_reason, 'code' => 'CUSTOMER_CREATE_FAILED', 'zoho_response' => $contact_create_response))
-                );
-                continue;
+                // If still no contact ID found, log error
+                if (!$zoho_customer_id) {
+                    $contact_error = is_wp_error($contact_create_response) 
+                        ? $contact_create_response->get_error_message() 
+                        : (isset($contact_create_response['message']) ? 'Code ' . ($contact_create_response['code'] ?? '') . ': ' . $contact_create_response['message'] : 'Unknown error');
+                    
+                    $error_reason = 'Failed to create/find customer: ' . $contact_error;
+                    $batch_failed[] = array('id' => $order_id, 'reason' => $error_reason);
+                    
+                    // Log the failure with detailed error
+                    zoho_add_detailed_log(
+                        'invoice',
+                        'order',
+                        $order_id,
+                        'invoice',
+                        '',
+                        json_encode(array('order_id' => $order_id, 'customer_email' => $customer_email, 'contact_data' => $contact_data)),
+                        json_encode(array('error' => $error_reason, 'code' => 'CUSTOMER_CREATE_FAILED', 'zoho_response' => $contact_create_response))
+                    );
+                    continue;
+                }
             }
         }
         
