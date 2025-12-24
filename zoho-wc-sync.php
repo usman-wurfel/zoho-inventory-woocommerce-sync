@@ -1947,8 +1947,25 @@ function zoho_sync_woo_to_zoho($offset, $total, $synced, $created, $updated) {
             $item_data['initial_stock_rate'] = floatval($product->get_regular_price()) ?: 0;
         }
         
-        // Check if item exists in Zoho by SKU
+        // Check if item exists in Zoho by SKU first
         $zoho_item_id = zoho_get_item_by_sku($sku);
+        
+        // If not found by SKU, check by base name (to catch items with same name but different SKU)
+        if (!$zoho_item_id) {
+            $base_name = $product->get_name();
+            $search_response = zoho_api_get('items?search_text=' . urlencode($base_name));
+            if (!is_wp_error($search_response) && isset($search_response['items']) && !empty($search_response['items'])) {
+                // Find item with matching base name (might have SKU appended or not)
+                foreach ($search_response['items'] as $item) {
+                    $item_name = $item['name'] ?? '';
+                    // Check if base name matches (exact match or starts with base name)
+                    if (stripos($item_name, $base_name) === 0) {
+                        $zoho_item_id = $item['item_id'];
+                        break; // Found existing item with same base name
+                    }
+                }
+            }
+        }
         
         $request_data = json_encode($item_data);
         
@@ -1963,22 +1980,35 @@ function zoho_sync_woo_to_zoho($offset, $total, $synced, $created, $updated) {
             $response = zoho_api_post('items', $item_data);
             $action = 'created';
             
-            // If "already exists" error (Code 1001), search by SKU (unique identifier) and update
+            // If "already exists" error (Code 1001), check existing item's SKU
+            // If SKU different → Create new with "Name - SKU" (will be unique)
+            // If SKU same → Update existing
             if (isset($response['code']) && $response['code'] == 1001) {
-                // Search for item by SKU (more reliable than name since SKU is unique)
-                $search_response = zoho_api_get('items?sku=' . urlencode($sku));
+                $base_name = $product->get_name();
+                $search_response = zoho_api_get('items?search_text=' . urlencode($base_name));
                 if (!is_wp_error($search_response) && isset($search_response['items']) && !empty($search_response['items'])) {
-                    // Find exact SKU match (API might return multiple)
                     foreach ($search_response['items'] as $item) {
-                        if (isset($item['sku']) && strtolower($item['sku']) === strtolower($sku)) {
-                            $zoho_item_id = $item['item_id'];
+                        $item_name = $item['name'] ?? '';
+                        // Find item with matching base name (exact match)
+                        if ($item_name === $base_name || stripos($item_name, $base_name) === 0) {
+                            $existing_sku = $item['sku'] ?? '';
+                            $existing_item_id = $item['item_id'];
                             
-                            // Update existing item - remove item_type
-                            $update_data = $item_data;
-                            unset($update_data['item_type']);
-                            $response = zoho_api_put('items/' . $zoho_item_id, $update_data);
-                            $action = 'updated';
-                            break;
+                            // If SKU is same, update existing item
+                            if (strtolower($existing_sku) === strtolower($sku)) {
+                                $update_data = $item_data;
+                                unset($update_data['item_type']);
+                                $response = zoho_api_put('items/' . $existing_item_id, $update_data);
+                                $action = 'updated';
+                                break;
+                            } else {
+                                // SKU different → Create new with "Name - SKU" (will be unique)
+                                // The item_data already has "Name - SKU", so just retry create
+                                // Zoho should accept it because name is now unique
+                                $response = zoho_api_post('items', $item_data);
+                                $action = 'created';
+                                break;
+                            }
                         }
                     }
                 }
@@ -2999,8 +3029,23 @@ function zoho_retry_sync_handler() {
             $item_data['initial_stock_rate'] = floatval($product->get_regular_price()) ?: 0;
         }
         
-        // Check if item exists in Zoho by SKU
+        // Check if item exists in Zoho by SKU first
         $zoho_item_id = zoho_get_item_by_sku($sku);
+        
+        // If not found by SKU, check by base name (to catch items with same name but different SKU)
+        if (!$zoho_item_id) {
+            $base_name = $product->get_name();
+            $search_response = zoho_api_get('items?search_text=' . urlencode($base_name));
+            if (!is_wp_error($search_response) && isset($search_response['items']) && !empty($search_response['items'])) {
+                foreach ($search_response['items'] as $item) {
+                    $item_name = $item['name'] ?? '';
+                    if (stripos($item_name, $base_name) === 0) {
+                        $zoho_item_id = $item['item_id'];
+                        break;
+                    }
+                }
+            }
+        }
         
         if ($zoho_item_id) {
             // Update existing - remove item_type as it can't be changed
@@ -3012,20 +3057,34 @@ function zoho_retry_sync_handler() {
             $response = zoho_api_post('items', $item_data);
             $action = 'created';
             
-            // If "already exists" error (Code 1001), search by SKU (unique identifier) and update
+            // If "already exists" error (Code 1001), check existing item's SKU
+            // If SKU different → Create new with "Name - SKU" (will be unique)
+            // If SKU same → Update existing
             if (isset($response['code']) && $response['code'] == 1001) {
-                // Search for item by SKU (more reliable than name since SKU is unique)
-                $search_response = zoho_api_get('items?sku=' . urlencode($sku));
+                $base_name = $product->get_name();
+                $search_response = zoho_api_get('items?search_text=' . urlencode($base_name));
                 if (!is_wp_error($search_response) && isset($search_response['items']) && !empty($search_response['items'])) {
-                    // Find exact SKU match (API might return multiple)
                     foreach ($search_response['items'] as $item) {
-                        if (isset($item['sku']) && strtolower($item['sku']) === strtolower($sku)) {
-                            $zoho_item_id = $item['item_id'];
-                            $update_data = $item_data;
-                            unset($update_data['item_type']);
-                            $response = zoho_api_put('items/' . $zoho_item_id, $update_data);
-                            $action = 'updated';
-                            break;
+                        $item_name = $item['name'] ?? '';
+                        // Find item with matching base name (exact match)
+                        if ($item_name === $base_name || stripos($item_name, $base_name) === 0) {
+                            $existing_sku = $item['sku'] ?? '';
+                            $existing_item_id = $item['item_id'];
+                            
+                            // If SKU is same, update existing item
+                            if (strtolower($existing_sku) === strtolower($sku)) {
+                                $update_data = $item_data;
+                                unset($update_data['item_type']);
+                                $response = zoho_api_put('items/' . $existing_item_id, $update_data);
+                                $action = 'updated';
+                                break;
+                            } else {
+                                // SKU different → Create new with "Name - SKU" (will be unique)
+                                // The item_data already has "Name - SKU", so just retry create
+                                $response = zoho_api_post('items', $item_data);
+                                $action = 'created';
+                                break;
+                            }
                         }
                     }
                 }
@@ -3195,7 +3254,23 @@ function zoho_retry_all_failed_handler() {
                 $item_data['initial_stock_rate'] = floatval($product->get_regular_price()) ?: 0;
             }
             
+            // Check if item exists in Zoho by SKU first
             $zoho_item_id = zoho_get_item_by_sku($sku);
+            
+            // If not found by SKU, check by base name (to catch items with same name but different SKU)
+            if (!$zoho_item_id) {
+                $base_name = $product->get_name();
+                $search_response = zoho_api_get('items?search_text=' . urlencode($base_name));
+                if (!is_wp_error($search_response) && isset($search_response['items']) && !empty($search_response['items'])) {
+                    foreach ($search_response['items'] as $item) {
+                        $item_name = $item['name'] ?? '';
+                        if (stripos($item_name, $base_name) === 0) {
+                            $zoho_item_id = $item['item_id'];
+                            break;
+                        }
+                    }
+                }
+            }
             
             if ($zoho_item_id) {
                 // Update existing - remove item_type as it can't be changed
@@ -3205,19 +3280,34 @@ function zoho_retry_all_failed_handler() {
             } else {
                 $response = zoho_api_post('items', $item_data);
                 
-                // If "already exists" error (Code 1001), search by SKU (unique identifier) and update
+                // If "already exists" error (Code 1001), check existing item's SKU
+                // If SKU different → Create new with "Name - SKU" (will be unique)
+                // If SKU same → Update existing
                 if (isset($response['code']) && $response['code'] == 1001) {
-                    // Search for item by SKU (more reliable than name since SKU is unique)
-                    $search_response = zoho_api_get('items?sku=' . urlencode($sku));
+                    // Search by base name (original product name without SKU)
+                    $base_name = $product->get_name();
+                    $search_response = zoho_api_get('items?search_text=' . urlencode($base_name));
                     if (!is_wp_error($search_response) && isset($search_response['items']) && !empty($search_response['items'])) {
-                        // Find exact SKU match (API might return multiple)
+                        // Find item with matching base name (exact match)
                         foreach ($search_response['items'] as $item) {
-                            if (isset($item['sku']) && strtolower($item['sku']) === strtolower($sku)) {
-                                $zoho_item_id = $item['item_id'];
-                                $update_data = $item_data;
-                                unset($update_data['item_type']);
-                                $response = zoho_api_put('items/' . $zoho_item_id, $update_data);
-                                break;
+                            $item_name = $item['name'] ?? '';
+                            // Check if base name matches (item might have SKU appended already or not)
+                            if ($item_name === $base_name || stripos($item_name, $base_name) === 0) {
+                                $existing_sku = $item['sku'] ?? '';
+                                $existing_item_id = $item['item_id'];
+                                
+                                // If SKU is same, update existing item
+                                if (strtolower($existing_sku) === strtolower($sku)) {
+                                    $update_data = $item_data;
+                                    unset($update_data['item_type']);
+                                    $response = zoho_api_put('items/' . $existing_item_id, $update_data);
+                                    break;
+                                } else {
+                                    // SKU different → Create new with "Name - SKU" (will be unique)
+                                    // The item_data already has "Name - SKU", so just retry create
+                                    $response = zoho_api_post('items', $item_data);
+                                    break;
+                                }
                             }
                         }
                     }
