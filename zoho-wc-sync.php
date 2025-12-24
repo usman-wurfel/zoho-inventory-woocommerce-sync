@@ -1903,12 +1903,18 @@ function zoho_sync_woo_to_zoho($offset, $total, $synced, $created, $updated) {
         $product = wc_get_product($product_id);
         if (!$product) {
             $batch_pending_skus[] = array('sku' => $product_id, 'reason' => 'Product not found');
+            // Log the failure
+            zoho_add_detailed_log('item', 'product', $product_id, 'items-inventory', '', '{}', json_encode(array('error' => 'Product not found in WooCommerce')));
+            $processed++;
             continue;
         }
         
         $sku = $product->get_sku();
         if (empty($sku)) {
             $batch_pending_skus[] = array('sku' => 'ID:' . $product_id, 'reason' => 'No SKU - ' . $product->get_name());
+            // Log the failure
+            zoho_add_detailed_log('item', 'product', $product_id, 'items-inventory', '', json_encode(array('name' => $product->get_name())), json_encode(array('error' => 'Product has no SKU')));
+            $processed++;
             continue;
         }
         
@@ -1925,9 +1931,11 @@ function zoho_sync_woo_to_zoho($offset, $total, $synced, $created, $updated) {
             'item_type' => $item_type,
         );
         
-        // Add stock if managing stock (only for inventory items)
-        if ($product->get_manage_stock() && $item_type === 'inventory') {
-            $item_data['initial_stock'] = $product->get_stock_quantity() ?: 0;
+        // Add stock for inventory items (null/empty/"-" = 0)
+        if ($item_type === 'inventory') {
+            $stock = $product->get_stock_quantity();
+            // Handle null, empty, "-" or any non-numeric as 0
+            $item_data['initial_stock'] = (is_numeric($stock) && $stock !== '') ? intval($stock) : 0;
             $item_data['initial_stock_rate'] = floatval($product->get_regular_price()) ?: 0;
         }
         
@@ -2946,13 +2954,21 @@ function zoho_retry_sync_handler() {
         // Determine item type: service (virtual/downloadable/no stock) or inventory (has stock)
         $is_service = $product->is_virtual() || $product->is_downloadable() || !$product->get_manage_stock();
         
+        $item_type = $is_service ? 'service' : 'inventory';
         $item_data = array(
             'name' => $product->get_name(),
             'sku' => $sku,
             'rate' => floatval($product->get_regular_price()) ?: 0,
             'description' => wp_strip_all_tags($product->get_description()),
-            'item_type' => $is_service ? 'service' : 'inventory',
+            'item_type' => $item_type,
         );
+        
+        // Add stock for inventory items (null/empty/"-" = 0)
+        if ($item_type === 'inventory') {
+            $stock = $product->get_stock_quantity();
+            $item_data['initial_stock'] = (is_numeric($stock) && $stock !== '') ? intval($stock) : 0;
+            $item_data['initial_stock_rate'] = floatval($product->get_regular_price()) ?: 0;
+        }
         
         // Check if item exists in Zoho by SKU
         $zoho_item_id = zoho_get_item_by_sku($sku);
@@ -3112,13 +3128,21 @@ function zoho_retry_all_failed_handler() {
             // Determine item type: service (virtual/downloadable/no stock) or inventory (has stock)
             $is_service = $product->is_virtual() || $product->is_downloadable() || !$product->get_manage_stock();
             
+            $item_type = $is_service ? 'service' : 'inventory';
             $item_data = array(
                 'name' => $product->get_name(),
                 'sku' => $sku,
                 'rate' => floatval($product->get_regular_price()) ?: 0,
                 'description' => wp_strip_all_tags($product->get_description()),
-                'item_type' => $is_service ? 'service' : 'inventory',
+                'item_type' => $item_type,
             );
+            
+            // Add stock for inventory items (null/empty/"-" = 0)
+            if ($item_type === 'inventory') {
+                $stock = $product->get_stock_quantity();
+                $item_data['initial_stock'] = (is_numeric($stock) && $stock !== '') ? intval($stock) : 0;
+                $item_data['initial_stock_rate'] = floatval($product->get_regular_price()) ?: 0;
+            }
             
             $zoho_item_id = zoho_get_item_by_sku($sku);
             
