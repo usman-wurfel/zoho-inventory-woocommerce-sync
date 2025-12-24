@@ -350,20 +350,35 @@ function zoho_dashboard_page() {
         }
     }
 
-    // Get sync statistics from detailed logs
+    // Get sync statistics from product/customer meta (unique Zoho IDs)
+    global $wpdb;
+    
+    // Count unique products linked to Zoho (have _zoho_item_id)
+    $items_linked = $wpdb->get_var("
+        SELECT COUNT(DISTINCT meta_value) FROM {$wpdb->postmeta} 
+        WHERE meta_key = '_zoho_item_id' AND meta_value != ''
+    ");
+    $products_linked = $wpdb->get_var("
+        SELECT COUNT(*) FROM {$wpdb->postmeta} 
+        WHERE meta_key = '_zoho_item_id' AND meta_value != ''
+    ");
+    
+    // Count unique contacts linked to Zoho (have _zoho_contact_id)
+    $contacts_linked = $wpdb->get_var("
+        SELECT COUNT(DISTINCT meta_value) FROM {$wpdb->usermeta} 
+        WHERE meta_key = '_zoho_contact_id' AND meta_value != ''
+    ");
+    $customers_linked = $wpdb->get_var("
+        SELECT COUNT(*) FROM {$wpdb->usermeta} 
+        WHERE meta_key = '_zoho_contact_id' AND meta_value != ''
+    ");
+    
+    // Get invoices count from logs (no meta tracking for invoices yet)
     $detailed_logs = get_option('zoho_detailed_logs', []);
-    
-    // Count successful syncs by type
-    $items_synced = 0;
     $invoices_synced = 0;
-    $contacts_synced = 0;
-    
     foreach ($detailed_logs as $log) {
-        if (zoho_is_log_successful($log)) {
-            $type = $log['type'] ?? '';
-            if ($type === 'item') $items_synced++;
-            elseif ($type === 'invoice') $invoices_synced++;
-            elseif ($type === 'contact') $contacts_synced++;
+        if (zoho_is_log_successful($log) && ($log['type'] ?? '') === 'invoice') {
+            $invoices_synced++;
         }
     }
     
@@ -413,9 +428,9 @@ function zoho_dashboard_page() {
         <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 20px; margin-bottom: 20px;">
             <!-- Items Synced Card -->
             <div class="zoho-stat-card">
-                <h3 class="zoho-stat-label">Items Synced</h3>
-                <div class="zoho-stat-number"><?php echo number_format($items_synced); ?></div>
-                <div style="font-size: 12px; color: #666; margin-top: 5px;">of <?php echo number_format($published_products); ?> products</div>
+                <h3 class="zoho-stat-label">Zoho Items Linked</h3>
+                <div class="zoho-stat-number"><?php echo number_format($items_linked ?: 0); ?></div>
+                <div style="font-size: 12px; color: #666; margin-top: 5px;"><?php echo number_format($products_linked ?: 0); ?> of <?php echo number_format($published_products); ?> products linked</div>
             </div>
             
             <!-- Invoices Synced Card -->
@@ -427,9 +442,9 @@ function zoho_dashboard_page() {
             
             <!-- Contacts Synced Card -->
             <div class="zoho-stat-card">
-                <h3 class="zoho-stat-label">Contacts Synced</h3>
-                <div class="zoho-stat-number"><?php echo number_format($contacts_synced); ?></div>
-                <div style="font-size: 12px; color: #666; margin-top: 5px;">of <?php echo number_format($total_customers); ?> customers</div>
+                <h3 class="zoho-stat-label">Zoho Contacts Linked</h3>
+                <div class="zoho-stat-number"><?php echo number_format($contacts_linked ?: 0); ?></div>
+                <div style="font-size: 12px; color: #666; margin-top: 5px;"><?php echo number_format($customers_linked ?: 0); ?> of <?php echo number_format($total_customers); ?> customers linked</div>
             </div>
         </div>
         
@@ -1949,10 +1964,12 @@ function zoho_sync_woo_to_zoho($offset, $total, $synced, $created, $updated) {
             }
         }
         
-        // Log the sync
+        // Log the sync and save Zoho Item ID to product
         $zoho_object_id = '';
         if (isset($response['item']['item_id'])) {
             $zoho_object_id = $response['item']['item_id'];
+            // Save Zoho Item ID to product meta for tracking
+            update_post_meta($product_id, '_zoho_item_id', $zoho_object_id);
         }
         
         zoho_add_detailed_log(
