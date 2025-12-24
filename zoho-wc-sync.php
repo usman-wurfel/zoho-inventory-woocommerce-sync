@@ -1934,8 +1934,9 @@ function zoho_sync_woo_to_zoho($offset, $total, $synced, $created, $updated) {
         // Add stock for inventory items (null/empty/"-" = 0)
         if ($item_type === 'inventory') {
             $stock = $product->get_stock_quantity();
-            // Handle null, empty, "-" or any non-numeric as 0
-            $item_data['initial_stock'] = (is_numeric($stock) && $stock !== '') ? intval($stock) : 0;
+            // Handle null, empty, "-", non-numeric, or negative as 0
+            $stock_value = (is_numeric($stock) && $stock !== '') ? intval($stock) : 0;
+            $item_data['initial_stock'] = max(0, $stock_value); // Never negative
             $item_data['initial_stock_rate'] = floatval($product->get_regular_price()) ?: 0;
         }
         
@@ -2966,7 +2967,8 @@ function zoho_retry_sync_handler() {
         // Add stock for inventory items (null/empty/"-" = 0)
         if ($item_type === 'inventory') {
             $stock = $product->get_stock_quantity();
-            $item_data['initial_stock'] = (is_numeric($stock) && $stock !== '') ? intval($stock) : 0;
+            $stock_value = (is_numeric($stock) && $stock !== '') ? intval($stock) : 0;
+            $item_data['initial_stock'] = max(0, $stock_value); // Never negative
             $item_data['initial_stock_rate'] = floatval($product->get_regular_price()) ?: 0;
         }
         
@@ -3140,7 +3142,8 @@ function zoho_retry_all_failed_handler() {
             // Add stock for inventory items (null/empty/"-" = 0)
             if ($item_type === 'inventory') {
                 $stock = $product->get_stock_quantity();
-                $item_data['initial_stock'] = (is_numeric($stock) && $stock !== '') ? intval($stock) : 0;
+                $stock_value = (is_numeric($stock) && $stock !== '') ? intval($stock) : 0;
+                $item_data['initial_stock'] = max(0, $stock_value); // Never negative
                 $item_data['initial_stock_rate'] = floatval($product->get_regular_price()) ?: 0;
             }
             
