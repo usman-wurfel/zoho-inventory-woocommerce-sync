@@ -208,7 +208,8 @@ function zoho_enqueue_sync_scripts($hook) {
     
     // Load sync script on inventory sync page only (invoice/contact use inline scripts)
     if ($hook == 'zoho-sync_page_zoho-inventory-sync') {
-        wp_enqueue_script('zoho-sync-script', plugin_dir_url(__FILE__) . 'js/zoho-sync.js', array('jquery'), '1.0.0', true);
+        // Use timestamp for cache busting
+        wp_enqueue_script('zoho-sync-script', plugin_dir_url(__FILE__) . 'js/zoho-sync.js', array('jquery'), '2.0.' . time(), true);
         wp_localize_script('zoho-sync-script', 'zohoSync', array(
             'ajax_url' => admin_url('admin-ajax.php'),
             'nonce' => wp_create_nonce('zoho_sync_nonce')
