@@ -1924,10 +1924,14 @@ function zoho_sync_woo_to_zoho($offset, $total, $synced, $created, $updated) {
         $is_service = $product->is_virtual() || $product->is_downloadable() || !$product->get_manage_stock();
         $item_type = $is_service ? 'service' : 'goods';
         
-        // Only set item_type for new items, not for updates (Zoho doesn't allow changing type)
+        // Append SKU to name to ensure uniqueness in Zoho (same names can exist)
+        $item_name = $product->get_name();
+        if (!empty($sku) && strpos($item_name, ' - ' . $sku) === false) {
+            $item_name = $item_name . ' - ' . $sku;
+        }
         
         $item_data = array(
-            'name' => $product->get_name(),
+            'name' => $item_name,
             'sku' => $sku,
             'rate' => floatval($product->get_regular_price()) ?: 0,
             'description' => wp_strip_all_tags($product->get_description()),
@@ -2972,8 +2976,15 @@ function zoho_retry_sync_handler() {
         $is_service = $product->is_virtual() || $product->is_downloadable() || !$product->get_manage_stock();
         
         $item_type = $is_service ? 'service' : 'goods';
+        
+        // Append SKU to name to ensure uniqueness in Zoho (same names can exist)
+        $item_name = $product->get_name();
+        if (!empty($sku) && strpos($item_name, ' - ' . $sku) === false) {
+            $item_name = $item_name . ' - ' . $sku;
+        }
+        
         $item_data = array(
-            'name' => $product->get_name(),
+            'name' => $item_name,
             'sku' => $sku,
             'rate' => floatval($product->get_regular_price()) ?: 0,
             'description' => wp_strip_all_tags($product->get_description()),
@@ -3161,8 +3172,15 @@ function zoho_retry_all_failed_handler() {
             $is_service = $product->is_virtual() || $product->is_downloadable() || !$product->get_manage_stock();
             
             $item_type = $is_service ? 'service' : 'goods';
+            
+            // Append SKU to name to ensure uniqueness in Zoho (same names can exist)
+            $item_name = $product->get_name();
+            if (!empty($sku) && strpos($item_name, ' - ' . $sku) === false) {
+                $item_name = $item_name . ' - ' . $sku;
+            }
+            
             $item_data = array(
-                'name' => $product->get_name(),
+                'name' => $item_name,
                 'sku' => $sku,
                 'rate' => floatval($product->get_regular_price()) ?: 0,
                 'description' => wp_strip_all_tags($product->get_description()),
