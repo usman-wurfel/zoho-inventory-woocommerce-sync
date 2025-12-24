@@ -2288,7 +2288,19 @@ function zoho_sync_orders_to_invoices($offset, $total, $synced, $created, $updat
         $zoho_customer_id = zoho_get_or_create_contact($order);
         
         if (!$zoho_customer_id) {
-            $batch_failed[] = array('id' => $order_id, 'reason' => 'Failed to get/create customer');
+            $error_reason = 'Failed to get/create customer';
+            $batch_failed[] = array('id' => $order_id, 'reason' => $error_reason);
+            
+            // Log the failure
+            zoho_add_detailed_log(
+                'invoice',
+                'order',
+                $order_id,
+                'invoice',
+                '',
+                json_encode(array('order_id' => $order_id, 'customer_email' => $customer_email)),
+                json_encode(array('error' => $error_reason, 'code' => 'CUSTOMER_CREATE_FAILED'))
+            );
             continue;
         }
         
@@ -2332,7 +2344,25 @@ function zoho_sync_orders_to_invoices($offset, $total, $synced, $created, $updat
         
         // Check if we have any valid line items
         if (empty($line_items)) {
-            $batch_failed[] = array('id' => $order_id, 'reason' => 'No valid line items (products not found in Zoho)');
+            $error_reason = 'No valid line items (products not found in Zoho)';
+            $batch_failed[] = array('id' => $order_id, 'reason' => $error_reason);
+            
+            // Log the failure
+            $invoice_data = array(
+                'customer_id' => $zoho_customer_id,
+                'date' => $invoice_date,
+                'reference_number' => $reference_number,
+                'line_items' => array(), // Empty
+            );
+            zoho_add_detailed_log(
+                'invoice',
+                'order',
+                $order_id,
+                'invoice',
+                '',
+                json_encode($invoice_data),
+                json_encode(array('error' => $error_reason, 'code' => 'NO_LINE_ITEMS'))
+            );
             continue;
         }
         
@@ -2358,11 +2388,19 @@ function zoho_sync_orders_to_invoices($offset, $total, $synced, $created, $updat
             $action = 'created';
         }
         
-        // Log the sync
+        // Log the sync (always log, even on errors)
         $zoho_invoice_id = '';
         if (isset($response['invoice']['invoice_id'])) {
             $zoho_invoice_id = $response['invoice']['invoice_id'];
             update_post_meta($order_id, '_zoho_invoice_id', $zoho_invoice_id);
+        }
+        
+        // Ensure response is properly formatted for logging
+        $response_log = $response;
+        if (is_wp_error($response)) {
+            $response_log = array('error' => $response->get_error_message(), 'code' => 'WP_ERROR');
+        } elseif (!is_array($response)) {
+            $response_log = array('raw_response' => $response);
         }
         
         zoho_add_detailed_log(
@@ -2372,7 +2410,7 @@ function zoho_sync_orders_to_invoices($offset, $total, $synced, $created, $updat
             'invoice',
             $zoho_invoice_id,
             $request_data,
-            json_encode($response)
+            json_encode($response_log)
         );
         
         if (is_wp_error($response) || (isset($response['code']) && $response['code'] != 0)) {
@@ -4474,6 +4512,16 @@ function zoho_add_detailed_log($type, $woo_object, $woo_object_id, $zoho_object,
     // Keep only last 1000 logs max
     $logs = array_slice($logs, -1000);
     
-    // Save logs
-    $result = update_option('zoho_detailed_logs', $logs);
+    // Save logs (use add_option if doesn't exist, update_option if exists)
+    if (get_option('zoho_detailed_logs') === false) {
+        $result = add_option('zoho_detailed_logs', $logs);
+    } else {
+        $result = update_option('zoho_detailed_logs', $logs);
+    }
+    
+    // If save fails, try to save to a smaller array (prevent option size limit issues)
+    if ($result === false && count($logs) > 100) {
+        $logs = array_slice($logs, -100); // Keep only last 100
+        update_option('zoho_detailed_logs', $logs);
+    }
 }
