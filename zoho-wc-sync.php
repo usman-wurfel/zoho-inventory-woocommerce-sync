@@ -1968,7 +1968,13 @@ function zoho_sync_woo_to_zoho($offset, $total, $synced, $created, $updated) {
         $zoho_object_id = '';
         if (isset($response['item']['item_id'])) {
             $zoho_object_id = $response['item']['item_id'];
-            // Save Zoho Item ID to product meta for tracking
+        } elseif (!empty($zoho_item_id)) {
+            // For updates, use the ID we already found
+            $zoho_object_id = $zoho_item_id;
+        }
+        
+        // Save Zoho Item ID to product meta for tracking (if successful)
+        if (!empty($zoho_object_id) && !isset($response['error']) && (!isset($response['code']) || $response['code'] == 0)) {
             update_post_meta($product_id, '_zoho_item_id', $zoho_object_id);
         }
         
