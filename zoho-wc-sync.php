@@ -2982,6 +2982,63 @@ function zoho_sync_customers_to_contacts($offset, $total, $synced, $created, $up
             return;
         }
         
+        // Before syncing, check and fix customers with empty/invalid usernames
+        foreach ($users as $user_id) {
+            $user = get_user_by('ID', $user_id);
+            if (!$user) continue;
+            
+            $current_username = $user->user_login;
+            
+            // Check if username is empty or too short (invalid)
+            if (empty($current_username) || strlen($current_username) < 3) {
+                // Generate username from customer data
+                $first_name = get_user_meta($user_id, 'billing_first_name', true);
+                if (empty($first_name)) {
+                    $first_name = get_user_meta($user_id, 'first_name', true);
+                }
+                
+                $last_name = get_user_meta($user_id, 'billing_last_name', true);
+                if (empty($last_name)) {
+                    $last_name = get_user_meta($user_id, 'last_name', true);
+                }
+                
+                $company_name = get_user_meta($user_id, 'billing_company', true);
+                $email = $user->user_email;
+                
+                // Build username base from available data
+                $username_base = '';
+                if (!empty($first_name) || !empty($last_name)) {
+                    $username_base = sanitize_user(trim($first_name . ' ' . $last_name));
+                } elseif (!empty($company_name)) {
+                    $username_base = sanitize_user($company_name);
+                } elseif (!empty($email)) {
+                    $username_base = explode('@', $email)[0];
+                }
+                
+                if (empty($username_base)) {
+                    $username_base = 'customer';
+                }
+                
+                // Generate username: base + user ID (ensures uniqueness)
+                $new_username = $username_base . '-' . $user_id;
+                $new_username = sanitize_user($new_username);
+                
+                // Ensure username is unique (in case base + ID already exists)
+                $original_username = $new_username;
+                $counter = 1;
+                while (username_exists($new_username)) {
+                    $new_username = $original_username . $counter;
+                    $counter++;
+                }
+                
+                // Update username
+                wp_update_user(array(
+                    'ID' => $user_id,
+                    'user_login' => $new_username
+                ));
+            }
+        }
+        
         set_transient('zoho_contact_sync_customers', $users, 600);
         set_transient('zoho_contact_sync_stats', array('synced' => 0, 'created' => 0, 'updated' => 0, 'failed' => array()), 600);
     } else {
