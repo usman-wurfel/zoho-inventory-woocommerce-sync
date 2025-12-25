@@ -2078,10 +2078,11 @@ function zoho_sync_woo_to_zoho($offset, $total, $synced, $created, $updated) {
         }
         
         // Prepare item data for Zoho
-        // Determine item type: service (virtual/downloadable/no stock) or goods (has stock)
-        // Zoho valid values: goods, service
+        // Determine product_type: service (virtual/downloadable/no stock) or goods (has stock)
+        // Zoho valid values for product_type: goods, service
+        // Zoho valid values for item_type: inventory, sales, purchases, sales_and_purchases
         $is_service = $product->is_virtual() || $product->is_downloadable() || !$product->get_manage_stock();
-        $item_type = $is_service ? 'service' : 'goods';
+        $product_type = $is_service ? 'service' : 'goods';
         
         // Use original product name
         $item_name = $product->get_name();
@@ -2091,21 +2092,25 @@ function zoho_sync_woo_to_zoho($offset, $total, $synced, $created, $updated) {
             'sku' => $sku,
             'rate' => floatval($product->get_regular_price()) ?: 0,
             'description' => wp_strip_all_tags($product->get_description()),
-            'item_type' => $item_type,
+            'product_type' => $product_type,
         );
         
+        // Set item_type based on product_type
+        // For goods (with stock), use 'inventory'. For services, use 'sales'
+        $item_data['item_type'] = ($product_type === 'goods') ? 'inventory' : 'sales';
+        
         // Add stock and inventory settings for goods items (null/empty/"-" = 0)
-        if ($item_type === 'goods') {
+        if ($product_type === 'goods') {
             $stock = $product->get_stock_quantity();
             // Handle null, empty, "-", non-numeric, or negative as 0
             $stock_value = (is_numeric($stock) && $stock !== '') ? intval($stock) : 0;
             $item_data['initial_stock'] = max(0, $stock_value); // Never negative
             $item_data['initial_stock_rate'] = floatval($product->get_regular_price()) ?: 0;
             
-            // Add Inventory Account ID (Asset Inventory account)
+            // Add Inventory Account ID (Asset Inventory account) - must be long integer
             $inventory_account_id = get_option('zoho_inventory_account_id', '');
             if (!empty($inventory_account_id)) {
-                $item_data['inventory_account_id'] = $inventory_account_id;
+                $item_data['inventory_account_id'] = intval($inventory_account_id);
             }
             
             // Add Inventory Valuation Method (FIFO, LIFO, Weighted Average, etc.)
@@ -2127,8 +2132,11 @@ function zoho_sync_woo_to_zoho($offset, $total, $synced, $created, $updated) {
             // Update existing item (found by SKU) - remove fields that can't be changed/updated
             $update_data = $item_data;
             unset($update_data['item_type']); // Can't change item_type on update
+            unset($update_data['product_type']); // Can't change product_type on update
             unset($update_data['initial_stock']); // Can only set on create, not update
             unset($update_data['initial_stock_rate']); // Can only set on create, not update
+            unset($update_data['inventory_account_id']); // Can only set on create, not update
+            unset($update_data['inventory_valuation_method']); // Can only set on create, not update
             $response = zoho_api_put('items/' . $zoho_item_id, $update_data);
             $action = 'updated';
         } else {
@@ -2136,11 +2144,14 @@ function zoho_sync_woo_to_zoho($offset, $total, $synced, $created, $updated) {
             $response = zoho_api_post('items', $item_data);
             $action = 'created';
             
-            // If "Invalid item_type" error (Code 2), retry without item_type
-            if (isset($response['code']) && $response['code'] == 2 && strpos(strtolower($response['message'] ?? ''), 'item_type') !== false) {
-                $item_data_no_type = $item_data;
-                unset($item_data_no_type['item_type']);
-                $response = zoho_api_post('items', $item_data_no_type);
+            // If "Invalid item_type" or "product_type" error (Code 2), retry without these fields
+            if (isset($response['code']) && $response['code'] == 2 && 
+                (strpos(strtolower($response['message'] ?? ''), 'item_type') !== false || 
+                 strpos(strtolower($response['message'] ?? ''), 'product_type') !== false)) {
+                $item_data_fallback = $item_data;
+                unset($item_data_fallback['item_type']);
+                unset($item_data_fallback['product_type']);
+                $response = zoho_api_post('items', $item_data_fallback);
                 $action = 'created';
             }
         }
@@ -3494,10 +3505,11 @@ function zoho_retry_sync_handler() {
         }
         
         $sku = $product->get_sku();
-        // Determine item type: service (virtual/downloadable/no stock) or goods (has stock)
+        // Determine product_type: service (virtual/downloadable/no stock) or goods (has stock)
+        // Zoho valid values for product_type: goods, service
+        // Zoho valid values for item_type: inventory, sales, purchases, sales_and_purchases
         $is_service = $product->is_virtual() || $product->is_downloadable() || !$product->get_manage_stock();
-        
-        $item_type = $is_service ? 'service' : 'goods';
+        $product_type = $is_service ? 'service' : 'goods';
         
         // Use original product name
         $item_name = $product->get_name();
@@ -3507,20 +3519,24 @@ function zoho_retry_sync_handler() {
             'sku' => $sku,
             'rate' => floatval($product->get_regular_price()) ?: 0,
             'description' => wp_strip_all_tags($product->get_description()),
-            'item_type' => $item_type,
+            'product_type' => $product_type,
         );
         
+        // Set item_type based on product_type
+        // For goods (with stock), use 'inventory'. For services, use 'sales'
+        $item_data['item_type'] = ($product_type === 'goods') ? 'inventory' : 'sales';
+        
         // Add stock and inventory settings for goods items (null/empty/"-" = 0)
-        if ($item_type === 'goods') {
+        if ($product_type === 'goods') {
             $stock = $product->get_stock_quantity();
             $stock_value = (is_numeric($stock) && $stock !== '') ? intval($stock) : 0;
             $item_data['initial_stock'] = max(0, $stock_value); // Never negative
             $item_data['initial_stock_rate'] = floatval($product->get_regular_price()) ?: 0;
             
-            // Add Inventory Account ID (Asset Inventory account)
+            // Add Inventory Account ID (Asset Inventory account) - must be long integer
             $inventory_account_id = get_option('zoho_inventory_account_id', '');
             if (!empty($inventory_account_id)) {
-                $item_data['inventory_account_id'] = $inventory_account_id;
+                $item_data['inventory_account_id'] = intval($inventory_account_id);
             }
             
             // Add Inventory Valuation Method (FIFO, LIFO, Weighted Average, etc.)
@@ -3540,8 +3556,11 @@ function zoho_retry_sync_handler() {
             // Update existing item (found by SKU) - remove fields that can't be changed/updated
             $update_data = $item_data;
             unset($update_data['item_type']); // Can't change item_type on update
+            unset($update_data['product_type']); // Can't change product_type on update
             unset($update_data['initial_stock']); // Can only set on create, not update
             unset($update_data['initial_stock_rate']); // Can only set on create, not update
+            unset($update_data['inventory_account_id']); // Can only set on create, not update
+            unset($update_data['inventory_valuation_method']); // Can only set on create, not update
             $response = zoho_api_put('items/' . $zoho_item_id, $update_data);
             $action = 'updated';
         } else {
@@ -3549,11 +3568,14 @@ function zoho_retry_sync_handler() {
             $response = zoho_api_post('items', $item_data);
             $action = 'created';
             
-            // If "Invalid item_type" error (Code 2), retry without item_type
-            if (isset($response['code']) && $response['code'] == 2 && strpos(strtolower($response['message'] ?? ''), 'item_type') !== false) {
-                $item_data_no_type = $item_data;
-                unset($item_data_no_type['item_type']);
-                $response = zoho_api_post('items', $item_data_no_type);
+            // If "Invalid item_type" or "product_type" error (Code 2), retry without these fields
+            if (isset($response['code']) && $response['code'] == 2 && 
+                (strpos(strtolower($response['message'] ?? ''), 'item_type') !== false || 
+                 strpos(strtolower($response['message'] ?? ''), 'product_type') !== false)) {
+                $item_data_fallback = $item_data;
+                unset($item_data_fallback['item_type']);
+                unset($item_data_fallback['product_type']);
+                $response = zoho_api_post('items', $item_data_fallback);
                 $action = 'created';
             }
         }
@@ -3686,12 +3708,13 @@ function zoho_retry_all_failed_handler() {
                 continue;
             }
             
-            // Determine item type: service (virtual/downloadable/no stock) or goods (has stock)
+            // Determine product_type: service (virtual/downloadable/no stock) or goods (has stock)
+            // Zoho valid values for product_type: goods, service
+            // Zoho valid values for item_type: inventory, sales, purchases, sales_and_purchases
             $is_service = $product->is_virtual() || $product->is_downloadable() || !$product->get_manage_stock();
+            $product_type = $is_service ? 'service' : 'goods';
             
-            $item_type = $is_service ? 'service' : 'goods';
-            
-            // Use original product name (only append SKU if conflict occurs - Code 1001)
+            // Use original product name
             $item_name = $product->get_name();
             
             $item_data = array(
@@ -3699,20 +3722,24 @@ function zoho_retry_all_failed_handler() {
                 'sku' => $sku,
                 'rate' => floatval($product->get_regular_price()) ?: 0,
                 'description' => wp_strip_all_tags($product->get_description()),
-                'item_type' => $item_type,
+                'product_type' => $product_type,
             );
             
+            // Set item_type based on product_type
+            // For goods (with stock), use 'inventory'. For services, use 'sales'
+            $item_data['item_type'] = ($product_type === 'goods') ? 'inventory' : 'sales';
+            
             // Add stock and inventory settings for goods items (null/empty/"-" = 0)
-            if ($item_type === 'goods') {
+            if ($product_type === 'goods') {
                 $stock = $product->get_stock_quantity();
                 $stock_value = (is_numeric($stock) && $stock !== '') ? intval($stock) : 0;
                 $item_data['initial_stock'] = max(0, $stock_value); // Never negative
                 $item_data['initial_stock_rate'] = floatval($product->get_regular_price()) ?: 0;
                 
-                // Add Inventory Account ID (Asset Inventory account)
+                // Add Inventory Account ID (Asset Inventory account) - must be long integer
                 $inventory_account_id = get_option('zoho_inventory_account_id', '');
                 if (!empty($inventory_account_id)) {
-                    $item_data['inventory_account_id'] = $inventory_account_id;
+                    $item_data['inventory_account_id'] = intval($inventory_account_id);
                 }
                 
                 // Add Inventory Valuation Method (FIFO, LIFO, Weighted Average, etc.)
@@ -3729,19 +3756,27 @@ function zoho_retry_all_failed_handler() {
             // If SKU doesn't match, we'll create new item
             
             if ($zoho_item_id) {
-                // Update existing item (found by SKU) - remove item_type as it can't be changed
+                // Update existing item (found by SKU) - remove fields that can't be changed/updated
                 $update_data = $item_data;
-                unset($update_data['item_type']);
+                unset($update_data['item_type']); // Can't change item_type on update
+                unset($update_data['product_type']); // Can't change product_type on update
+                unset($update_data['initial_stock']); // Can only set on create, not update
+                unset($update_data['initial_stock_rate']); // Can only set on create, not update
+                unset($update_data['inventory_account_id']); // Can only set on create, not update
+                unset($update_data['inventory_valuation_method']); // Can only set on create, not update
                 $response = zoho_api_put('items/' . $zoho_item_id, $update_data);
             } else {
                 // Create new item with original name
                 $response = zoho_api_post('items', $item_data);
                 
-                // If "Invalid item_type" error (Code 2), retry without item_type
-                if (isset($response['code']) && $response['code'] == 2 && strpos(strtolower($response['message'] ?? ''), 'item_type') !== false) {
-                    $item_data_no_type = $item_data;
-                    unset($item_data_no_type['item_type']);
-                    $response = zoho_api_post('items', $item_data_no_type);
+                // If "Invalid item_type" or "product_type" error (Code 2), retry without these fields
+                if (isset($response['code']) && $response['code'] == 2 && 
+                    (strpos(strtolower($response['message'] ?? ''), 'item_type') !== false || 
+                     strpos(strtolower($response['message'] ?? ''), 'product_type') !== false)) {
+                    $item_data_fallback = $item_data;
+                    unset($item_data_fallback['item_type']);
+                    unset($item_data_fallback['product_type']);
+                    $response = zoho_api_post('items', $item_data_fallback);
                 }
             }
             
