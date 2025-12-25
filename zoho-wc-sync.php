@@ -2978,21 +2978,24 @@ function zoho_sync_customers_to_contacts($offset, $total, $synced, $created, $up
         $registered_count = $wp_user_query->get_total();
         
         // Get guest customers from orders and create WordPress users for them
+        // Guest customers are orders where customer_id = 0 or _customer_user = 0
         global $wpdb;
+        
+        // Simple and reliable query: Get orders with customer_user = 0, group by email
         $guest_customers_query = "
-            SELECT DISTINCT 
+            SELECT 
                 pm_email.meta_value as email,
-                MAX(pm_first.meta_value) as first_name,
-                MAX(pm_last.meta_value) as last_name,
-                MAX(pm_company.meta_value) as company
+                MAX(COALESCE(pm_first.meta_value, '')) as first_name,
+                MAX(COALESCE(pm_last.meta_value, '')) as last_name,
+                MAX(COALESCE(pm_company.meta_value, '')) as company
             FROM {$wpdb->posts} p
-            INNER JOIN {$wpdb->postmeta} pm_customer ON p.ID = pm_customer.post_id AND pm_customer.meta_key = '_customer_user'
             INNER JOIN {$wpdb->postmeta} pm_email ON p.ID = pm_email.post_id AND pm_email.meta_key = '_billing_email'
+            LEFT JOIN {$wpdb->postmeta} pm_customer ON p.ID = pm_customer.post_id AND pm_customer.meta_key = '_customer_user'
             LEFT JOIN {$wpdb->postmeta} pm_first ON p.ID = pm_first.post_id AND pm_first.meta_key = '_billing_first_name'
             LEFT JOIN {$wpdb->postmeta} pm_last ON p.ID = pm_last.post_id AND pm_last.meta_key = '_billing_last_name'
             LEFT JOIN {$wpdb->postmeta} pm_company ON p.ID = pm_company.post_id AND pm_company.meta_key = '_billing_company'
             WHERE p.post_type = 'shop_order'
-            AND p.post_status NOT IN ('trash', 'auto-draft')
+            AND p.post_status NOT IN ('trash', 'auto-draft', 'wc-cancelled', 'wc-refunded')
             AND (pm_customer.meta_value = '0' OR pm_customer.meta_value = '' OR pm_customer.meta_value IS NULL)
             AND pm_email.meta_value != ''
             AND pm_email.meta_value IS NOT NULL
