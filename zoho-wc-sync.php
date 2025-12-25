@@ -2975,52 +2975,167 @@ function zoho_sync_customers_to_contacts($offset, $total, $synced, $created, $up
         // This will get ALL WordPress users with 'customer' role, same as WooCommerce admin
         $wp_user_query = new WP_User_Query($wp_query_args);
         $users = $wp_user_query->get_results();
-        $total = $wp_user_query->get_total(); // Use get_total() instead of count() for accurate count
+        $registered_count = $wp_user_query->get_total();
+        
+        // Also get guest customers from orders (customers who don't have WordPress user accounts)
+        global $wpdb;
+        
+        // Get unique guest customer emails from orders
+        // Guest customers have customer_id = 0 or empty
+        $guest_customers_query = "
+            SELECT DISTINCT 
+                pm_email.meta_value as email,
+                MAX(pm_first.meta_value) as first_name,
+                MAX(pm_last.meta_value) as last_name,
+                MAX(pm_company.meta_value) as company
+            FROM {$wpdb->posts} p
+            INNER JOIN {$wpdb->postmeta} pm_customer ON p.ID = pm_customer.post_id AND pm_customer.meta_key = '_customer_user'
+            INNER JOIN {$wpdb->postmeta} pm_email ON p.ID = pm_email.post_id AND pm_email.meta_key = '_billing_email'
+            LEFT JOIN {$wpdb->postmeta} pm_first ON p.ID = pm_first.post_id AND pm_first.meta_key = '_billing_first_name'
+            LEFT JOIN {$wpdb->postmeta} pm_last ON p.ID = pm_last.post_id AND pm_last.meta_key = '_billing_last_name'
+            LEFT JOIN {$wpdb->postmeta} pm_company ON p.ID = pm_company.post_id AND pm_company.meta_key = '_billing_company'
+            WHERE p.post_type = 'shop_order'
+            AND p.post_status NOT IN ('trash', 'auto-draft', 'wc-cancelled', 'wc-refunded')
+            AND (pm_customer.meta_value = '0' OR pm_customer.meta_value = '' OR pm_customer.meta_value IS NULL)
+            AND pm_email.meta_value != ''
+            AND pm_email.meta_value IS NOT NULL
+        ";
+        
+        // Apply date filters to guest customers query if provided
+        if (!empty($from_date)) {
+            $guest_customers_query .= $wpdb->prepare(" AND p.post_date >= %s", $from_date . ' 00:00:00');
+        }
+        if (!empty($to_date)) {
+            $guest_customers_query .= $wpdb->prepare(" AND p.post_date <= %s", $to_date . ' 23:59:59');
+        }
+        
+        $guest_customers_query .= " GROUP BY pm_email.meta_value";
+        
+        $guest_customers = $wpdb->get_results($guest_customers_query);
+        
+        // Convert registered users to IDs array
+        $customer_data = array();
+        
+        // Add registered customers (user IDs)
+        foreach ($users as $user_id) {
+            $customer_data[] = array('type' => 'registered', 'user_id' => $user_id);
+        }
+        
+        // Add guest customers (negative IDs to distinguish them, with email and name data)
+        foreach ($guest_customers as $index => $guest) {
+            if (!empty($guest->email)) {
+                $customer_data[] = array(
+                    'type' => 'guest',
+                    'user_id' => 0,
+                    'email' => $guest->email,
+                    'first_name' => $guest->first_name ?: '',
+                    'last_name' => $guest->last_name ?: '',
+                    'company' => $guest->company ?: ''
+                );
+            }
+        }
+        
+        $total = count($customer_data);
         
         if ($total == 0) {
             wp_send_json_error('No customers found in WooCommerce');
             return;
         }
         
-        set_transient('zoho_contact_sync_customers', $users, 600);
+        set_transient('zoho_contact_sync_customers', $customer_data, 600);
         set_transient('zoho_contact_sync_stats', array('synced' => 0, 'created' => 0, 'updated' => 0, 'failed' => array()), 600);
     } else {
-        $users = get_transient('zoho_contact_sync_customers');
-        if (!$users) {
+        $customer_data = get_transient('zoho_contact_sync_customers');
+        if (!$customer_data) {
             wp_send_json_error('Sync session expired. Please try again.');
             return;
         }
-        $total = count($users);
+        $total = count($customer_data);
     }
     
     // Process batch (20 customers per batch - balanced for API rate limits)
     $batch_size = 20;
-    $batch_ids = array_slice($users, $offset, $batch_size);
+    $batch_customers = array_slice($customer_data, $offset, $batch_size);
     $batch_created = 0;
     $batch_updated = 0;
     $batch_failed = array();
     
-    foreach ($batch_ids as $user_id) {
-        $customer = new WC_Customer($user_id);
-        
-        // Build contact data from field mappings
-        $contact_data = zoho_build_contact_data_from_customer($customer);
-        
-        // Ensure contact_name always exists (required field) - use user ID as fallback
-        if (empty($contact_data['contact_name'])) {
-            $contact_data['contact_name'] = 'Customer ' . $user_id;
+    foreach ($batch_customers as $customer_info) {
+        // Handle both registered and guest customers
+        if ($customer_info['type'] === 'guest') {
+            // Guest customer - build contact data from order data
+            $email = $customer_info['email'];
+            $first_name = $customer_info['first_name'] ?? '';
+            $last_name = $customer_info['last_name'] ?? '';
+            $company = $customer_info['company'] ?? '';
+            
+            // Build contact_name
+            $contact_name = trim($first_name . ' ' . $last_name);
+            if (empty($contact_name) || $contact_name == ' ') {
+                if (!empty($company)) {
+                    $contact_name = $company;
+                } else {
+                    $email_base = explode('@', $email)[0];
+                    $contact_name = $email_base ?: 'Guest Customer';
+                }
+            }
+            
+            $contact_data = array(
+                'contact_name' => $contact_name,
+                'contact_type' => 'customer',
+                'customer_sub_type' => 'individual',
+                'email' => $email,
+            );
+            
+            if (!empty($first_name)) {
+                $contact_data['first_name'] = $first_name;
+            }
+            if (!empty($last_name)) {
+                $contact_data['last_name'] = $last_name;
+            }
+            if (!empty($company)) {
+                $contact_data['company_name'] = $company;
+            }
+            
+            $user_id = 0; // Guest customers don't have user IDs
+            $customer_email = $email;
+            
+            // For guest customers, check by email only (no user_meta)
+            $existing_contact_id = '';
+        } else {
+            // Registered customer - use existing logic
+            $user_id = $customer_info['user_id'];
+            $customer = new WC_Customer($user_id);
+            
+            // Build contact data from field mappings
+            $contact_data = zoho_build_contact_data_from_customer($customer);
+            
+            // Ensure contact_name always exists (required field) - use user ID as fallback
+            if (empty($contact_data['contact_name'])) {
+                $contact_data['contact_name'] = 'Customer ' . $user_id;
+            }
+            
+            $customer_email = $customer->get_email();
+            
+            // Check if contact exists - first by saved ID, then by email search in Zoho
+            $existing_contact_id = get_user_meta($user_id, '_zoho_contact_id', true);
+            
+            // If no saved ID, search Zoho by email
+            if (empty($existing_contact_id) && !empty($contact_data['email'])) {
+                $search_response = zoho_api_get('contacts?email=' . urlencode($contact_data['email']));
+                if (!is_wp_error($search_response) && isset($search_response['contacts']) && !empty($search_response['contacts'])) {
+                    $existing_contact_id = $search_response['contacts'][0]['contact_id'];
+                    // Save it for future
+                    update_user_meta($user_id, '_zoho_contact_id', $existing_contact_id);
+                }
+            }
         }
         
-        // Check if contact exists - first by saved ID, then by email search in Zoho
-        $existing_contact_id = get_user_meta($user_id, '_zoho_contact_id', true);
-        
-        // If no saved ID, search Zoho by email
-        if (empty($existing_contact_id) && !empty($contact_data['email'])) {
+        // For guest customers, always search by email since we can't store _zoho_contact_id
+        if ($user_id == 0 && !empty($contact_data['email'])) {
             $search_response = zoho_api_get('contacts?email=' . urlencode($contact_data['email']));
             if (!is_wp_error($search_response) && isset($search_response['contacts']) && !empty($search_response['contacts'])) {
                 $existing_contact_id = $search_response['contacts'][0]['contact_id'];
-                // Save it for future
-                update_user_meta($user_id, '_zoho_contact_id', $existing_contact_id);
             }
         }
         
@@ -3139,18 +3254,25 @@ function zoho_sync_customers_to_contacts($offset, $total, $synced, $created, $up
             }
         }
         
-        
         $zoho_contact_id = '';
         if (isset($response['contact']['contact_id'])) {
             $zoho_contact_id = $response['contact']['contact_id'];
-            update_user_meta($user_id, '_zoho_contact_id', $zoho_contact_id);
+            // Only save for registered customers (guest customers can't store user_meta)
+            if ($user_id > 0) {
+                update_user_meta($user_id, '_zoho_contact_id', $zoho_contact_id);
+            }
         } elseif (!empty($existing_contact_id)) {
             // If update was successful, use the existing ID
             $zoho_contact_id = $existing_contact_id;
-            update_user_meta($user_id, '_zoho_contact_id', $zoho_contact_id);
+            // Only save for registered customers
+            if ($user_id > 0) {
+                update_user_meta($user_id, '_zoho_contact_id', $zoho_contact_id);
+            }
         }
         
-        zoho_add_detailed_log('contact', 'customer', $user_id, 'contact', $zoho_contact_id, $request_data, json_encode($response));
+        // For logging, use email as identifier for guest customers
+        $log_id = $user_id > 0 ? $user_id : $customer_email;
+        zoho_add_detailed_log('contact', $user_id > 0 ? 'customer' : 'guest', $log_id, 'contact', $zoho_contact_id, $request_data, json_encode($response));
         
         // Check for errors - handle both WP_Error and API error responses
         // Note: code 0 means success, or if contact_id exists in response, it's successful
