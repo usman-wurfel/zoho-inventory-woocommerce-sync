@@ -2473,18 +2473,20 @@ function zoho_sync_orders_to_invoices($offset, $total, $synced, $created, $updat
             // Build line item (no verification API call to avoid rate limits)
             $quantity = absint($item->get_quantity()); // Ensure integer
             $item_total = floatval($item->get_total()); // Ensure float
+            
+            // Calculate rate from order item total
             $rate = $quantity > 0 ? floatval($item_total / $quantity) : 0.0;
             
-            // Ensure rate is at least 0.01 if item has a total
-            if ($item_total > 0 && $rate < 0.01) {
-                $rate = floatval($item_total);
-            }
-            
+            // Only include rate if it's valid and positive
+            // If rate is 0 or invalid, Zoho will use the item's default rate
             $line_item = array(
-                'item_id' => (string)$zoho_item_id, // Ensure string format
+                'item_id' => $zoho_item_id, // Keep as is (Zoho accepts both string and numeric)
                 'quantity' => $quantity,
-                'rate' => round($rate, 2), // Round to 2 decimal places
             );
+            
+            // Always include rate (Zoho requires it for line items)
+            // Use order's actual rate (even if 1, it's what customer paid)
+            $line_item['rate'] = max(0.01, round($rate, 2)); // Minimum 0.01, round to 2 decimal places
             
             // Ensure name is never added
             unset($line_item['name']);
@@ -2578,12 +2580,18 @@ function zoho_sync_orders_to_invoices($offset, $total, $synced, $created, $updat
             // Add detailed info for Code 1002 (Resource does not exist)
             if ($error_code == 1002) {
                 $item_ids = array();
+                $item_rates = array();
                 foreach ($line_items as $li) {
                     if (isset($li['item_id'])) {
                         $item_ids[] = $li['item_id'];
+                        $item_rates[] = isset($li['rate']) ? $li['rate'] : 'no rate';
                     }
                 }
-                $error_msg .= ' | Customer ID: ' . $zoho_customer_id . ' | Item IDs: ' . implode(', ', $item_ids);
+                $error_msg .= ' | Customer ID: ' . $zoho_customer_id . ' | Item IDs: ' . implode(', ', $item_ids) . ' | Rates: ' . implode(', ', $item_rates);
+                
+                // Log full request for debugging
+                error_log('Zoho Invoice Code 1002 - Full Request: ' . $request_data);
+                error_log('Zoho Invoice Code 1002 - Full Response: ' . json_encode($response));
             }
             
             $batch_failed[] = array('id' => $order_id, 'reason' => $error_msg);
