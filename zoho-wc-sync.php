@@ -2983,6 +2983,7 @@ function zoho_sync_customers_to_contacts($offset, $total, $synced, $created, $up
         }
         
         // Before syncing, check and fix customers with empty/invalid usernames
+        global $wpdb;
         foreach ($users as $user_id) {
             $user = get_user_by('ID', $user_id);
             if (!$user) continue;
@@ -3013,6 +3014,7 @@ function zoho_sync_customers_to_contacts($offset, $total, $synced, $created, $up
                     $username_base = sanitize_user($company_name);
                 } elseif (!empty($email)) {
                     $username_base = explode('@', $email)[0];
+                    $username_base = sanitize_user($username_base);
                 }
                 
                 if (empty($username_base)) {
@@ -3031,11 +3033,17 @@ function zoho_sync_customers_to_contacts($offset, $total, $synced, $created, $up
                     $counter++;
                 }
                 
-                // Update username
-                wp_update_user(array(
-                    'ID' => $user_id,
-                    'user_login' => $new_username
-                ));
+                // Update username directly in database (wp_update_user doesn't allow user_login changes)
+                $wpdb->update(
+                    $wpdb->users,
+                    array('user_login' => $new_username),
+                    array('ID' => $user_id),
+                    array('%s'),
+                    array('%d')
+                );
+                
+                // Clear user cache
+                clean_user_cache($user_id);
             }
         }
         
