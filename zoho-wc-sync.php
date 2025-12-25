@@ -1636,8 +1636,8 @@ function zoho_sync_products_ajax_handler() {
                 json_encode($item),
                 json_encode(array('error' => $error_reason, 'code' => 'MISSING_SKU', 'item_name' => $item_name))
             );
-            continue;
-        }
+                continue;
+            }
 
         $product_id = wc_get_product_id_by_sku($sku_value);
         $is_new_product = false;
@@ -1701,9 +1701,9 @@ function zoho_sync_products_ajax_handler() {
         
         // If product is null, skip
         if (!$product) {
-            continue;
-        }
-        
+                continue;
+            }
+
         // Sync Name (if enabled)
         if (get_option('zoho_sync_name', 'yes') == 'yes') {
             $name_value = isset($item[$zoho_name_field]) ? $item[$zoho_name_field] : '';
@@ -2059,7 +2059,7 @@ function zoho_sync_woo_to_zoho($offset, $total, $synced, $created, $updated) {
     }
     
     foreach ($batch_ids as $product_id) {
-        $product = wc_get_product($product_id);
+            $product = wc_get_product($product_id);
         if (!$product) {
             $batch_pending_skus[] = array('sku' => $product_id, 'reason' => 'Product not found');
             // Log the failure
@@ -3007,6 +3007,55 @@ function zoho_sync_customers_to_contacts($offset, $total, $synced, $created, $up
         if ($existing_contact_id) {
             $response = zoho_api_put('contacts/' . $existing_contact_id, $contact_data);
             $action = 'updated';
+            
+            // If update fails with Code 1002, contact doesn't exist - clear ID and search/create
+            if (isset($response['code']) && $response['code'] == 1002) {
+                // Clear invalid contact_id
+                delete_user_meta($user_id, '_zoho_contact_id');
+                $existing_contact_id = '';
+                
+                // Try to find contact by email
+                if (!empty($contact_data['email'])) {
+                    $search_email = strtolower(trim($contact_data['email']));
+                    $search_response = zoho_api_get('contacts?email=' . urlencode($search_email));
+                    if (!is_wp_error($search_response) && isset($search_response['contacts']) && !empty($search_response['contacts'])) {
+                        foreach ($search_response['contacts'] as $found_contact) {
+                            $found_email = isset($found_contact['email']) ? strtolower(trim($found_contact['email'])) : '';
+                            if ($found_email === $search_email) {
+                                $existing_contact_id = $found_contact['contact_id'];
+                                // Update with correct ID
+                                $response = zoho_api_put('contacts/' . $existing_contact_id, $contact_data);
+                                $action = 'updated';
+                                break;
+                            }
+                        }
+                    }
+                }
+                
+                // If still not found, try search by name
+                if (empty($existing_contact_id) && !empty($contact_data['contact_name'])) {
+                    $search_name = trim($contact_data['contact_name']);
+                    $name_search = zoho_api_get('contacts?search_text=' . urlencode($search_name));
+                    if (!is_wp_error($name_search) && isset($name_search['contacts']) && !empty($name_search['contacts'])) {
+                        foreach ($name_search['contacts'] as $contact) {
+                            $found_name = isset($contact['contact_name']) ? trim($contact['contact_name']) : '';
+                            if (strcasecmp($found_name, $search_name) === 0) {
+                                $existing_contact_id = $contact['contact_id'];
+                                // Update with correct ID
+                                $response = zoho_api_put('contacts/' . $existing_contact_id, $contact_data);
+                                $action = 'updated';
+                                break;
+                            }
+                        }
+                    }
+                }
+                
+                // If still not found, create new contact
+                if (empty($existing_contact_id)) {
+                    $response = zoho_api_post('contacts', $contact_data);
+                    $action = 'created';
+                }
+            }
         } else {
             // No existing contact ID, try to create
             $response = zoho_api_post('contacts', $contact_data);
@@ -3483,12 +3532,12 @@ function zoho_retry_sync_handler() {
                     // Set stock if available
                     if (isset($request_data['initial_stock']) && $request_data['initial_stock'] !== '') {
                         $stock_value = intval($request_data['initial_stock']);
-                        $product->set_manage_stock(true);
+                $product->set_manage_stock(true);
                         $product->set_stock_quantity(max(0, $stock_value));
                         $product->set_stock_status($stock_value > 0 ? 'instock' : 'outofstock');
-                    }
-                    
-                    $product->save();
+            }
+
+            $product->save();
                     $woo_id = $product->get_id();
                     
                     if (!$woo_id) {
@@ -3634,9 +3683,9 @@ function zoho_retry_sync_handler() {
         $customer = new WC_Customer($woo_id);
         if (!$customer->get_id()) {
             wp_send_json_error('Customer not found: ' . $woo_id);
-            return;
-        }
-        
+        return;
+    }
+
         $contact_data = zoho_build_contact_data_from_customer($customer);
         
         // Check if contact exists
@@ -3844,6 +3893,52 @@ function zoho_retry_all_failed_handler() {
             
             if ($existing_contact_id) {
                 $response = zoho_api_put('contacts/' . $existing_contact_id, $contact_data);
+                
+                // If update fails with Code 1002, contact doesn't exist - clear ID and search/create
+                if (isset($response['code']) && $response['code'] == 1002) {
+                    // Clear invalid contact_id
+                    delete_user_meta($woo_id, '_zoho_contact_id');
+                    $existing_contact_id = '';
+                    
+                    // Try to find contact by email
+                    if (!empty($contact_data['email'])) {
+                        $search_email = strtolower(trim($contact_data['email']));
+                        $search_response = zoho_api_get('contacts?email=' . urlencode($search_email));
+                        if (!is_wp_error($search_response) && isset($search_response['contacts']) && !empty($search_response['contacts'])) {
+                            foreach ($search_response['contacts'] as $found_contact) {
+                                $found_email = isset($found_contact['email']) ? strtolower(trim($found_contact['email'])) : '';
+                                if ($found_email === $search_email) {
+                                    $existing_contact_id = $found_contact['contact_id'];
+                                    // Update with correct ID
+                                    $response = zoho_api_put('contacts/' . $existing_contact_id, $contact_data);
+                                    break;
+                                }
+                            }
+                        }
+                    }
+                    
+                    // If still not found, try search by name
+                    if (empty($existing_contact_id) && !empty($contact_data['contact_name'])) {
+                        $search_name = trim($contact_data['contact_name']);
+                        $name_search = zoho_api_get('contacts?search_text=' . urlencode($search_name));
+                        if (!is_wp_error($name_search) && isset($name_search['contacts']) && !empty($name_search['contacts'])) {
+                            foreach ($name_search['contacts'] as $contact) {
+                                $found_name = isset($contact['contact_name']) ? trim($contact['contact_name']) : '';
+                                if (strcasecmp($found_name, $search_name) === 0) {
+                                    $existing_contact_id = $contact['contact_id'];
+                                    // Update with correct ID
+                                    $response = zoho_api_put('contacts/' . $existing_contact_id, $contact_data);
+                                    break;
+                                }
+                            }
+                        }
+                    }
+                    
+                    // If still not found, create new contact
+                    if (empty($existing_contact_id)) {
+                        $response = zoho_api_post('contacts', $contact_data);
+                    }
+                }
             } else {
                 // No existing contact ID, try to create
                 $response = zoho_api_post('contacts', $contact_data);
