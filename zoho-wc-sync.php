@@ -3359,20 +3359,82 @@ function zoho_retry_sync_handler() {
     $type = $target_log['type'] ?? '';
     $woo_id = $target_log['woo_object_id'] ?? '';
     $request_data = json_decode($target_log['request'] ?? '{}', true);
-    
-    if (empty($woo_id)) {
-        wp_send_json_error('No WooCommerce ID found in log');
-        return;
-    }
+    $zoho_object_id = $target_log['zoho_object_id'] ?? '';
     
     $result = array('success' => false, 'message' => 'Unknown error');
     
     if ($type === 'item') {
-        // Retry item sync
-        $product = wc_get_product($woo_id);
-        if (!$product) {
-            wp_send_json_error('Product not found: ' . $woo_id);
-            return;
+        $product = null;
+        
+        // If woo_id is empty, try to find/create product from Zoho item data
+        if (empty($woo_id) && !empty($request_data)) {
+            // This is a Zoho to WooCommerce sync retry
+            // Extract SKU from Zoho item data
+            $zoho_sku = isset($request_data['sku']) ? $request_data['sku'] : '';
+            
+            if (!empty($zoho_sku)) {
+                // Try to find existing product by SKU
+                $woo_id = wc_get_product_id_by_sku($zoho_sku);
+                
+                if ($woo_id) {
+                    $product = wc_get_product($woo_id);
+                } else {
+                    // Product doesn't exist - create it from Zoho item data
+                    try {
+                        $product = new WC_Product_Simple();
+                        $product->set_sku($zoho_sku);
+                        
+                        $name_value = isset($request_data['name']) ? $request_data['name'] : $zoho_sku;
+                        $product->set_name($name_value);
+                        $product->set_slug(sanitize_title($name_value));
+                        $product->set_status('publish');
+                        $product->set_catalog_visibility('visible');
+                        
+                        // Set price if available
+                        if (isset($request_data['rate']) && $request_data['rate'] > 0) {
+                            $product->set_regular_price(floatval($request_data['rate']));
+                        }
+                        
+                        // Set description if available
+                        if (isset($request_data['description']) && !empty($request_data['description'])) {
+                            $product->set_description($request_data['description']);
+                        }
+                        
+                        // Set stock if available
+                        if (isset($request_data['initial_stock']) && $request_data['initial_stock'] !== '') {
+                            $stock_value = intval($request_data['initial_stock']);
+                            $product->set_manage_stock(true);
+                            $product->set_stock_quantity(max(0, $stock_value));
+                            $product->set_stock_status($stock_value > 0 ? 'instock' : 'outofstock');
+                        }
+                        
+                        $product->save();
+                        $woo_id = $product->get_id();
+                        
+                        if (!$woo_id) {
+                            throw new Exception('Failed to create product - no ID returned');
+                        }
+                    } catch (Exception $e) {
+                        wp_send_json_error('Failed to create product from Zoho item: ' . $e->getMessage());
+                        return;
+                    }
+                }
+            } else {
+                wp_send_json_error('No SKU found in Zoho item data. Cannot create/find product.');
+                return;
+            }
+        } else {
+            // Normal retry - product should exist
+            if (empty($woo_id)) {
+                wp_send_json_error('No WooCommerce ID found in log');
+                return;
+            }
+            
+            $product = wc_get_product($woo_id);
+            if (!$product) {
+                wp_send_json_error('Product not found: ' . $woo_id);
+                return;
+            }
         }
         
         $sku = $product->get_sku();
