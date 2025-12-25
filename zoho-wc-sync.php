@@ -4717,6 +4717,36 @@ function zoho_invoice_sync_page() {
    CONTACT SYNC PAGE
 ====================================================== */
 function zoho_contact_sync_page() {
+    // Handle cleanup request
+    if (isset($_POST['zoho_cleanup_orphaned_customers']) && check_admin_referer('zoho_cleanup_customers', 'zoho_cleanup_nonce')) {
+        global $wpdb;
+        
+        // Find all user IDs that have customer-related meta but user doesn't exist
+        $orphaned_meta = $wpdb->get_results("
+            SELECT DISTINCT um.user_id, um.meta_key, um.meta_value
+            FROM {$wpdb->usermeta} um
+            LEFT JOIN {$wpdb->users} u ON um.user_id = u.ID
+            WHERE u.ID IS NULL
+            AND (um.meta_key LIKE 'billing_%' 
+                 OR um.meta_key LIKE 'shipping_%' 
+                 OR um.meta_key = '_zoho_contact_id'
+                 OR um.meta_key = 'first_name'
+                 OR um.meta_key = 'last_name')
+        ");
+        
+        $deleted_count = 0;
+        if ($orphaned_meta) {
+            $user_ids = array_unique(array_column($orphaned_meta, 'user_id'));
+            foreach ($user_ids as $user_id) {
+                // Delete all user meta for this orphaned user
+                $wpdb->delete($wpdb->usermeta, array('user_id' => $user_id), array('%d'));
+                $deleted_count++;
+            }
+        }
+        
+        echo '<div class="notice notice-success"><p>Cleanup complete! Deleted customer data for ' . $deleted_count . ' orphaned user(s).</p></div>';
+    }
+    
     echo '<h1>Contact Sync</h1>';
     
     // Check connection
@@ -4728,6 +4758,34 @@ function zoho_contact_sync_page() {
     
     echo '<p>Sync contacts/customers between Zoho Inventory and WooCommerce.</p>';
     echo '<p>Configure contact field mappings in <a href="'.admin_url('admin.php?page=zoho-field-mapping&tab=customers').'">Field Mapping → Customers</a> before syncing.</p>';
+    
+    // Show cleanup section
+    global $wpdb;
+    $orphaned_count = $wpdb->get_var("
+        SELECT COUNT(DISTINCT um.user_id)
+        FROM {$wpdb->usermeta} um
+        LEFT JOIN {$wpdb->users} u ON um.user_id = u.ID
+        WHERE u.ID IS NULL
+        AND (um.meta_key LIKE 'billing_%' 
+             OR um.meta_key LIKE 'shipping_%' 
+             OR um.meta_key = '_zoho_contact_id'
+             OR um.meta_key = 'first_name'
+             OR um.meta_key = 'last_name')
+    ");
+    
+    echo '<div style="background: #fff; border: 1px solid #ddd; padding: 20px; margin: 20px 0; border-radius: 4px;">';
+    echo '<h3 style="margin-top: 0;">Cleanup Orphaned Customers</h3>';
+    echo '<p>Remove customer data for users that no longer exist in WordPress.</p>';
+    if ($orphaned_count > 0) {
+        echo '<p style="color: #d63638; font-weight: bold;">Found ' . $orphaned_count . ' orphaned customer(s) with no corresponding WordPress user.</p>';
+    } else {
+        echo '<p style="color: #00a32a;">No orphaned customers found. All customer data is linked to existing users.</p>';
+    }
+    echo '<form method="post" onsubmit="return confirm(\'Are you sure you want to delete orphaned customer data? This cannot be undone.\');">';
+    wp_nonce_field('zoho_cleanup_customers', 'zoho_cleanup_nonce');
+    echo '<button type="submit" name="zoho_cleanup_orphaned_customers" class="button button-secondary" ' . ($orphaned_count == 0 ? 'disabled' : '') . '>Cleanup Orphaned Customers</button>';
+    echo '</form>';
+    echo '</div>';
     
     // Date filters
     echo '<div style="background: #fff; border: 1px solid #ddd; padding: 20px; margin: 20px 0; border-radius: 4px;">';
