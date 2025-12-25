@@ -2993,6 +2993,9 @@ function zoho_sync_customers_to_contacts($offset, $total, $synced, $created, $up
     foreach ($batch_ids as $user_id) {
         $customer = new WC_Customer($user_id);
         
+        // Ensure customer data is loaded
+        $customer->read_meta_data();
+        
         // Build contact data from field mappings
         $contact_data = zoho_build_contact_data_from_customer($customer);
         
@@ -4053,23 +4056,35 @@ function zoho_build_contact_data_from_customer($customer) {
     // Get first name - try billing, then user meta, then display name
     $first_name = $customer->get_billing_first_name();
     if (empty($first_name)) {
-        $first_name = get_user_meta($user_id, 'first_name', true);
+        $first_name = get_user_meta($user_id, 'billing_first_name', true);
+        if (empty($first_name)) {
+            $first_name = get_user_meta($user_id, 'first_name', true);
+        }
     }
     
     // Get last name
     $last_name = $customer->get_billing_last_name();
     if (empty($last_name)) {
-        $last_name = get_user_meta($user_id, 'last_name', true);
+        $last_name = get_user_meta($user_id, 'billing_last_name', true);
+        if (empty($last_name)) {
+            $last_name = get_user_meta($user_id, 'last_name', true);
+        }
     }
     
     // Get email - try billing email, then user email
     $email = $customer->get_billing_email();
-    if (empty($email) && $user) {
-        $email = $user->user_email;
+    if (empty($email)) {
+        $email = get_user_meta($user_id, 'billing_email', true);
+        if (empty($email) && $user) {
+            $email = $user->user_email;
+        }
     }
     
     // Get company name
     $company_name = $customer->get_billing_company();
+    if (empty($company_name)) {
+        $company_name = get_user_meta($user_id, 'billing_company', true);
+    }
     
     // Build contact_name (required field)
     // Priority: First Last Name > Company Name > Display Name > Username > Email
@@ -4105,47 +4120,124 @@ function zoho_build_contact_data_from_customer($customer) {
         $contact_data['company_name'] = $customer->get_billing_company();
     }
     
-    // Build billing address only if at least one field is not empty
+    // Build billing address - include all available fields
+    // Try WC_Customer methods first, then fallback to user meta
     $billing_address = array();
-    $billing_fields = array(
-        'address' => $customer->get_billing_address_1(),
-        'street2' => $customer->get_billing_address_2(),
-        'city' => $customer->get_billing_city(),
-        'state' => $customer->get_billing_state(),
-        'zip' => $customer->get_billing_postcode(),
-        'country' => $customer->get_billing_country(),
-        'phone' => $customer->get_billing_phone(),
-    );
-    
-    foreach ($billing_fields as $key => $value) {
-        if (!empty($value)) {
-            $billing_address[$key] = $value;
-        }
+    $billing_address_1 = $customer->get_billing_address_1();
+    if (empty($billing_address_1)) {
+        $billing_address_1 = get_user_meta($user_id, 'billing_address_1', true);
     }
     
-    // Only add billing_address if it has at least one field
+    $billing_address_2 = $customer->get_billing_address_2();
+    if (empty($billing_address_2)) {
+        $billing_address_2 = get_user_meta($user_id, 'billing_address_2', true);
+    }
+    
+    $billing_city = $customer->get_billing_city();
+    if (empty($billing_city)) {
+        $billing_city = get_user_meta($user_id, 'billing_city', true);
+    }
+    
+    $billing_state = $customer->get_billing_state();
+    if (empty($billing_state)) {
+        $billing_state = get_user_meta($user_id, 'billing_state', true);
+    }
+    
+    $billing_postcode = $customer->get_billing_postcode();
+    if (empty($billing_postcode)) {
+        $billing_postcode = get_user_meta($user_id, 'billing_postcode', true);
+    }
+    
+    $billing_country = $customer->get_billing_country();
+    if (empty($billing_country)) {
+        $billing_country = get_user_meta($user_id, 'billing_country', true);
+    }
+    
+    $billing_phone = $customer->get_billing_phone();
+    if (empty($billing_phone)) {
+        $billing_phone = get_user_meta($user_id, 'billing_phone', true);
+    }
+    
+    if (!empty($billing_address_1)) {
+        $billing_address['address'] = $billing_address_1;
+    }
+    if (!empty($billing_address_2)) {
+        $billing_address['street2'] = $billing_address_2;
+    }
+    if (!empty($billing_city)) {
+        $billing_address['city'] = $billing_city;
+    }
+    if (!empty($billing_state)) {
+        $billing_address['state'] = $billing_state;
+    }
+    if (!empty($billing_postcode)) {
+        $billing_address['zip'] = $billing_postcode;
+    }
+    if (!empty($billing_country)) {
+        $billing_address['country'] = $billing_country;
+    }
+    if (!empty($billing_phone)) {
+        $billing_address['phone'] = $billing_phone;
+    }
+    
+    // Add billing_address if it has at least one field
     if (!empty($billing_address)) {
         $contact_data['billing_address'] = $billing_address;
     }
     
-    // Build shipping address only if at least one field is not empty
+    // Build shipping address - include all available fields
+    // Try WC_Customer methods first, then fallback to user meta
     $shipping_address = array();
-    $shipping_fields = array(
-        'address' => $customer->get_shipping_address_1(),
-        'street2' => $customer->get_shipping_address_2(),
-        'city' => $customer->get_shipping_city(),
-        'state' => $customer->get_shipping_state(),
-        'zip' => $customer->get_shipping_postcode(),
-        'country' => $customer->get_shipping_country(),
-    );
-    
-    foreach ($shipping_fields as $key => $value) {
-        if (!empty($value)) {
-            $shipping_address[$key] = $value;
-        }
+    $shipping_address_1 = $customer->get_shipping_address_1();
+    if (empty($shipping_address_1)) {
+        $shipping_address_1 = get_user_meta($user_id, 'shipping_address_1', true);
     }
     
-    // Only add shipping_address if it has at least one field
+    $shipping_address_2 = $customer->get_shipping_address_2();
+    if (empty($shipping_address_2)) {
+        $shipping_address_2 = get_user_meta($user_id, 'shipping_address_2', true);
+    }
+    
+    $shipping_city = $customer->get_shipping_city();
+    if (empty($shipping_city)) {
+        $shipping_city = get_user_meta($user_id, 'shipping_city', true);
+    }
+    
+    $shipping_state = $customer->get_shipping_state();
+    if (empty($shipping_state)) {
+        $shipping_state = get_user_meta($user_id, 'shipping_state', true);
+    }
+    
+    $shipping_postcode = $customer->get_shipping_postcode();
+    if (empty($shipping_postcode)) {
+        $shipping_postcode = get_user_meta($user_id, 'shipping_postcode', true);
+    }
+    
+    $shipping_country = $customer->get_shipping_country();
+    if (empty($shipping_country)) {
+        $shipping_country = get_user_meta($user_id, 'shipping_country', true);
+    }
+    
+    if (!empty($shipping_address_1)) {
+        $shipping_address['address'] = $shipping_address_1;
+    }
+    if (!empty($shipping_address_2)) {
+        $shipping_address['street2'] = $shipping_address_2;
+    }
+    if (!empty($shipping_city)) {
+        $shipping_address['city'] = $shipping_city;
+    }
+    if (!empty($shipping_state)) {
+        $shipping_address['state'] = $shipping_state;
+    }
+    if (!empty($shipping_postcode)) {
+        $shipping_address['zip'] = $shipping_postcode;
+    }
+    if (!empty($shipping_country)) {
+        $shipping_address['country'] = $shipping_country;
+    }
+    
+    // Add shipping_address if it has at least one field
     if (!empty($shipping_address)) {
         $contact_data['shipping_address'] = $shipping_address;
     }
