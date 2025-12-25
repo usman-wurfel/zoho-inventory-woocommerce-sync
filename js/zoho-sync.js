@@ -58,10 +58,10 @@ jQuery(document).ready(function($) {
                     
                     // Check if more products to process
                     if (data.has_more) {
-                        // Continue with next batch
+                        // Continue with next batch (3 second delay to avoid rate limits)
                         setTimeout(function() {
                             zohoSyncProducts(data.offset, data.total, data.synced, data.created, data.updated, direction);
-                        }, 100);
+                        }, 3000);
                     } else {
                         // Sync completed
                         $('#zoho-progress-bar').css('width', '100%');
