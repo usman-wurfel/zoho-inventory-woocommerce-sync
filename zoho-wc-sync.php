@@ -3845,7 +3845,7 @@ function zoho_build_contact_data_from_customer($customer) {
     $user_id = $customer->get_id();
     $user = get_user_by('ID', $user_id);
     
-    // Get first name - try billing, then user meta
+    // Get first name - try billing, then user meta, then display name
     $first_name = $customer->get_billing_first_name();
     if (empty($first_name)) {
         $first_name = get_user_meta($user_id, 'first_name', true);
@@ -3866,44 +3866,28 @@ function zoho_build_contact_data_from_customer($customer) {
     // Get company name
     $company_name = $customer->get_billing_company();
     
-    // Get phone
-    $phone = $customer->get_billing_phone();
-    
-    // Build contact_name (required field according to Zoho API)
-    // Priority: First Last Name > Company Name > Display Name > Email
+    // Build contact_name (required field)
+    // Priority: First Last Name > Company Name > Display Name > Username > Email
     $contact_name = trim($first_name . ' ' . $last_name);
     if (empty($contact_name) || $contact_name == ' ') {
         if (!empty($company_name)) {
             $contact_name = $company_name;
         } elseif ($user && !empty($user->display_name)) {
             $contact_name = $user->display_name;
+        } elseif ($user && !empty($user->user_login)) {
+            $contact_name = $user->user_login;  // Use username if name not available
         } else {
             $contact_name = $email ?: 'Customer ' . $user_id;
         }
     }
     
-    // Determine customer_sub_type: 'business' if company exists, else 'individual'
-    $customer_sub_type = !empty($company_name) ? 'business' : 'individual';
-    
-    // Build contact data according to Zoho Inventory API documentation
-    // Reference: https://www.zoho.com/inventory/api/v1/contacts/#create-a-contact
+    // Build contact data
     $contact_data = array(
-        'contact_name' => $contact_name,  // Required
-        'contact_type' => 'customer',     // Required: customer or vendor
+        'contact_name' => $contact_name,
+        'contact_type' => 'customer',
+        'customer_sub_type' => 'individual',
+        'email' => $email,
     );
-    
-    // Add customer_sub_type only for customers (Required for customer type)
-    $contact_data['customer_sub_type'] = $customer_sub_type;  // individual or business
-    
-    // Add email if available
-    if (!empty($email)) {
-        $contact_data['email'] = $email;
-    }
-    
-    // Add phone if available
-    if (!empty($phone)) {
-        $contact_data['phone'] = $phone;
-    }
     
     // Add name fields only if not empty
     if (!empty($first_name)) {
@@ -3912,51 +3896,36 @@ function zoho_build_contact_data_from_customer($customer) {
     if (!empty($last_name)) {
         $contact_data['last_name'] = $last_name;
     }
-    if (!empty($company_name)) {
-        $contact_data['company_name'] = $company_name;
+    if (!empty($customer->get_billing_company())) {
+        $contact_data['company_name'] = $customer->get_billing_company();
     }
     
-    // Build billing_address object according to API documentation
-    // Structure: { attention, address, street2, city, state, zip, country, phone }
+    // Build billing address only if at least one field is not empty
     $billing_address = array();
-    $billing_address_fields = array(
+    $billing_fields = array(
         'address' => $customer->get_billing_address_1(),
         'street2' => $customer->get_billing_address_2(),
         'city' => $customer->get_billing_city(),
         'state' => $customer->get_billing_state(),
         'zip' => $customer->get_billing_postcode(),
         'country' => $customer->get_billing_country(),
+        'phone' => $customer->get_billing_phone(),
     );
     
-    // Add attention (name) to billing address
-    $billing_attention = trim($first_name . ' ' . $last_name);
-    if (!empty($billing_attention) && $billing_attention != ' ') {
-        $billing_address['attention'] = $billing_attention;
-    }
-    
-    // Add billing address fields only if not empty
-    foreach ($billing_address_fields as $key => $value) {
+    foreach ($billing_fields as $key => $value) {
         if (!empty($value)) {
             $billing_address[$key] = $value;
         }
     }
     
-    // Only add billing_address object if it has at least one field (besides attention)
-    $has_billing_fields = false;
-    foreach ($billing_address_fields as $value) {
-        if (!empty($value)) {
-            $has_billing_fields = true;
-            break;
-        }
-    }
-    if ($has_billing_fields || !empty($billing_address['attention'])) {
+    // Only add billing_address if it has at least one field
+    if (!empty($billing_address)) {
         $contact_data['billing_address'] = $billing_address;
     }
     
-    // Build shipping_address object according to API documentation
-    // Structure: { attention, address, street2, city, state, zip, country }
+    // Build shipping address only if at least one field is not empty
     $shipping_address = array();
-    $shipping_address_fields = array(
+    $shipping_fields = array(
         'address' => $customer->get_shipping_address_1(),
         'street2' => $customer->get_shipping_address_2(),
         'city' => $customer->get_shipping_city(),
@@ -3965,33 +3934,14 @@ function zoho_build_contact_data_from_customer($customer) {
         'country' => $customer->get_shipping_country(),
     );
     
-    // Add attention (name) to shipping address
-    $shipping_first_name = $customer->get_shipping_first_name();
-    $shipping_last_name = $customer->get_shipping_last_name();
-    $shipping_attention = trim($shipping_first_name . ' ' . $shipping_last_name);
-    if (empty($shipping_attention) || $shipping_attention == ' ') {
-        $shipping_attention = $billing_attention;  // Fallback to billing name
-    }
-    if (!empty($shipping_attention) && $shipping_attention != ' ') {
-        $shipping_address['attention'] = $shipping_attention;
-    }
-    
-    // Add shipping address fields only if not empty
-    foreach ($shipping_address_fields as $key => $value) {
+    foreach ($shipping_fields as $key => $value) {
         if (!empty($value)) {
             $shipping_address[$key] = $value;
         }
     }
     
-    // Only add shipping_address object if it has at least one field (besides attention)
-    $has_shipping_fields = false;
-    foreach ($shipping_address_fields as $value) {
-        if (!empty($value)) {
-            $has_shipping_fields = true;
-            break;
-        }
-    }
-    if ($has_shipping_fields || !empty($shipping_address['attention'])) {
+    // Only add shipping_address if it has at least one field
+    if (!empty($shipping_address)) {
         $contact_data['shipping_address'] = $shipping_address;
     }
     
@@ -4065,38 +4015,22 @@ function zoho_get_or_create_contact($order) {
         return $response['contacts'][0]['contact_id'];
     }
     
-    // Build contact data according to Zoho Inventory API documentation
-    // Reference: https://www.zoho.com/inventory/api/v1/contacts/#create-a-contact
+    // Build contact name (fallback to email if name is empty)
     $first_name = $order->get_billing_first_name();
     $last_name = $order->get_billing_last_name();
-    $company_name = $order->get_billing_company();
-    $phone = $order->get_billing_phone();
-    
-    // Build contact_name (required field)
     $contact_name = trim($first_name . ' ' . $last_name);
-    if (empty($contact_name) || $contact_name == ' ') {
-        $contact_name = $company_name ?: $email;
+    
+    if (empty($contact_name)) {
+        $contact_name = $order->get_billing_company() ?: $email;
     }
     
-    // Determine customer_sub_type: 'business' if company exists, else 'individual'
-    $customer_sub_type = !empty($company_name) ? 'business' : 'individual';
-    
-    // Build contact data
+    // Create new contact
     $contact_data = array(
-        'contact_name' => $contact_name,  // Required
-        'contact_type' => 'customer',     // Required: customer or vendor
-        'customer_sub_type' => $customer_sub_type,  // Required for customer: individual or business
+        'contact_name' => $contact_name,
+        'contact_type' => 'customer',
+        'customer_sub_type' => 'individual',
+        'email' => $email,
     );
-    
-    // Add email if available
-    if (!empty($email)) {
-        $contact_data['email'] = $email;
-    }
-    
-    // Add phone if available
-    if (!empty($phone)) {
-        $contact_data['phone'] = $phone;
-    }
     
     // Add name fields if available
     if (!empty($first_name)) {
@@ -4105,78 +4039,64 @@ function zoho_get_or_create_contact($order) {
     if (!empty($last_name)) {
         $contact_data['last_name'] = $last_name;
     }
-    if (!empty($company_name)) {
-        $contact_data['company_name'] = $company_name;
+    
+    // Add company if available
+    if (!empty($order->get_billing_company())) {
+        $contact_data['company_name'] = $order->get_billing_company();
     }
     
-    // Build billing_address object according to API documentation
+    // Add billing address if available
     $billing_address = array();
-    $billing_attention = trim($first_name . ' ' . $last_name);
-    if (!empty($billing_attention) && $billing_attention != ' ') {
-        $billing_address['attention'] = $billing_attention;
+    if (!empty($order->get_billing_address_1())) {
+        $billing_address['address'] = $order->get_billing_address_1();
     }
-    
-    $billing_fields = array(
-        'address' => $order->get_billing_address_1(),
-        'street2' => $order->get_billing_address_2(),
-        'city' => $order->get_billing_city(),
-        'state' => $order->get_billing_state(),
-        'zip' => $order->get_billing_postcode(),
-        'country' => $order->get_billing_country(),
-    );
-    
-    $has_billing_fields = false;
-    foreach ($billing_fields as $key => $value) {
-        if (!empty($value)) {
-            $billing_address[$key] = $value;
-            $has_billing_fields = true;
-        }
+    if (!empty($order->get_billing_address_2())) {
+        $billing_address['street2'] = $order->get_billing_address_2();
     }
-    if ($has_billing_fields || !empty($billing_address['attention'])) {
+    if (!empty($order->get_billing_city())) {
+        $billing_address['city'] = $order->get_billing_city();
+    }
+    if (!empty($order->get_billing_state())) {
+        $billing_address['state'] = $order->get_billing_state();
+    }
+    if (!empty($order->get_billing_postcode())) {
+        $billing_address['zip'] = $order->get_billing_postcode();
+    }
+    if (!empty($order->get_billing_country())) {
+        $billing_address['country'] = $order->get_billing_country();
+    }
+    if (!empty($order->get_billing_phone())) {
+        $billing_address['phone'] = $order->get_billing_phone();
+    }
+    if (!empty($billing_address)) {
         $contact_data['billing_address'] = $billing_address;
     }
     
-    // Build shipping_address object according to API documentation
+    // Add shipping address if available
     $shipping_address = array();
-    $shipping_first_name = $order->get_shipping_first_name();
-    $shipping_last_name = $order->get_shipping_last_name();
-    $shipping_attention = trim($shipping_first_name . ' ' . $shipping_last_name);
-    if (empty($shipping_attention) || $shipping_attention == ' ') {
-        $shipping_attention = $billing_attention;  // Fallback to billing name
+    if (!empty($order->get_shipping_address_1())) {
+        $shipping_address['address'] = $order->get_shipping_address_1();
     }
-    if (!empty($shipping_attention) && $shipping_attention != ' ') {
-        $shipping_address['attention'] = $shipping_attention;
+    if (!empty($order->get_shipping_address_2())) {
+        $shipping_address['street2'] = $order->get_shipping_address_2();
     }
-    
-    $shipping_fields = array(
-        'address' => $order->get_shipping_address_1(),
-        'street2' => $order->get_shipping_address_2(),
-        'city' => $order->get_shipping_city(),
-        'state' => $order->get_shipping_state(),
-        'zip' => $order->get_shipping_postcode(),
-        'country' => $order->get_shipping_country(),
-    );
-    
-    $has_shipping_fields = false;
-    foreach ($shipping_fields as $key => $value) {
-        if (!empty($value)) {
-            $shipping_address[$key] = $value;
-            $has_shipping_fields = true;
-        }
+    if (!empty($order->get_shipping_city())) {
+        $shipping_address['city'] = $order->get_shipping_city();
     }
-    if ($has_shipping_fields || !empty($shipping_address['attention'])) {
+    if (!empty($order->get_shipping_state())) {
+        $shipping_address['state'] = $order->get_shipping_state();
+    }
+    if (!empty($order->get_shipping_postcode())) {
+        $shipping_address['zip'] = $order->get_shipping_postcode();
+    }
+    if (!empty($order->get_shipping_country())) {
+        $shipping_address['country'] = $order->get_shipping_country();
+    }
+    if (!empty($shipping_address)) {
         $contact_data['shipping_address'] = $shipping_address;
     }
     
     $response = zoho_api_post('contacts', $contact_data);
-    
-    // Handle Code 3062 (contact already exists) - search by email and return ID
-    if (isset($response['code']) && $response['code'] == 3062) {
-        $search_response = zoho_api_get('contacts?email=' . urlencode($email));
-        if (!is_wp_error($search_response) && isset($search_response['contacts']) && !empty($search_response['contacts'])) {
-            return $search_response['contacts'][0]['contact_id'];
-        }
-    }
     
     if (!is_wp_error($response) && isset($response['contact']['contact_id'])) {
         return $response['contact']['contact_id'];
