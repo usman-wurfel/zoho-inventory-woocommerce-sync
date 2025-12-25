@@ -2948,23 +2948,47 @@ function zoho_sync_customers_to_contacts($offset, $total, $synced, $created, $up
         delete_transient('zoho_contact_sync_customers');
         delete_transient('zoho_contact_sync_stats');
         
-        $args = array(
+        // Use WooCommerce's customer data store query (same as WooCommerce admin uses)
+        $data_store = WC_Data_Store::load( 'customer' );
+        
+        $query_args = array(
             'role' => 'customer',
-            'number' => -1,
-            'fields' => 'ID'
+            'per_page' => 999999, // Get all customers (large number)
+            'page' => 1,
+            'orderby' => 'ID',
+            'order' => 'asc',
+            'search' => '',
+            'include' => array(),
+            'exclude' => array(),
         );
         
-        if (!empty($from_date)) {
-            $args['date_query'] = array(
-                array('after' => $from_date, 'inclusive' => true)
+        // Apply date filters if provided (WooCommerce uses WP_User_Query internally which supports date_query)
+        // Note: query_customers doesn't directly support date_query, so we'll use WP_User_Query directly
+        // which is what WooCommerce uses internally anyway
+        $wp_query_args = array(
+            'role' => 'customer',
+            'number' => -1, // Get all
+            'fields' => 'ID',
+            'orderby' => 'ID',
+            'order' => 'ASC',
+        );
+        
+        // Apply date filters if provided
+        if (!empty($from_date) && $from_date !== '') {
+            $wp_query_args['date_query'] = array(
+                array('after' => $from_date . ' 00:00:00', 'inclusive' => true)
             );
         }
-        if (!empty($to_date)) {
-            if (!isset($args['date_query'])) $args['date_query'] = array();
-            $args['date_query'][] = array('before' => $to_date, 'inclusive' => true);
+        if (!empty($to_date) && $to_date !== '') {
+            if (!isset($wp_query_args['date_query'])) {
+                $wp_query_args['date_query'] = array();
+            }
+            $wp_query_args['date_query'][] = array('before' => $to_date . ' 23:59:59', 'inclusive' => true);
         }
         
-        $users = get_users($args);
+        // Use WP_User_Query directly (same as WooCommerce's query_customers uses internally)
+        $wp_user_query = new WP_User_Query($wp_query_args);
+        $users = $wp_user_query->get_results();
         $total = count($users);
         
         if ($total == 0) {
@@ -4717,36 +4741,6 @@ function zoho_invoice_sync_page() {
    CONTACT SYNC PAGE
 ====================================================== */
 function zoho_contact_sync_page() {
-    // Handle cleanup request
-    if (isset($_POST['zoho_cleanup_orphaned_customers']) && check_admin_referer('zoho_cleanup_customers', 'zoho_cleanup_nonce')) {
-        global $wpdb;
-        
-        // Find all user IDs that have customer-related meta but user doesn't exist
-        $orphaned_meta = $wpdb->get_results("
-            SELECT DISTINCT um.user_id, um.meta_key, um.meta_value
-            FROM {$wpdb->usermeta} um
-            LEFT JOIN {$wpdb->users} u ON um.user_id = u.ID
-            WHERE u.ID IS NULL
-            AND (um.meta_key LIKE 'billing_%' 
-                 OR um.meta_key LIKE 'shipping_%' 
-                 OR um.meta_key = '_zoho_contact_id'
-                 OR um.meta_key = 'first_name'
-                 OR um.meta_key = 'last_name')
-        ");
-        
-        $deleted_count = 0;
-        if ($orphaned_meta) {
-            $user_ids = array_unique(array_column($orphaned_meta, 'user_id'));
-            foreach ($user_ids as $user_id) {
-                // Delete all user meta for this orphaned user
-                $wpdb->delete($wpdb->usermeta, array('user_id' => $user_id), array('%d'));
-                $deleted_count++;
-            }
-        }
-        
-        echo '<div class="notice notice-success"><p>Cleanup complete! Deleted customer data for ' . $deleted_count . ' orphaned user(s).</p></div>';
-    }
-    
     echo '<h1>Contact Sync</h1>';
     
     // Check connection
@@ -4758,34 +4752,6 @@ function zoho_contact_sync_page() {
     
     echo '<p>Sync contacts/customers between Zoho Inventory and WooCommerce.</p>';
     echo '<p>Configure contact field mappings in <a href="'.admin_url('admin.php?page=zoho-field-mapping&tab=customers').'">Field Mapping → Customers</a> before syncing.</p>';
-    
-    // Show cleanup section
-    global $wpdb;
-    $orphaned_count = $wpdb->get_var("
-        SELECT COUNT(DISTINCT um.user_id)
-        FROM {$wpdb->usermeta} um
-        LEFT JOIN {$wpdb->users} u ON um.user_id = u.ID
-        WHERE u.ID IS NULL
-        AND (um.meta_key LIKE 'billing_%' 
-             OR um.meta_key LIKE 'shipping_%' 
-             OR um.meta_key = '_zoho_contact_id'
-             OR um.meta_key = 'first_name'
-             OR um.meta_key = 'last_name')
-    ");
-    
-    echo '<div style="background: #fff; border: 1px solid #ddd; padding: 20px; margin: 20px 0; border-radius: 4px;">';
-    echo '<h3 style="margin-top: 0;">Cleanup Orphaned Customers</h3>';
-    echo '<p>Remove customer data for users that no longer exist in WordPress.</p>';
-    if ($orphaned_count > 0) {
-        echo '<p style="color: #d63638; font-weight: bold;">Found ' . $orphaned_count . ' orphaned customer(s) with no corresponding WordPress user.</p>';
-    } else {
-        echo '<p style="color: #00a32a;">No orphaned customers found. All customer data is linked to existing users.</p>';
-    }
-    echo '<form method="post" onsubmit="return confirm(\'Are you sure you want to delete orphaned customer data? This cannot be undone.\');">';
-    wp_nonce_field('zoho_cleanup_customers', 'zoho_cleanup_nonce');
-    echo '<button type="submit" name="zoho_cleanup_orphaned_customers" class="button button-secondary" ' . ($orphaned_count == 0 ? 'disabled' : '') . '>Cleanup Orphaned Customers</button>';
-    echo '</form>';
-    echo '</div>';
     
     // Date filters
     echo '<div style="background: #fff; border: 1px solid #ddd; padding: 20px; margin: 20px 0; border-radius: 4px;">';
