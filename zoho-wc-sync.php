@@ -2202,6 +2202,16 @@ function zoho_get_item_by_name($name) {
     return null;
 }
 
+function zoho_verify_item_exists($item_id) {
+    $response = zoho_api_get('items/' . urlencode($item_id));
+    
+    if (!is_wp_error($response) && isset($response['item']['item_id'])) {
+        return true;
+    }
+    
+    return false;
+}
+
 /* ======================================================
    AJAX HANDLER FOR INVOICE SYNC
 ====================================================== */
@@ -2462,10 +2472,19 @@ function zoho_sync_orders_to_invoices($offset, $total, $synced, $created, $updat
             
             // Use item_id ONLY (Zoho requires item_id, not name)
             // Never include 'name' field - it causes Code 1002 if item doesn't exist
+            $quantity = absint($item->get_quantity()); // Ensure integer
+            $item_total = floatval($item->get_total()); // Ensure float
+            $rate = $quantity > 0 ? floatval($item_total / $quantity) : 0.0;
+            
+            // Ensure rate is at least 0.01 if item has a total
+            if ($item_total > 0 && $rate < 0.01) {
+                $rate = floatval($item_total);
+            }
+            
             $line_item = array(
-                'item_id' => $zoho_item_id, // Only item_id, no name field
-                'quantity' => $item->get_quantity(),
-                'rate' => $item->get_total() / max(1, $item->get_quantity()),
+                'item_id' => (string)$zoho_item_id, // Ensure string format
+                'quantity' => $quantity,
+                'rate' => round($rate, 2), // Round to 2 decimal places
             );
             
             // Ensure name is never added
@@ -2507,7 +2526,7 @@ function zoho_sync_orders_to_invoices($offset, $total, $synced, $created, $updat
         }
         
         $invoice_data = array(
-            'customer_id' => $zoho_customer_id,
+            'customer_id' => (string)$zoho_customer_id, // Ensure string format
             'date' => $invoice_date,
             'reference_number' => $reference_number,
             'line_items' => $line_items,
