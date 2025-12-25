@@ -3344,6 +3344,27 @@ function zoho_sync_contacts_to_customers($offset, $total, $synced, $created, $up
             $user_id = $existing_user->ID;
             $action = 'Updated';
             $batch_updated++;
+            
+            // For existing customers, preserve WooCommerce name (don't overwrite with Zoho name)
+            $existing_first_name = get_user_meta($user_id, 'first_name', true);
+            $existing_last_name = get_user_meta($user_id, 'last_name', true);
+            $existing_billing_first = get_user_meta($user_id, 'billing_first_name', true);
+            $existing_billing_last = get_user_meta($user_id, 'billing_last_name', true);
+            
+            // Only use Zoho name if WooCommerce name is empty
+            if (empty($existing_first_name) && empty($existing_last_name)) {
+                update_user_meta($user_id, 'first_name', $first_name);
+                update_user_meta($user_id, 'last_name', $last_name);
+            } else {
+                $first_name = $existing_first_name ?: $first_name;
+                $last_name = $existing_last_name ?: $last_name;
+            }
+            
+            // Only update billing name if it's empty
+            if (empty($existing_billing_first) && empty($existing_billing_last)) {
+                update_user_meta($user_id, 'billing_first_name', $first_name);
+                update_user_meta($user_id, 'billing_last_name', $last_name);
+            }
         } else {
             // Create new user - need a valid email for WooCommerce
             $create_email = $email;
@@ -3365,15 +3386,13 @@ function zoho_sync_contacts_to_customers($offset, $total, $synced, $created, $up
             
             $action = 'Created';
             $batch_created++;
+            
+            // For new customers, set name from Zoho
+            update_user_meta($user_id, 'first_name', $first_name);
+            update_user_meta($user_id, 'last_name', $last_name);
+            update_user_meta($user_id, 'billing_first_name', $first_name);
+            update_user_meta($user_id, 'billing_last_name', $last_name);
         }
-        
-        // Update all user meta
-        update_user_meta($user_id, 'first_name', $first_name);
-        update_user_meta($user_id, 'last_name', $last_name);
-        
-        // Billing details
-        update_user_meta($user_id, 'billing_first_name', $first_name);
-        update_user_meta($user_id, 'billing_last_name', $last_name);
         update_user_meta($user_id, 'billing_company', $company);
         update_user_meta($user_id, 'billing_email', $email);
         update_user_meta($user_id, 'billing_phone', $billing_phone);
@@ -3385,8 +3404,21 @@ function zoho_sync_contacts_to_customers($offset, $total, $synced, $created, $up
         update_user_meta($user_id, 'billing_country', $billing_country);
         
         // Shipping details
-        update_user_meta($user_id, 'shipping_first_name', $first_name);
-        update_user_meta($user_id, 'shipping_last_name', $last_name);
+        if ($action == 'Created') {
+            // For new customers, set shipping name from Zoho
+            update_user_meta($user_id, 'shipping_first_name', $first_name);
+            update_user_meta($user_id, 'shipping_last_name', $last_name);
+        } else {
+            // For existing customers, preserve WooCommerce shipping name
+            $existing_shipping_first = get_user_meta($user_id, 'shipping_first_name', true);
+            $existing_shipping_last = get_user_meta($user_id, 'shipping_last_name', true);
+            
+            // Only update if empty
+            if (empty($existing_shipping_first) && empty($existing_shipping_last)) {
+                update_user_meta($user_id, 'shipping_first_name', $first_name);
+                update_user_meta($user_id, 'shipping_last_name', $last_name);
+            }
+        }
         update_user_meta($user_id, 'shipping_company', $company);
         update_user_meta($user_id, 'shipping_address_1', $shipping_street);
         update_user_meta($user_id, 'shipping_address_2', $shipping_street2);
