@@ -2934,6 +2934,36 @@ function zoho_sync_customers_to_contacts($offset, $total, $synced, $created, $up
         } else {
             $response = zoho_api_post('contacts', $contact_data);
             $action = 'created';
+            
+            // Handle Code 3062 (contact already exists) or Code 1002 (contact does not exist - but might be validation error)
+            if (isset($response['code']) && ($response['code'] == 3062 || $response['code'] == 1002)) {
+                // Try to find existing contact by email or name
+                if (!empty($contact_data['email'])) {
+                    $search_response = zoho_api_get('contacts?email=' . urlencode($contact_data['email']));
+                    if (!is_wp_error($search_response) && isset($search_response['contacts']) && !empty($search_response['contacts'])) {
+                        $existing_contact_id = $search_response['contacts'][0]['contact_id'];
+                        // Try update instead
+                        $response = zoho_api_put('contacts/' . $existing_contact_id, $contact_data);
+                        $action = 'updated';
+                    } else {
+                        // Try search by name
+                        if (!empty($contact_data['contact_name'])) {
+                            $name_search = zoho_api_get('contacts?search_text=' . urlencode($contact_data['contact_name']));
+                            if (!is_wp_error($name_search) && isset($name_search['contacts']) && !empty($name_search['contacts'])) {
+                                // Find exact match
+                                foreach ($name_search['contacts'] as $contact) {
+                                    if (isset($contact['contact_name']) && $contact['contact_name'] === $contact_data['contact_name']) {
+                                        $existing_contact_id = $contact['contact_id'];
+                                        $response = zoho_api_put('contacts/' . $existing_contact_id, $contact_data);
+                                        $action = 'updated';
+                                        break;
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
         }
         
         
@@ -3749,28 +3779,64 @@ function zoho_build_contact_data_from_customer($customer) {
         'contact_name' => $contact_name,
         'contact_type' => 'customer',
         'customer_sub_type' => 'individual',
-        'first_name' => $first_name,
-        'last_name' => $last_name,
         'email' => $email,
-        'company_name' => $customer->get_billing_company(),
-        'billing_address' => array(
-            'address' => $customer->get_billing_address_1(),
-            'street2' => $customer->get_billing_address_2(),
-            'city' => $customer->get_billing_city(),
-            'state' => $customer->get_billing_state(),
-            'zip' => $customer->get_billing_postcode(),
-            'country' => $customer->get_billing_country(),
-            'phone' => $customer->get_billing_phone(),
-        ),
-        'shipping_address' => array(
-            'address' => $customer->get_shipping_address_1(),
-            'street2' => $customer->get_shipping_address_2(),
-            'city' => $customer->get_shipping_city(),
-            'state' => $customer->get_shipping_state(),
-            'zip' => $customer->get_shipping_postcode(),
-            'country' => $customer->get_shipping_country(),
-        ),
     );
+    
+    // Add name fields only if not empty
+    if (!empty($first_name)) {
+        $contact_data['first_name'] = $first_name;
+    }
+    if (!empty($last_name)) {
+        $contact_data['last_name'] = $last_name;
+    }
+    if (!empty($customer->get_billing_company())) {
+        $contact_data['company_name'] = $customer->get_billing_company();
+    }
+    
+    // Build billing address only if at least one field is not empty
+    $billing_address = array();
+    $billing_fields = array(
+        'address' => $customer->get_billing_address_1(),
+        'street2' => $customer->get_billing_address_2(),
+        'city' => $customer->get_billing_city(),
+        'state' => $customer->get_billing_state(),
+        'zip' => $customer->get_billing_postcode(),
+        'country' => $customer->get_billing_country(),
+        'phone' => $customer->get_billing_phone(),
+    );
+    
+    foreach ($billing_fields as $key => $value) {
+        if (!empty($value)) {
+            $billing_address[$key] = $value;
+        }
+    }
+    
+    // Only add billing_address if it has at least one field
+    if (!empty($billing_address)) {
+        $contact_data['billing_address'] = $billing_address;
+    }
+    
+    // Build shipping address only if at least one field is not empty
+    $shipping_address = array();
+    $shipping_fields = array(
+        'address' => $customer->get_shipping_address_1(),
+        'street2' => $customer->get_shipping_address_2(),
+        'city' => $customer->get_shipping_city(),
+        'state' => $customer->get_shipping_state(),
+        'zip' => $customer->get_shipping_postcode(),
+        'country' => $customer->get_shipping_country(),
+    );
+    
+    foreach ($shipping_fields as $key => $value) {
+        if (!empty($value)) {
+            $shipping_address[$key] = $value;
+        }
+    }
+    
+    // Only add shipping_address if it has at least one field
+    if (!empty($shipping_address)) {
+        $contact_data['shipping_address'] = $shipping_address;
+    }
     
     return $contact_data;
 }
