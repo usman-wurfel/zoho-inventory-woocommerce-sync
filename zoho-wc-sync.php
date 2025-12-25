@@ -3037,17 +3037,13 @@ function zoho_sync_customers_to_contacts($offset, $total, $synced, $created, $up
             // Generate password
             $password = wp_generate_password();
             
-            // Create WordPress user
-            $user_id = wp_create_user($username, $password, $guest->email);
+            // Use WooCommerce function to create customer (proper way)
+            $user_id = wc_create_new_customer($guest->email, $username, $password);
             
             if (is_wp_error($user_id)) {
                 // If user creation fails, skip
                 continue;
             }
-            
-            // Set customer role
-            $user = new WP_User($user_id);
-            $user->set_role('customer');
             
             // Set billing information from order data
             if (!empty($guest->first_name)) {
