@@ -2993,9 +2993,6 @@ function zoho_sync_customers_to_contacts($offset, $total, $synced, $created, $up
     foreach ($batch_ids as $user_id) {
         $customer = new WC_Customer($user_id);
         
-        // Ensure customer data is loaded
-        $customer->read_meta_data();
-        
         // Build contact data from field mappings
         $contact_data = zoho_build_contact_data_from_customer($customer);
         
@@ -4116,8 +4113,12 @@ function zoho_build_contact_data_from_customer($customer) {
     if (!empty($last_name)) {
         $contact_data['last_name'] = $last_name;
     }
-    if (!empty($customer->get_billing_company())) {
-        $contact_data['company_name'] = $customer->get_billing_company();
+    $company_name_meta = $customer->get_billing_company();
+    if (empty($company_name_meta)) {
+        $company_name_meta = get_user_meta($user_id, 'billing_company', true);
+    }
+    if (!empty($company_name_meta)) {
+        $contact_data['company_name'] = $company_name_meta;
     }
     
     // Build billing address - include all available fields
