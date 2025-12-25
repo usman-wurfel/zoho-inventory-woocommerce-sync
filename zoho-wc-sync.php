@@ -2183,6 +2183,25 @@ function zoho_get_item_by_sku($sku) {
     return null;
 }
 
+function zoho_get_item_by_name($name) {
+    $response = zoho_api_get('items?search_text=' . urlencode($name));
+    
+    if (!is_wp_error($response) && isset($response['items']) && !empty($response['items'])) {
+        // Find exact match by name
+        foreach ($response['items'] as $item) {
+            if (isset($item['name']) && $item['name'] === $name) {
+                return $item['item_id'];
+            }
+        }
+        // If no exact match, return first result
+        if (isset($response['items'][0]['item_id'])) {
+            return $response['items'][0]['item_id'];
+        }
+    }
+    
+    return null;
+}
+
 /* ======================================================
    AJAX HANDLER FOR INVOICE SYNC
 ====================================================== */
@@ -2419,14 +2438,24 @@ function zoho_sync_orders_to_invoices($offset, $total, $synced, $created, $updat
                 }
             }
             
+            // If still not found and SKU is empty or SKU search failed, try searching by product name
+            if (!$zoho_item_id && !empty($product_name)) {
+                $zoho_item_id = zoho_get_item_by_name($product_name);
+                
+                // If found by name, save it to product meta for future use
+                if ($zoho_item_id) {
+                    update_post_meta($product_id, '_zoho_item_id', $zoho_item_id);
+                }
+            }
+            
             // Only add line item if item exists in Zoho (by item_id)
             // Zoho requires item_id or name of existing item - we use item_id for reliability
             if (!$zoho_item_id) {
                 // Track skipped items
                 if (!$sku) {
-                    $skipped_items[] = $product_name . ' (ID: ' . $product_id . ') - No SKU';
+                    $skipped_items[] = $product_name . ' (ID: ' . $product_id . ') - No SKU and not found by name in Zoho';
                 } else {
-                    $skipped_items[] = $product_name . ' (SKU: ' . $sku . ') - Not found in Zoho';
+                    $skipped_items[] = $product_name . ' (SKU: ' . $sku . ') - Not found in Zoho by SKU or name';
                 }
                 continue;
             }
