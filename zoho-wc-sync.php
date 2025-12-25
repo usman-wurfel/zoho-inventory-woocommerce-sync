@@ -2108,11 +2108,56 @@ function zoho_sync_woo_to_zoho($offset, $total, $synced, $created, $updated) {
         $request_data = json_encode($item_data);
         
         if ($zoho_item_id) {
-            // Update existing item (found by SKU) - remove item_type as it can't be changed
+            // Store stock values before removing them (needed for stock adjustment)
+            $woo_stock_value = null;
+            if ($item_type === 'goods' && isset($item_data['initial_stock'])) {
+                $woo_stock_value = $item_data['initial_stock'];
+            }
+            
+            // Update existing item (found by SKU) - remove fields that can't be changed/updated
             $update_data = $item_data;
-            unset($update_data['item_type']);
+            unset($update_data['item_type']); // Can't change item_type on update
+            unset($update_data['initial_stock']); // Can only set on create, not update
+            unset($update_data['initial_stock_rate']); // Can only set on create, not update
             $response = zoho_api_put('items/' . $zoho_item_id, $update_data);
             $action = 'updated';
+            
+            // If stock sync is enabled and stock value exists, update stock via stock adjustment
+            if ($woo_stock_value !== null && $item_type === 'goods' && get_option('zoho_sync_stock', 'yes') == 'yes') {
+                // Get current item from Zoho to check current stock
+                $current_item_response = zoho_api_get('items/' . $zoho_item_id);
+                if (!is_wp_error($current_item_response) && isset($current_item_response['item'])) {
+                    $current_item = $current_item_response['item'];
+                    // Get current stock (try different field names)
+                    $current_stock = 0;
+                    if (isset($current_item['stock_on_hand'])) {
+                        $current_stock = intval($current_item['stock_on_hand']);
+                    } elseif (isset($current_item['available_stock'])) {
+                        $current_stock = intval($current_item['available_stock']);
+                    }
+                    
+                    // Calculate stock difference
+                    $stock_difference = intval($woo_stock_value) - $current_stock;
+                    
+                    // If stock is different, create stock adjustment
+                    if ($stock_difference != 0) {
+                        $adjustment_data = array(
+                            'date' => date('Y-m-d'),
+                            'adjustment_type' => 'quantity',
+                            'reason' => 'Stock sync from WooCommerce',
+                            'line_items' => array(
+                                array(
+                                    'item_id' => $zoho_item_id,
+                                    'quantity_adjusted' => $stock_difference,
+                                )
+                            )
+                        );
+                        
+                        // Create stock adjustment (don't fail sync if this fails)
+                        $adjustment_response = zoho_api_post('inventoryadjustments', $adjustment_data);
+                    }
+                }
+            }
         } else {
             // Create new item with original name
             $response = zoho_api_post('items', $item_data);
@@ -3519,11 +3564,56 @@ function zoho_retry_sync_handler() {
         // If SKU doesn't match, we'll create new item
         
         if ($zoho_item_id) {
-            // Update existing item (found by SKU) - remove item_type as it can't be changed
+            // Store stock values before removing them (needed for stock adjustment)
+            $woo_stock_value = null;
+            if ($item_type === 'goods' && isset($item_data['initial_stock'])) {
+                $woo_stock_value = $item_data['initial_stock'];
+            }
+            
+            // Update existing item (found by SKU) - remove fields that can't be changed/updated
             $update_data = $item_data;
-            unset($update_data['item_type']);
+            unset($update_data['item_type']); // Can't change item_type on update
+            unset($update_data['initial_stock']); // Can only set on create, not update
+            unset($update_data['initial_stock_rate']); // Can only set on create, not update
             $response = zoho_api_put('items/' . $zoho_item_id, $update_data);
             $action = 'updated';
+            
+            // If stock sync is enabled and stock value exists, update stock via stock adjustment
+            if ($woo_stock_value !== null && $item_type === 'goods' && get_option('zoho_sync_stock', 'yes') == 'yes') {
+                // Get current item from Zoho to check current stock
+                $current_item_response = zoho_api_get('items/' . $zoho_item_id);
+                if (!is_wp_error($current_item_response) && isset($current_item_response['item'])) {
+                    $current_item = $current_item_response['item'];
+                    // Get current stock (try different field names)
+                    $current_stock = 0;
+                    if (isset($current_item['stock_on_hand'])) {
+                        $current_stock = intval($current_item['stock_on_hand']);
+                    } elseif (isset($current_item['available_stock'])) {
+                        $current_stock = intval($current_item['available_stock']);
+                    }
+                    
+                    // Calculate stock difference
+                    $stock_difference = intval($woo_stock_value) - $current_stock;
+                    
+                    // If stock is different, create stock adjustment
+                    if ($stock_difference != 0) {
+                        $adjustment_data = array(
+                            'date' => date('Y-m-d'),
+                            'adjustment_type' => 'quantity',
+                            'reason' => 'Stock sync from WooCommerce',
+                            'line_items' => array(
+                                array(
+                                    'item_id' => $zoho_item_id,
+                                    'quantity_adjusted' => $stock_difference,
+                                )
+                            )
+                        );
+                        
+                        // Create stock adjustment (don't fail sync if this fails)
+                        $adjustment_response = zoho_api_post('inventoryadjustments', $adjustment_data);
+                    }
+                }
+            }
         } else {
             // Create new item with original name
             $response = zoho_api_post('items', $item_data);
@@ -3709,10 +3799,55 @@ function zoho_retry_all_failed_handler() {
             // If SKU doesn't match, we'll create new item
             
             if ($zoho_item_id) {
-                // Update existing item (found by SKU) - remove item_type as it can't be changed
+                // Store stock values before removing them (needed for stock adjustment)
+                $woo_stock_value = null;
+                if ($item_type === 'goods' && isset($item_data['initial_stock'])) {
+                    $woo_stock_value = $item_data['initial_stock'];
+                }
+                
+                // Update existing item (found by SKU) - remove fields that can't be changed/updated
                 $update_data = $item_data;
-                unset($update_data['item_type']);
+                unset($update_data['item_type']); // Can't change item_type on update
+                unset($update_data['initial_stock']); // Can only set on create, not update
+                unset($update_data['initial_stock_rate']); // Can only set on create, not update
                 $response = zoho_api_put('items/' . $zoho_item_id, $update_data);
+                
+                // If stock sync is enabled and stock value exists, update stock via stock adjustment
+                if ($woo_stock_value !== null && $item_type === 'goods' && get_option('zoho_sync_stock', 'yes') == 'yes') {
+                    // Get current item from Zoho to check current stock
+                    $current_item_response = zoho_api_get('items/' . $zoho_item_id);
+                    if (!is_wp_error($current_item_response) && isset($current_item_response['item'])) {
+                        $current_item = $current_item_response['item'];
+                        // Get current stock (try different field names)
+                        $current_stock = 0;
+                        if (isset($current_item['stock_on_hand'])) {
+                            $current_stock = intval($current_item['stock_on_hand']);
+                        } elseif (isset($current_item['available_stock'])) {
+                            $current_stock = intval($current_item['available_stock']);
+                        }
+                        
+                        // Calculate stock difference
+                        $stock_difference = intval($woo_stock_value) - $current_stock;
+                        
+                        // If stock is different, create stock adjustment
+                        if ($stock_difference != 0) {
+                            $adjustment_data = array(
+                                'date' => date('Y-m-d'),
+                                'adjustment_type' => 'quantity',
+                                'reason' => 'Stock sync from WooCommerce',
+                                'line_items' => array(
+                                    array(
+                                        'item_id' => $zoho_item_id,
+                                        'quantity_adjusted' => $stock_difference,
+                                    )
+                                )
+                            );
+                            
+                            // Create stock adjustment (don't fail sync if this fails)
+                            $adjustment_response = zoho_api_post('inventoryadjustments', $adjustment_data);
+                        }
+                    }
+                }
             } else {
                 // Create new item with original name
                 $response = zoho_api_post('items', $item_data);
