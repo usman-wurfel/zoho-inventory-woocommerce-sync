@@ -2470,23 +2470,49 @@ function zoho_sync_orders_to_invoices($offset, $total, $synced, $created, $updat
                 continue;
             }
             
-            // Build line item (no verification API call to avoid rate limits)
+            // For invoices, verify item exists (invoice sync has fewer items, so verification is safe)
+            $zoho_item_response = zoho_api_get('items/' . urlencode($zoho_item_id));
+            if (is_wp_error($zoho_item_response) || !isset($zoho_item_response['item']['item_id'])) {
+                // Item doesn't exist or can't be accessed - skip it and remove from meta
+                $skipped_items[] = $product_name . ' (Item ID: ' . $zoho_item_id . ') - Item not found/accessible in Zoho';
+                delete_post_meta($product_id, '_zoho_item_id');
+                continue;
+            }
+            
+            $zoho_item = $zoho_item_response['item'];
             $quantity = absint($item->get_quantity()); // Ensure integer
             $item_total = floatval($item->get_total()); // Ensure float
             
             // Calculate rate from order item total
             $rate = $quantity > 0 ? floatval($item_total / $quantity) : 0.0;
             
-            // Only include rate if it's valid and positive
-            // If rate is 0 or invalid, Zoho will use the item's default rate
-            $line_item = array(
-                'item_id' => $zoho_item_id, // Keep as is (Zoho accepts both string and numeric)
-                'quantity' => $quantity,
-            );
+            // Use item's rate from Zoho if available, otherwise use calculated rate
+            // But ensure minimum rate of 0.01
+            if (isset($zoho_item['rate']) && floatval($zoho_item['rate']) > 0) {
+                // Use Zoho's item rate as base, but allow order's rate if different (customer may have paid different price)
+                $zoho_rate = floatval($zoho_item['rate']);
+                // Only override if our rate is significantly different (>50% difference)
+                if (abs($rate - $zoho_rate) / max($zoho_rate, 0.01) > 0.5 && $rate > 0) {
+                    // Use order's actual rate (customer paid different price)
+                    $final_rate = $rate;
+                } else {
+                    // Use Zoho's rate (more reliable)
+                    $final_rate = $zoho_rate;
+                }
+            } else {
+                $final_rate = $rate;
+            }
             
-            // Always include rate (Zoho requires it for line items)
-            // Use order's actual rate (even if 1, it's what customer paid)
-            $line_item['rate'] = max(0.01, round($rate, 2)); // Minimum 0.01, round to 2 decimal places
+            // Ensure minimum rate
+            if ($final_rate <= 0) {
+                $final_rate = 0.01;
+            }
+            
+            $line_item = array(
+                'item_id' => $zoho_item['item_id'], // Use verified item_id from API response
+                'quantity' => $quantity,
+                'rate' => round($final_rate, 2), // Round to 2 decimal places
+            );
             
             // Ensure name is never added
             unset($line_item['name']);
