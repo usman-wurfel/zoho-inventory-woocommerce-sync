@@ -3430,6 +3430,40 @@ function zoho_sync_contacts_to_customers($offset, $total, $synced, $created, $up
         // Link to Zoho
         update_user_meta($user_id, '_zoho_contact_id', $zoho_contact_id);
         
+        // Update display_name for WooCommerce to show customer name properly
+        // Use billing name first (WooCommerce standard), then fallback to first_name/last_name
+        $final_first_name = get_user_meta($user_id, 'billing_first_name', true);
+        $final_last_name = get_user_meta($user_id, 'billing_last_name', true);
+        
+        if (empty($final_first_name)) {
+            $final_first_name = get_user_meta($user_id, 'first_name', true);
+        }
+        if (empty($final_last_name)) {
+            $final_last_name = get_user_meta($user_id, 'last_name', true);
+        }
+        
+        $display_name = trim($final_first_name . ' ' . $final_last_name);
+        
+        // Fallback to company name or email if name is empty
+        if (empty($display_name)) {
+            $company = get_user_meta($user_id, 'billing_company', true);
+            if (!empty($company)) {
+                $display_name = $company;
+            } else {
+                $user = get_user_by('ID', $user_id);
+                if ($user) {
+                    $display_name = $user->user_email;
+                }
+            }
+        }
+        
+        if (!empty($display_name)) {
+            wp_update_user(array(
+                'ID' => $user_id,
+                'display_name' => $display_name
+            ));
+        }
+        
         zoho_add_detailed_log('contact', 'customer', $user_id, 'contact', $zoho_contact_id, json_encode($contact), json_encode(array('message' => $action, 'user_id' => $user_id)));
     }
     
