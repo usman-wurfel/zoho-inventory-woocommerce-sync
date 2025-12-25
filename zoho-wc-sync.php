@@ -2078,13 +2078,25 @@ function zoho_sync_woo_to_zoho($offset, $total, $synced, $created, $updated) {
             'item_type' => $item_type,
         );
         
-        // Add stock for goods items (null/empty/"-" = 0)
+        // Add stock and inventory settings for goods items (null/empty/"-" = 0)
         if ($item_type === 'goods') {
             $stock = $product->get_stock_quantity();
             // Handle null, empty, "-", non-numeric, or negative as 0
             $stock_value = (is_numeric($stock) && $stock !== '') ? intval($stock) : 0;
             $item_data['initial_stock'] = max(0, $stock_value); // Never negative
             $item_data['initial_stock_rate'] = floatval($product->get_regular_price()) ?: 0;
+            
+            // Add Inventory Account ID (Asset Inventory account)
+            $inventory_account_id = get_option('zoho_inventory_account_id', '');
+            if (!empty($inventory_account_id)) {
+                $item_data['inventory_account_id'] = $inventory_account_id;
+            }
+            
+            // Add Inventory Valuation Method (FIFO, LIFO, Weighted Average, etc.)
+            $inventory_valuation_method = get_option('zoho_inventory_valuation_method', '');
+            if (!empty($inventory_valuation_method)) {
+                $item_data['inventory_valuation_method'] = $inventory_valuation_method;
+            }
         }
         
         // OPTIMIZED: Check if item exists in Zoho by SKU using pre-fetched map (no API call needed)
@@ -3480,12 +3492,24 @@ function zoho_retry_sync_handler() {
             'item_type' => $item_type,
         );
         
-        // Add stock for goods items (null/empty/"-" = 0)
+        // Add stock and inventory settings for goods items (null/empty/"-" = 0)
         if ($item_type === 'goods') {
             $stock = $product->get_stock_quantity();
             $stock_value = (is_numeric($stock) && $stock !== '') ? intval($stock) : 0;
             $item_data['initial_stock'] = max(0, $stock_value); // Never negative
             $item_data['initial_stock_rate'] = floatval($product->get_regular_price()) ?: 0;
+            
+            // Add Inventory Account ID (Asset Inventory account)
+            $inventory_account_id = get_option('zoho_inventory_account_id', '');
+            if (!empty($inventory_account_id)) {
+                $item_data['inventory_account_id'] = $inventory_account_id;
+            }
+            
+            // Add Inventory Valuation Method (FIFO, LIFO, Weighted Average, etc.)
+            $inventory_valuation_method = get_option('zoho_inventory_valuation_method', '');
+            if (!empty($inventory_valuation_method)) {
+                $item_data['inventory_valuation_method'] = $inventory_valuation_method;
+            }
         }
         
         // Check if item exists in Zoho by SKU first (SKU is unique identifier)
@@ -3658,12 +3682,24 @@ function zoho_retry_all_failed_handler() {
                 'item_type' => $item_type,
             );
             
-            // Add stock for goods items (null/empty/"-" = 0)
+            // Add stock and inventory settings for goods items (null/empty/"-" = 0)
             if ($item_type === 'goods') {
                 $stock = $product->get_stock_quantity();
                 $stock_value = (is_numeric($stock) && $stock !== '') ? intval($stock) : 0;
                 $item_data['initial_stock'] = max(0, $stock_value); // Never negative
                 $item_data['initial_stock_rate'] = floatval($product->get_regular_price()) ?: 0;
+                
+                // Add Inventory Account ID (Asset Inventory account)
+                $inventory_account_id = get_option('zoho_inventory_account_id', '');
+                if (!empty($inventory_account_id)) {
+                    $item_data['inventory_account_id'] = $inventory_account_id;
+                }
+                
+                // Add Inventory Valuation Method (FIFO, LIFO, Weighted Average, etc.)
+                $inventory_valuation_method = get_option('zoho_inventory_valuation_method', '');
+                if (!empty($inventory_valuation_method)) {
+                    $item_data['inventory_valuation_method'] = $inventory_valuation_method;
+                }
             }
             
             // Check if item exists in Zoho by SKU first (SKU is unique identifier)
