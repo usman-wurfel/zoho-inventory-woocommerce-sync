@@ -2949,25 +2949,10 @@ function zoho_sync_customers_to_contacts($offset, $total, $synced, $created, $up
         delete_transient('zoho_contact_sync_stats');
         
         // Use WooCommerce's customer data store query (same as WooCommerce admin uses)
-        $data_store = WC_Data_Store::load( 'customer' );
-        
-        $query_args = array(
-            'role' => 'customer',
-            'per_page' => 999999, // Get all customers (large number)
-            'page' => 1,
-            'orderby' => 'ID',
-            'order' => 'asc',
-            'search' => '',
-            'include' => array(),
-            'exclude' => array(),
-        );
-        
-        // Apply date filters if provided (WooCommerce uses WP_User_Query internally which supports date_query)
-        // Note: query_customers doesn't directly support date_query, so we'll use WP_User_Query directly
-        // which is what WooCommerce uses internally anyway
+        // WooCommerce admin uses query_customers which internally uses WP_User_Query with role='customer'
         $wp_query_args = array(
             'role' => 'customer',
-            'number' => -1, // Get all
+            'number' => -1, // Get all customers (no limit)
             'fields' => 'ID',
             'orderby' => 'ID',
             'order' => 'ASC',
@@ -2987,9 +2972,10 @@ function zoho_sync_customers_to_contacts($offset, $total, $synced, $created, $up
         }
         
         // Use WP_User_Query directly (same as WooCommerce's query_customers uses internally)
+        // This will get ALL WordPress users with 'customer' role, same as WooCommerce admin
         $wp_user_query = new WP_User_Query($wp_query_args);
         $users = $wp_user_query->get_results();
-        $total = count($users);
+        $total = $wp_user_query->get_total(); // Use get_total() instead of count() for accurate count
         
         if ($total == 0) {
             wp_send_json_error('No customers found in WooCommerce');
