@@ -78,20 +78,20 @@ function zoho_register_admin_menu() {
 
     add_submenu_page(
         'zoho-sync',
-        'Invoice Sync',
-        'Invoice Sync',
-        'manage_options',
-        'zoho-invoice-sync',
-        'zoho_invoice_sync_page'
-    );
-
-    add_submenu_page(
-        'zoho-sync',
         'Contact Sync',
         'Contact Sync',
         'manage_options',
         'zoho-contact-sync',
         'zoho_contact_sync_page'
+    );
+
+    add_submenu_page(
+        'zoho-sync',
+        'Invoice Sync',
+        'Invoice Sync',
+        'manage_options',
+        'zoho-invoice-sync',
+        'zoho_invoice_sync_page'
     );
 
     add_submenu_page(
@@ -381,13 +381,27 @@ function zoho_dashboard_page() {
     ", '_zoho_contact_id'));
     
     // Count WooCommerce customers that have _zoho_contact_id (customers linked)
-    $customers_linked = $wpdb->get_var($wpdb->prepare("
-        SELECT COUNT(DISTINCT user_id) 
-        FROM {$wpdb->usermeta} 
-        WHERE meta_key = %s 
-        AND meta_value != '' 
-        AND meta_value IS NOT NULL
-    ", '_zoho_contact_id'));
+    // Only count users with customer role
+    $customers_linked = $wpdb->get_var("
+        SELECT COUNT(DISTINCT um.user_id) 
+        FROM {$wpdb->usermeta} um
+        INNER JOIN {$wpdb->users} u ON um.user_id = u.ID
+        INNER JOIN {$wpdb->usermeta} role_meta ON um.user_id = role_meta.user_id 
+            AND role_meta.meta_key = '{$wpdb->prefix}capabilities'
+            AND role_meta.meta_value LIKE '%customer%'
+        WHERE um.meta_key = '_zoho_contact_id' 
+        AND um.meta_value != '' 
+        AND um.meta_value IS NOT NULL
+    ");
+    
+    // Count total WooCommerce customers (with customer role only)
+    $total_customers = $wpdb->get_var("
+        SELECT COUNT(DISTINCT u.ID) 
+        FROM {$wpdb->users} u
+        INNER JOIN {$wpdb->usermeta} role_meta ON u.ID = role_meta.user_id 
+            AND role_meta.meta_key = '{$wpdb->prefix}capabilities'
+            AND role_meta.meta_value LIKE '%customer%'
+    ");
     
     // Get invoices count from logs (no meta tracking for invoices yet)
     $detailed_logs = get_option('zoho_detailed_logs', []);
@@ -402,7 +416,6 @@ function zoho_dashboard_page() {
     $total_products = wp_count_posts('product');
     $published_products = $total_products->publish ?? 0;
     $total_orders = wp_count_posts('shop_order');
-    $total_customers = count_users()['total_users'] ?? 0;
     
     ?>
     <div class="wrap">
