@@ -1605,30 +1605,87 @@ function zoho_sync_products_ajax_handler() {
         $sku_value = isset($item[$zoho_sku_field]) ? $item[$zoho_sku_field] : (isset($item['sku']) ? $item['sku'] : '');
         
         if (empty($sku_value)) {
-            $batch_pending_skus[] = ['sku'=>'(empty)','reason'=>'Missing SKU'];
-                continue;
-            }
+            $error_reason = 'Missing SKU';
+            $batch_pending_skus[] = ['sku'=>'(empty)','reason'=>$error_reason];
+            
+            // Log the failure
+            $zoho_item_id = isset($item['item_id']) ? $item['item_id'] : '';
+            $item_name = isset($item[$zoho_name_field]) ? $item[$zoho_name_field] : (isset($item['name']) ? $item['name'] : 'Unknown');
+            zoho_add_detailed_log(
+                'item',
+                'product',
+                0,
+                'items-inventory',
+                $zoho_item_id,
+                json_encode($item),
+                json_encode(array('error' => $error_reason, 'code' => 'MISSING_SKU', 'item_name' => $item_name))
+            );
+            continue;
+        }
 
         $product_id = wc_get_product_id_by_sku($sku_value);
         $is_new_product = false;
+        $product = null;
         
+        try {
             if (!$product_id) {
-            // Create new product
-            $product = new WC_Product_Simple();
-            $product->set_sku($sku_value);
+                // Create new product
+                $product = new WC_Product_Simple();
+                if (!$product) {
+                    throw new Exception('Failed to create WC_Product_Simple object');
+                }
+                
+                $product->set_sku($sku_value);
+                
+                // Get name from mapped field
+                $name_value = isset($item[$zoho_name_field]) ? $item[$zoho_name_field] : (isset($item['name']) ? $item['name'] : $sku_value);
+                if (empty($name_value)) {
+                    $name_value = $sku_value; // Fallback to SKU if name is empty
+                }
+                $product->set_name($name_value);
+                $product->set_slug(sanitize_title($name_value));
+                $product->set_status('publish');
+                $product->set_catalog_visibility('visible');
+                
+                $is_new_product = true;
+                $batch_created++;
+            } else {
+                $product = wc_get_product($product_id);
+                if (!$product) {
+                    throw new Exception('Failed to load product with ID: ' . $product_id);
+                }
+                $batch_updated++;
+            }
+        } catch (Exception $e) {
+            // Log the failure
+            $error_reason = 'Product object creation failed: ' . $e->getMessage();
+            $batch_pending_skus[] = ['sku' => $sku_value, 'reason' => $error_reason];
             
-            // Get name from mapped field
-            $name_value = isset($item[$zoho_name_field]) ? $item[$zoho_name_field] : (isset($item['name']) ? $item['name'] : $sku_value);
-            $product->set_name($name_value);
-            $product->set_slug(sanitize_title($name_value));
-            $product->set_status('publish');
-            $product->set_catalog_visibility('visible');
+            $zoho_item_id = isset($item['item_id']) ? $item['item_id'] : '';
+            $item_name = isset($item[$zoho_name_field]) ? $item[$zoho_name_field] : (isset($item['name']) ? $item['name'] : 'Unknown');
+            zoho_add_detailed_log(
+                'item',
+                'product',
+                0,
+                'items-inventory',
+                $zoho_item_id,
+                json_encode($item),
+                json_encode(array('error' => $error_reason, 'code' => 'PRODUCT_CREATE_FAILED', 'item_name' => $item_name, 'sku' => $sku_value, 'exception' => $e->getMessage()))
+            );
             
-            $is_new_product = true;
-            $batch_created++;
-        } else {
-            $product = wc_get_product($product_id);
-            $batch_updated++;
+            // Adjust counters
+            if ($is_new_product) {
+                $batch_created = max(0, $batch_created - 1);
+            } else {
+                $batch_updated = max(0, $batch_updated - 1);
+            }
+            
+            continue; // Skip to next item
+        }
+        
+        // If product is null, skip
+        if (!$product) {
+            continue;
         }
         
         // Sync Name (if enabled)
@@ -1766,32 +1823,64 @@ function zoho_sync_products_ajax_handler() {
             }
             }
 
+        // Try to save product with error handling
+        try {
             $product->save();
-        $saved_product_id = $product->get_id();
-        
-        // Permalink Manager integration
-        if ($saved_product_id && $is_new_product && class_exists('Permalink_Manager_URI_Functions_Post')) {
-            global $permalink_manager_uris;
-            if (isset($permalink_manager_uris[$saved_product_id])) {
-                unset($permalink_manager_uris[$saved_product_id]);
+            $saved_product_id = $product->get_id();
+            
+            // Check if save was successful
+            if (!$saved_product_id || $saved_product_id == 0) {
+                throw new Exception('Product save failed - no product ID returned');
             }
-            Permalink_Manager_URI_Functions_Post::save_uri($saved_product_id, '', true, 0);
+            
+            // Permalink Manager integration
+            if ($saved_product_id && $is_new_product && class_exists('Permalink_Manager_URI_Functions_Post')) {
+                global $permalink_manager_uris;
+                if (isset($permalink_manager_uris[$saved_product_id])) {
+                    unset($permalink_manager_uris[$saved_product_id]);
+                }
+                Permalink_Manager_URI_Functions_Post::save_uri($saved_product_id, '', true, 0);
+            }
+            
+            // Add detailed log for success
+            $zoho_item_id = isset($item['item_id']) ? $item['item_id'] : '';
+            zoho_add_detailed_log(
+                'item',
+                'product',
+                $saved_product_id,
+                'items-inventory',
+                $zoho_item_id,
+                json_encode($item),
+                json_encode(array('code' => 0, 'message' => ($is_new_product ? 'Created' : 'Updated'), 'product_id' => $saved_product_id))
+            );
+            
+            $processed++;
+            $batch_synced_skus[] = $sku_value;
+            
+        } catch (Exception $e) {
+            // Log the failure
+            $error_reason = 'Product save failed: ' . $e->getMessage();
+            $batch_pending_skus[] = ['sku' => $sku_value, 'reason' => $error_reason];
+            
+            $zoho_item_id = isset($item['item_id']) ? $item['item_id'] : '';
+            $item_name = isset($item[$zoho_name_field]) ? $item[$zoho_name_field] : (isset($item['name']) ? $item['name'] : 'Unknown');
+            zoho_add_detailed_log(
+                'item',
+                'product',
+                0,
+                'items-inventory',
+                $zoho_item_id,
+                json_encode($item),
+                json_encode(array('error' => $error_reason, 'code' => 'PRODUCT_SAVE_FAILED', 'item_name' => $item_name, 'sku' => $sku_value, 'exception' => $e->getMessage()))
+            );
+            
+            // Adjust counters if this was counted as created/updated
+            if ($is_new_product) {
+                $batch_created = max(0, $batch_created - 1);
+            } else {
+                $batch_updated = max(0, $batch_updated - 1);
+            }
         }
-        
-        // Add detailed log
-        $zoho_item_id = isset($item['item_id']) ? $item['item_id'] : '';
-        zoho_add_detailed_log(
-            'item',
-            'product',
-            $saved_product_id,
-            'items-inventory',
-            $zoho_item_id,
-            json_encode($item),
-            json_encode(array('code' => 0, 'message' => ($is_new_product ? 'Created' : 'Updated'), 'product_id' => $saved_product_id))
-        );
-        
-        $processed++;
-        $batch_synced_skus[] = $sku_value;
     }
     
     // Update stats
