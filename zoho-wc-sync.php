@@ -3335,6 +3335,30 @@ function zoho_build_contact_data_from_order($order) {
         }
     }
 
+    // Add shipping address if available
+if (!empty($order->get_shipping_address_1()) || !empty($order->get_shipping_city())) {
+    $contact_data['shipping_address'] = array();
+    
+    if (!empty($order->get_shipping_address_1())) {
+        $contact_data['shipping_address']['street'] = $order->get_shipping_address_1();
+    }
+    if (!empty($order->get_shipping_address_2())) {
+        $contact_data['shipping_address']['street2'] = $order->get_shipping_address_2();
+    }
+    if (!empty($order->get_shipping_city())) {
+        $contact_data['shipping_address']['city'] = $order->get_shipping_city();
+    }
+    if (!empty($order->get_shipping_state())) {
+        $contact_data['shipping_address']['state'] = $order->get_shipping_state();
+    }
+    if (!empty($order->get_shipping_postcode())) {
+        $contact_data['shipping_address']['zip'] = $order->get_shipping_postcode();
+    }
+    if (!empty($order->get_shipping_country())) {
+        $contact_data['shipping_address']['country'] = $order->get_shipping_country();
+    }
+}
+
     return $contact_data;
 }
 
