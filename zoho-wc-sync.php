@@ -2938,27 +2938,25 @@ function zoho_sync_contacts_ajax_handler() {
     }
 }
 
-/* ======================================================
-   WOO CUSTOMERS TO ZOHO CONTACTS
-====================================================== */
 function zoho_sync_customers_to_contacts($offset, $total, $synced, $created, $updated, $from_date, $to_date) {
-    // First call - fetch WooCommerce customers
+    // First call - fetch WooCommerce customers (registered + guest)
     if ($offset == 0 && $total == 0) {
         // Clear old transients first
         delete_transient('zoho_contact_sync_customers');
         delete_transient('zoho_contact_sync_stats');
+
+        $all_customers = array();
         
-        // Use WooCommerce's customer data store query (same as WooCommerce admin uses)
-        // WooCommerce admin uses query_customers which internally uses WP_User_Query with role='customer'
+        // === PART 1: Fetch Registered Customers (WordPress Users) ===
         $wp_query_args = array(
             'role' => 'customer',
-            'number' => -1, // Get all customers (no limit)
+            'number' => -1,
             'fields' => 'ID',
             'orderby' => 'ID',
             'order' => 'ASC',
         );
-        
-        // Apply date filters if provided
+
+        // Apply date filters for registered users
         if (!empty($from_date) && $from_date !== '') {
             $wp_query_args['date_query'] = array(
                 array('after' => $from_date . ' 00:00:00', 'inclusive' => true)
@@ -2970,328 +2968,197 @@ function zoho_sync_customers_to_contacts($offset, $total, $synced, $created, $up
             }
             $wp_query_args['date_query'][] = array('before' => $to_date . ' 23:59:59', 'inclusive' => true);
         }
-        
-        // Use WP_User_Query directly (same as WooCommerce's query_customers uses internally)
-        // This will get ALL WordPress users with 'customer' role, same as WooCommerce admin
+
         $wp_user_query = new WP_User_Query($wp_query_args);
-        $users = $wp_user_query->get_results();
-        $registered_count = $wp_user_query->get_total();
-        
-        // Get guest customers from orders and create WordPress users for them
-        // Guest customers are orders where customer_id = 0 or _customer_user = 0
-        global $wpdb;
-        
-        // Simple and reliable query: Get orders with customer_user = 0, group by email
-        $guest_customers_query = "
-            SELECT 
-                pm_email.meta_value as email,
-                MAX(COALESCE(pm_first.meta_value, '')) as first_name,
-                MAX(COALESCE(pm_last.meta_value, '')) as last_name,
-                MAX(COALESCE(pm_company.meta_value, '')) as company
-            FROM {$wpdb->posts} p
-            INNER JOIN {$wpdb->postmeta} pm_email ON p.ID = pm_email.post_id AND pm_email.meta_key = '_billing_email'
-            LEFT JOIN {$wpdb->postmeta} pm_customer ON p.ID = pm_customer.post_id AND pm_customer.meta_key = '_customer_user'
-            LEFT JOIN {$wpdb->postmeta} pm_first ON p.ID = pm_first.post_id AND pm_first.meta_key = '_billing_first_name'
-            LEFT JOIN {$wpdb->postmeta} pm_last ON p.ID = pm_last.post_id AND pm_last.meta_key = '_billing_last_name'
-            LEFT JOIN {$wpdb->postmeta} pm_company ON p.ID = pm_company.post_id AND pm_company.meta_key = '_billing_company'
-            WHERE p.post_type = 'shop_order'
-            AND p.post_status NOT IN ('trash', 'auto-draft', 'wc-cancelled', 'wc-refunded')
-            AND (pm_customer.meta_value = '0' OR pm_customer.meta_value = '' OR pm_customer.meta_value IS NULL)
-            AND pm_email.meta_value != ''
-            AND pm_email.meta_value IS NOT NULL
-        ";
-        
-        // Apply date filters to guest customers query if provided
-        if (!empty($from_date)) {
-            $guest_customers_query .= $wpdb->prepare(" AND p.post_date >= %s", $from_date . ' 00:00:00');
+        $registered_users = $wp_user_query->get_results();
+
+        // Add registered customers with type marker
+        foreach ($registered_users as $user_id) {
+            $customer = new WC_Customer($user_id);
+            $email = strtolower(trim($customer->get_email()));
+            
+            if (!empty($email)) {
+                $all_customers[$email] = array(
+                    'type' => 'registered',
+                    'user_id' => $user_id,
+                    'email' => $email
+                );
+            }
         }
-        if (!empty($to_date)) {
-            $guest_customers_query .= $wpdb->prepare(" AND p.post_date <= %s", $to_date . ' 23:59:59');
+
+        // === PART 2: Fetch Guest Customers from Orders ===
+        $order_args = array(
+            'limit' => -1,
+            'return' => 'ids',
+            'orderby' => 'date',
+            'order' => 'ASC',
+        );
+
+        // Apply date filters for orders
+        if (!empty($from_date) && $from_date !== '') {
+            $order_args['date_created'] = '>=' . $from_date . ' 00:00:00';
         }
-        
-        $guest_customers_query .= " GROUP BY pm_email.meta_value";
-        
-        $guest_customers = $wpdb->get_results($guest_customers_query);
-        
-        // Create WordPress users for guest customers (if they don't already exist)
-        foreach ($guest_customers as $guest) {
-            if (empty($guest->email) || !is_email($guest->email)) {
+        if (!empty($to_date) && $to_date !== '') {
+            if (!isset($order_args['date_created'])) {
+                $order_args['date_created'] = '';
+            } else {
+                $order_args['date_created'] .= '...';
+            }
+            $order_args['date_created'] .= '<=' . $to_date . ' 23:59:59';
+        }
+
+        $orders = wc_get_orders($order_args);
+
+        foreach ($orders as $order_id) {
+            $order = wc_get_order($order_id);
+            $email = strtolower(trim($order->get_billing_email()));
+            
+            // Skip if already added as registered user
+            if (empty($email) || isset($all_customers[$email])) {
                 continue;
             }
-            
-            // Check if user already exists by email
-            $existing_user = get_user_by('email', $guest->email);
-            if ($existing_user) {
-                // User already exists, skip
-                continue;
-            }
-            
-            // Generate username from email
-            $username = sanitize_user(explode('@', $guest->email)[0]);
-            
-            // Ensure username is unique
-            $original_username = $username;
-            $counter = 1;
-            while (username_exists($username)) {
-                $username = $original_username . $counter;
-                $counter++;
-            }
-            
-            // Generate password
-            $password = wp_generate_password();
-            
-            // Use WooCommerce function to create customer (proper way)
-            $user_id = wc_create_new_customer($guest->email, $username, $password);
-            
-            if (is_wp_error($user_id)) {
-                // If user creation fails, skip
-                continue;
-            }
-            
-            // Set billing information from order data
-            if (!empty($guest->first_name)) {
-                update_user_meta($user_id, 'billing_first_name', $guest->first_name);
-                update_user_meta($user_id, 'first_name', $guest->first_name);
-            }
-            if (!empty($guest->last_name)) {
-                update_user_meta($user_id, 'billing_last_name', $guest->last_name);
-                update_user_meta($user_id, 'last_name', $guest->last_name);
-            }
-            if (!empty($guest->company)) {
-                update_user_meta($user_id, 'billing_company', $guest->company);
-            }
-            update_user_meta($user_id, 'billing_email', $guest->email);
+
+            // This is a guest customer
+            $all_customers[$email] = array(
+                'type' => 'guest',
+                'order_id' => $order_id,
+                'email' => $email,
+                'first_name' => $order->get_billing_first_name(),
+                'last_name' => $order->get_billing_last_name(),
+                'phone' => $order->get_billing_phone(),
+                'company' => $order->get_billing_company(),
+                'address_1' => $order->get_billing_address_1(),
+                'address_2' => $order->get_billing_address_2(),
+                'city' => $order->get_billing_city(),
+                'state' => $order->get_billing_state(),
+                'postcode' => $order->get_billing_postcode(),
+                'country' => $order->get_billing_country(),
+            );
         }
-        
-        // Re-fetch all customers (including newly created ones) after creating guest users
-        $wp_user_query = new WP_User_Query($wp_query_args);
-        $users = $wp_user_query->get_results();
-        $total = $wp_user_query->get_total();
-        
+
+        // Convert to indexed array
+        $customers_to_sync = array_values($all_customers);
+        $total = count($customers_to_sync);
+
         if ($total == 0) {
             wp_send_json_error('No customers found in WooCommerce');
             return;
         }
-        
-        set_transient('zoho_contact_sync_customers', $users, 600);
+
+        set_transient('zoho_contact_sync_customers', $customers_to_sync, 600);
         set_transient('zoho_contact_sync_stats', array('synced' => 0, 'created' => 0, 'updated' => 0, 'failed' => array()), 600);
+
     } else {
-        $users = get_transient('zoho_contact_sync_customers');
-        if (!$users) {
+        $customers_to_sync = get_transient('zoho_contact_sync_customers');
+        if (!$customers_to_sync) {
             wp_send_json_error('Sync session expired. Please try again.');
             return;
         }
-        $total = count($users);
+        $total = count($customers_to_sync);
     }
-    
-    // Process batch (20 customers per batch - balanced for API rate limits)
+
+    // Process batch
     $batch_size = 20;
-    $batch_ids = array_slice($users, $offset, $batch_size);
+    $batch = array_slice($customers_to_sync, $offset, $batch_size);
     $batch_created = 0;
     $batch_updated = 0;
     $batch_failed = array();
-    
-    foreach ($batch_ids as $user_id) {
-        $customer = new WC_Customer($user_id);
+
+    foreach ($batch as $customer_data) {
+        $contact_data = array();
         
-        // Build contact data from field mappings
-        $contact_data = zoho_build_contact_data_from_customer($customer);
-        
-        
+        if ($customer_data['type'] == 'registered') {
+            // Handle registered customer
+            $customer = new WC_Customer($customer_data['user_id']);
+            $contact_data = zoho_build_contact_data_from_customer($customer);
+            $reference_id = 'User:' . $customer_data['user_id'];
+            $saved_zoho_id = get_user_meta($customer_data['user_id'], '_zoho_contact_id', true);
+            
+        } else {
+            // Handle guest customer from order
+            $order = wc_get_order($customer_data['order_id']);
+            $contact_data = zoho_build_contact_data_from_order($order);
+            $reference_id = 'Guest:' . $customer_data['email'];
+            $saved_zoho_id = get_option('_zoho_guest_contact_' . md5($customer_data['email']), '');
+        }
+
         if (empty($contact_data['contact_name'])) {
-            $batch_failed[] = array('id' => $user_id, 'reason' => 'No contact name (email: ' . $customer->get_email() . ')');
+            $batch_failed[] = array('id' => $reference_id, 'reason' => 'No contact name');
             continue;
         }
-        
-        // Check if contact exists - first by saved ID, then by email search in Zoho
-        $existing_contact_id = get_user_meta($user_id, '_zoho_contact_id', true);
-        
-        // If no saved ID, search Zoho by email
+
+        // Check if contact exists
+        $existing_contact_id = $saved_zoho_id;
+
         if (empty($existing_contact_id) && !empty($contact_data['email'])) {
             $search_response = zoho_api_get('contacts?email=' . urlencode($contact_data['email']));
             if (!is_wp_error($search_response) && isset($search_response['contacts']) && !empty($search_response['contacts'])) {
                 $existing_contact_id = $search_response['contacts'][0]['contact_id'];
-                // Save it for future
-                update_user_meta($user_id, '_zoho_contact_id', $existing_contact_id);
+                
+                // Save for future
+                if ($customer_data['type'] == 'registered') {
+                    update_user_meta($customer_data['user_id'], '_zoho_contact_id', $existing_contact_id);
+                } else {
+                    update_option('_zoho_guest_contact_' . md5($customer_data['email']), $existing_contact_id, false);
+                }
             }
         }
-        
-        $request_data = json_encode($contact_data);
-        
+
+        // Create or Update
         if ($existing_contact_id) {
             $response = zoho_api_put('contacts/' . $existing_contact_id, $contact_data);
             $action = 'updated';
-            
-            // If update fails with Code 1002, contact doesn't exist - clear ID and search/create
-            if (isset($response['code']) && $response['code'] == 1002) {
-                // Clear invalid contact_id
-                delete_user_meta($user_id, '_zoho_contact_id');
-                $existing_contact_id = '';
-                
-                // Try to find contact by email
-                if (!empty($contact_data['email'])) {
-                    $search_email = strtolower(trim($contact_data['email']));
-                    $search_response = zoho_api_get('contacts?email=' . urlencode($search_email));
-                    if (!is_wp_error($search_response) && isset($search_response['contacts']) && !empty($search_response['contacts'])) {
-                        foreach ($search_response['contacts'] as $found_contact) {
-                            $found_email = isset($found_contact['email']) ? strtolower(trim($found_contact['email'])) : '';
-                            if ($found_email === $search_email) {
-                                $existing_contact_id = $found_contact['contact_id'];
-                                // Update with correct ID
-                                $response = zoho_api_put('contacts/' . $existing_contact_id, $contact_data);
-                                $action = 'updated';
-                                break;
-                            }
-                        }
-                    }
-                }
-                
-                // If still not found, try search by name
-                if (empty($existing_contact_id) && !empty($contact_data['contact_name'])) {
-                    $search_name = trim($contact_data['contact_name']);
-                    $name_search = zoho_api_get('contacts?search_text=' . urlencode($search_name));
-                    if (!is_wp_error($name_search) && isset($name_search['contacts']) && !empty($name_search['contacts'])) {
-                        foreach ($name_search['contacts'] as $contact) {
-                            $found_name = isset($contact['contact_name']) ? trim($contact['contact_name']) : '';
-                            if (strcasecmp($found_name, $search_name) === 0) {
-                                $existing_contact_id = $contact['contact_id'];
-                                // Update with correct ID
-                                $response = zoho_api_put('contacts/' . $existing_contact_id, $contact_data);
-                                $action = 'updated';
-                                break;
-                            }
-                        }
-                    }
-                }
-                
-                // If still not found, create new contact
-                if (empty($existing_contact_id)) {
-                    $response = zoho_api_post('contacts', $contact_data);
-                    $action = 'created';
-                }
-            }
         } else {
-            // No existing contact ID, try to create
             $response = zoho_api_post('contacts', $contact_data);
             $action = 'created';
-            
-            // Handle Code 3062 (contact already exists) or Code 1002 (may indicate contact exists or validation error)
-            if (isset($response['code']) && ($response['code'] == 3062 || $response['code'] == 1002)) {
-                $contact_found = false;
-                
-                // Try to find existing contact by email first (most reliable)
-                if (!empty($contact_data['email'])) {
-                    $search_email = strtolower(trim($contact_data['email']));
-                    $search_response = zoho_api_get('contacts?email=' . urlencode($search_email));
-                    if (!is_wp_error($search_response) && isset($search_response['contacts']) && !empty($search_response['contacts'])) {
-                        // Check if email matches (case-insensitive)
-                        foreach ($search_response['contacts'] as $found_contact) {
-                            $found_email = isset($found_contact['email']) ? strtolower(trim($found_contact['email'])) : '';
-                            if ($found_email === $search_email) {
-                                $existing_contact_id = $found_contact['contact_id'];
-                                // Update with correct ID
-                                $response = zoho_api_put('contacts/' . $existing_contact_id, $contact_data);
-                                $action = 'updated';
-                                $contact_found = true;
-                                break;
-                            }
-                        }
-                        // If no exact email match but contacts found, use first one
-                        if (!$contact_found && !empty($search_response['contacts'])) {
-                            $existing_contact_id = $search_response['contacts'][0]['contact_id'];
-                            $response = zoho_api_put('contacts/' . $existing_contact_id, $contact_data);
-                            $action = 'updated';
-                            $contact_found = true;
-                        }
-                    }
-                }
-                
-                // If not found by email, try search by name (case-insensitive)
-                if (!$contact_found && !empty($contact_data['contact_name'])) {
-                    $search_name = trim($contact_data['contact_name']);
-                    $name_search = zoho_api_get('contacts?search_text=' . urlencode($search_name));
-                    if (!is_wp_error($name_search) && isset($name_search['contacts']) && !empty($name_search['contacts'])) {
-                        // Find exact match by name (case-insensitive)
-                        foreach ($name_search['contacts'] as $contact) {
-                            $found_name = isset($contact['contact_name']) ? trim($contact['contact_name']) : '';
-                            if (strcasecmp($found_name, $search_name) === 0) {
-                                $existing_contact_id = $contact['contact_id'];
-                                // Update with correct ID
-                                $response = zoho_api_put('contacts/' . $existing_contact_id, $contact_data);
-                                $action = 'updated';
-                                $contact_found = true;
-                                break;
-                            }
-                        }
-                    }
-                }
-                
-                // If still not found and Code 1002, keep original error (might be validation issue)
-                // But if contact was found and updated successfully, $response should have code 0
-            }
         }
-        
-        
+
+        // Handle response
         $zoho_contact_id = '';
         if (isset($response['contact']['contact_id'])) {
             $zoho_contact_id = $response['contact']['contact_id'];
-            update_user_meta($user_id, '_zoho_contact_id', $zoho_contact_id);
-        } elseif (!empty($existing_contact_id)) {
-            // If update was successful, use the existing ID
-            $zoho_contact_id = $existing_contact_id;
-            update_user_meta($user_id, '_zoho_contact_id', $zoho_contact_id);
+            
+            if ($customer_data['type'] == 'registered') {
+                update_user_meta($customer_data['user_id'], '_zoho_contact_id', $zoho_contact_id);
+            } else {
+                update_option('_zoho_guest_contact_' . md5($customer_data['email']), $zoho_contact_id, false);
+            }
         }
-        
-        zoho_add_detailed_log('contact', 'customer', $user_id, 'contact', $zoho_contact_id, $request_data, json_encode($response));
-        
-        // Check for errors - handle both WP_Error and API error responses
-        // Note: code 0 means success, or if contact_id exists in response, it's successful
-        $has_error = false;
-        $error_msg = '';
-        
-        if (is_wp_error($response)) {
-            $has_error = true;
-            $error_msg = $response->get_error_message();
-        } elseif (isset($response['error'])) {
-            $has_error = true;
-            $error_msg = $response['error'];
-        } elseif (isset($response['code']) && $response['code'] != 0 && !isset($response['contact'])) {
-            // Only treat as error if code is not 0 AND contact object doesn't exist
-            // Sometimes successful updates return code 0, sometimes they return contact object
-            $has_error = true;
-            $error_msg = 'API Code ' . $response['code'] . ': ' . ($response['message'] ?? 'Unknown error');
-        }
-        
+
+        zoho_add_detailed_log('contact', $customer_data['type'], $reference_id, 'contact', $zoho_contact_id, json_encode($contact_data), json_encode($response));
+
+        // Check errors
+        $has_error = is_wp_error($response) || isset($response['error']) || (isset($response['code']) && $response['code'] != 0 && !isset($response['contact']));
+
         if ($has_error) {
-            $batch_failed[] = array('id' => $user_id, 'reason' => $error_msg);
+            $error_msg = is_wp_error($response) ? $response->get_error_message() : ($response['message'] ?? 'Unknown error');
+            $batch_failed[] = array('id' => $reference_id, 'reason' => $error_msg);
         } else {
             if ($action == 'created') $batch_created++;
             else $batch_updated++;
         }
     }
-    
+
     // Update stats
     $stats = get_transient('zoho_contact_sync_stats') ?: array('synced' => 0, 'created' => 0, 'updated' => 0, 'failed' => array());
-    $new_offset = $offset + count($batch_ids);
+    $new_offset = $offset + count($batch);
     $new_synced = $synced + $batch_created + $batch_updated;
     $new_created = $created + $batch_created;
     $new_updated = $updated + $batch_updated;
     $stats['failed'] = array_merge($stats['failed'] ?? array(), $batch_failed);
     set_transient('zoho_contact_sync_stats', $stats, 600);
-    
+
     $has_more = $new_offset < $total;
-    
     if (!$has_more) {
         delete_transient('zoho_contact_sync_customers');
         delete_transient('zoho_contact_sync_stats');
     }
-    
-    // Get failure reasons for display
+
     $failure_reasons = array();
     foreach ($stats['failed'] as $fail) {
-        $failure_reasons[] = 'ID ' . $fail['id'] . ': ' . $fail['reason'];
+        $failure_reasons[] = $fail['id'] . ': ' . $fail['reason'];
     }
-    
+
     wp_send_json_success(array(
         'offset' => $new_offset,
         'total' => $total,
@@ -3302,6 +3169,32 @@ function zoho_sync_customers_to_contacts($offset, $total, $synced, $created, $up
         'failed_reasons' => $failure_reasons,
         'has_more' => $has_more
     ));
+}
+
+// Helper function for guest orders
+function zoho_build_contact_data_from_order($order) {
+    $first_name = $order->get_billing_first_name();
+    $last_name = $order->get_billing_last_name();
+    $contact_name = trim($first_name . ' ' . $last_name);
+    
+    if (empty($contact_name)) {
+        $contact_name = $order->get_billing_email();
+    }
+
+    return array(
+        'contact_name' => $contact_name,
+        'email' => $order->get_billing_email(),
+        'phone' => $order->get_billing_phone(),
+        'company_name' => $order->get_billing_company(),
+        'billing_address' => array(
+            'street' => $order->get_billing_address_1(),
+            'street2' => $order->get_billing_address_2(),
+            'city' => $order->get_billing_city(),
+            'state' => $order->get_billing_state(),
+            'zip' => $order->get_billing_postcode(),
+            'country' => $order->get_billing_country(),
+        )
+    );
 }
 
 /* ======================================================
