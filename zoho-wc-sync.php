@@ -3363,7 +3363,7 @@ if (!empty($order->get_shipping_address_1()) || !empty($order->get_shipping_city
 }
 
 /* ======================================================
-   ZOHO CONTACTS TO WOO CUSTOMERS
+   ZOHO CONTACTS TO WOO CUSTOMERS (Guest Orders + Registered)
 ====================================================== */
 function zoho_sync_contacts_to_customers($offset, $total, $synced, $created, $updated, $from_date, $to_date) {
     // First call - fetch Zoho contacts with pagination
@@ -3406,7 +3406,7 @@ function zoho_sync_contacts_to_customers($offset, $total, $synced, $created, $up
         }
         
         set_transient('zoho_contact_sync_contacts', $all_contacts, 600);
-        set_transient('zoho_contact_sync_stats', array('synced' => 0, 'created' => 0, 'updated' => 0, 'failed' => array()), 600);
+        set_transient('zoho_contact_sync_stats', array('synced' => 0, 'created' => 0, 'updated' => 0, 'skipped' => 0, 'failed' => array()), 600);
         $contacts = $all_contacts;
     } else {
         $contacts = get_transient('zoho_contact_sync_contacts');
@@ -3417,23 +3417,24 @@ function zoho_sync_contacts_to_customers($offset, $total, $synced, $created, $up
         $total = count($contacts);
     }
     
-    // Process batch (20 contacts per batch - balanced for performance)
+    // Process batch (20 contacts per batch)
     $batch_size = 20;
     $batch_contacts = array_slice($contacts, $offset, $batch_size);
     $batch_created = 0;
     $batch_updated = 0;
+    $batch_skipped = 0;
     $batch_failed = array();
     
     foreach ($batch_contacts as $contact) {
         $zoho_contact_id = $contact['contact_id'] ?? '';
         $contact_name = $contact['contact_name'] ?? '';
-        
-        // Get email - if not available, generate dummy from contact name or ID
         $email = $contact['email'] ?? '';
+        
+        // Skip if no email (we need email to find orders or users)
         if (empty($email)) {
-            // Generate dummy email from contact name or ID
-            $slug = sanitize_title($contact_name ?: 'contact-' . $zoho_contact_id);
-            $email = $slug . '@zoho-import.local';
+            $batch_skipped++;
+            zoho_add_detailed_log('contact', 'skipped', $zoho_contact_id, 'contact', '', json_encode($contact), json_encode(array('reason' => 'No email')));
+            continue;
         }
         
         // Get first/last name - parse from contact_name if not available
@@ -3441,17 +3442,12 @@ function zoho_sync_contacts_to_customers($offset, $total, $synced, $created, $up
         $last_name = $contact['last_name'] ?? '';
         
         if (empty($first_name) && empty($last_name) && !empty($contact_name)) {
-            // Parse contact_name into first/last
             $name_parts = explode(' ', trim($contact_name), 2);
             $first_name = $name_parts[0] ?? '';
             $last_name = $name_parts[1] ?? '';
         }
         
-        // Fallback for names
-        if (empty($first_name)) $first_name = 'Customer';
-        if (empty($last_name)) $last_name = $zoho_contact_id;
-        
-        // Get other fields with defaults
+        // Get other fields
         $company = $contact['company_name'] ?? '';
         $phone = $contact['phone'] ?? ($contact['mobile'] ?? '');
         
@@ -3474,11 +3470,11 @@ function zoho_sync_contacts_to_customers($offset, $total, $synced, $created, $up
         $shipping_zip = $shipping_address['zip'] ?? ($shipping_address['zipcode'] ?? $billing_zip);
         $shipping_country = $shipping_address['country'] ?? $billing_country;
         
-        // Check if user exists - first by Zoho contact ID, then by email
+        // ===== STEP 1: Check if REGISTERED USER exists =====
         $existing_user = null;
         $user_id = null;
         
-        // 1. First check by Zoho contact ID (already synced users)
+        // Check by Zoho contact ID first
         global $wpdb;
         $existing_user_id = $wpdb->get_var($wpdb->prepare(
             "SELECT user_id FROM {$wpdb->usermeta} WHERE meta_key = '_zoho_contact_id' AND meta_value = %s LIMIT 1",
@@ -3489,150 +3485,128 @@ function zoho_sync_contacts_to_customers($offset, $total, $synced, $created, $up
             $existing_user = get_user_by('ID', $existing_user_id);
         }
         
-        // 2. If not found by Zoho ID, try by email
+        // If not found by Zoho ID, try by email
         if (!$existing_user && !empty($email)) {
             $existing_user = get_user_by('email', $email);
         }
         
-        // 3. If not found by email, try by contact name (username might match)
-        if (!$existing_user && !empty($contact_name)) {
-            $existing_user = get_user_by('login', sanitize_user($contact_name));
-        }
-        
+        // ===== STEP 2: If REGISTERED USER exists, update =====
         if ($existing_user) {
             $user_id = $existing_user->ID;
-            $action = 'Updated';
+            $action = 'updated_user';
             $batch_updated++;
             
-            // For existing customers, preserve WooCommerce name (don't overwrite with Zoho name)
+            // Update user meta (preserve existing names if not empty)
             $existing_first_name = get_user_meta($user_id, 'first_name', true);
             $existing_last_name = get_user_meta($user_id, 'last_name', true);
-            $existing_billing_first = get_user_meta($user_id, 'billing_first_name', true);
-            $existing_billing_last = get_user_meta($user_id, 'billing_last_name', true);
             
-            // Only use Zoho name if WooCommerce name is empty
-            if (empty($existing_first_name) && empty($existing_last_name)) {
+            if (empty($existing_first_name) && !empty($first_name)) {
                 update_user_meta($user_id, 'first_name', $first_name);
+            }
+            if (empty($existing_last_name) && !empty($last_name)) {
                 update_user_meta($user_id, 'last_name', $last_name);
-            } else {
-                $first_name = $existing_first_name ?: $first_name;
-                $last_name = $existing_last_name ?: $last_name;
             }
             
-            // Only update billing name if it's empty
-            if (empty($existing_billing_first) && empty($existing_billing_last)) {
-                update_user_meta($user_id, 'billing_first_name', $first_name);
-                update_user_meta($user_id, 'billing_last_name', $last_name);
-            }
+            // Update billing details
+            if (!empty($first_name)) update_user_meta($user_id, 'billing_first_name', $first_name);
+            if (!empty($last_name)) update_user_meta($user_id, 'billing_last_name', $last_name);
+            update_user_meta($user_id, 'billing_company', $company);
+            update_user_meta($user_id, 'billing_email', $email);
+            update_user_meta($user_id, 'billing_phone', $billing_phone);
+            update_user_meta($user_id, 'billing_address_1', $billing_street);
+            update_user_meta($user_id, 'billing_address_2', $billing_street2);
+            update_user_meta($user_id, 'billing_city', $billing_city);
+            update_user_meta($user_id, 'billing_state', $billing_state);
+            update_user_meta($user_id, 'billing_postcode', $billing_zip);
+            update_user_meta($user_id, 'billing_country', $billing_country);
+            
+            // Update shipping details
+            if (!empty($first_name)) update_user_meta($user_id, 'shipping_first_name', $first_name);
+            if (!empty($last_name)) update_user_meta($user_id, 'shipping_last_name', $last_name);
+            update_user_meta($user_id, 'shipping_company', $company);
+            update_user_meta($user_id, 'shipping_address_1', $shipping_street);
+            update_user_meta($user_id, 'shipping_address_2', $shipping_street2);
+            update_user_meta($user_id, 'shipping_city', $shipping_city);
+            update_user_meta($user_id, 'shipping_state', $shipping_state);
+            update_user_meta($user_id, 'shipping_postcode', $shipping_zip);
+            update_user_meta($user_id, 'shipping_country', $shipping_country);
+            
+            // Link to Zoho
+            update_user_meta($user_id, '_zoho_contact_id', $zoho_contact_id);
+            
+            zoho_add_detailed_log('contact', 'user_updated', $user_id, 'contact', $zoho_contact_id, json_encode($contact), json_encode(array('message' => 'Registered user updated', 'user_id' => $user_id)));
+            
         } else {
-            // Create new user - need a valid email for WooCommerce
-            $create_email = $email;
-            if (empty($create_email)) {
-                // Generate unique email from contact name/ID
-                $slug = sanitize_title($contact_name ?: 'contact-' . $zoho_contact_id);
-                $create_email = $slug . '-' . substr(md5($zoho_contact_id), 0, 6) . '@zoho-import.local';
-            }
+            // ===== STEP 3: Not a registered user, check for GUEST ORDERS =====
+            $guest_orders = wc_get_orders(array(
+                'billing_email' => $email,
+                'limit' => -1,
+                'orderby' => 'date',
+                'order' => 'DESC',
+            ));
             
-            $username = sanitize_user($create_email);
-            $password = wp_generate_password();
-            
-            $user_id = wc_create_new_customer($create_email, $username, $password);
-            
-            if (is_wp_error($user_id)) {
-                $batch_failed[] = array('id' => $zoho_contact_id, 'reason' => $user_id->get_error_message());
+            if (empty($guest_orders)) {
+                // No registered user, no guest orders - skip
+                $batch_skipped++;
+                zoho_add_detailed_log('contact', 'skipped', $email, 'contact', $zoho_contact_id, json_encode($contact), json_encode(array('reason' => 'No registered user or guest orders found')));
                 continue;
             }
             
-            $action = 'Created';
-            $batch_created++;
+            // ===== STEP 4: Update GUEST ORDERS with Zoho data =====
+            $orders_updated = 0;
             
-            // For new customers, set name from Zoho
-            update_user_meta($user_id, 'first_name', $first_name);
-            update_user_meta($user_id, 'last_name', $last_name);
-            update_user_meta($user_id, 'billing_first_name', $first_name);
-            update_user_meta($user_id, 'billing_last_name', $last_name);
-        }
-        update_user_meta($user_id, 'billing_company', $company);
-        update_user_meta($user_id, 'billing_email', $email);
-        update_user_meta($user_id, 'billing_phone', $billing_phone);
-        update_user_meta($user_id, 'billing_address_1', $billing_street);
-        update_user_meta($user_id, 'billing_address_2', $billing_street2);
-        update_user_meta($user_id, 'billing_city', $billing_city);
-        update_user_meta($user_id, 'billing_state', $billing_state);
-        update_user_meta($user_id, 'billing_postcode', $billing_zip);
-        update_user_meta($user_id, 'billing_country', $billing_country);
-        
-        // Shipping details
-        if ($action == 'Created') {
-            // For new customers, set shipping name from Zoho
-            update_user_meta($user_id, 'shipping_first_name', $first_name);
-            update_user_meta($user_id, 'shipping_last_name', $last_name);
-        } else {
-            // For existing customers, preserve WooCommerce shipping name
-            $existing_shipping_first = get_user_meta($user_id, 'shipping_first_name', true);
-            $existing_shipping_last = get_user_meta($user_id, 'shipping_last_name', true);
+            foreach ($guest_orders as $order) {
+                // Update billing address
+                if (!empty($first_name)) $order->set_billing_first_name($first_name);
+                if (!empty($last_name)) $order->set_billing_last_name($last_name);
+                $order->set_billing_company($company);
+                $order->set_billing_email($email);
+                $order->set_billing_phone($billing_phone);
+                $order->set_billing_address_1($billing_street);
+                $order->set_billing_address_2($billing_street2);
+                $order->set_billing_city($billing_city);
+                $order->set_billing_state($billing_state);
+                $order->set_billing_postcode($billing_zip);
+                $order->set_billing_country($billing_country);
+                
+                // Update shipping address
+                if (!empty($first_name)) $order->set_shipping_first_name($first_name);
+                if (!empty($last_name)) $order->set_shipping_last_name($last_name);
+                $order->set_shipping_company($company);
+                $order->set_shipping_address_1($shipping_street);
+                $order->set_shipping_address_2($shipping_street2);
+                $order->set_shipping_city($shipping_city);
+                $order->set_shipping_state($shipping_state);
+                $order->set_shipping_postcode($shipping_zip);
+                $order->set_shipping_country($shipping_country);
+                
+                // Save Zoho contact ID in order meta
+                $order->update_meta_data('_zoho_contact_id', $zoho_contact_id);
+                
+                $order->save();
+                $orders_updated++;
+            }
             
-            // Only update if empty
-            if (empty($existing_shipping_first) && empty($existing_shipping_last)) {
-                update_user_meta($user_id, 'shipping_first_name', $first_name);
-                update_user_meta($user_id, 'shipping_last_name', $last_name);
-            }
+            $action = 'updated_guest_orders';
+            $batch_updated++;
+            
+            zoho_add_detailed_log('contact', 'guest_updated', $email, 'contact', $zoho_contact_id, json_encode($contact), json_encode(array(
+                'message' => 'Guest orders updated', 
+                'orders_count' => $orders_updated,
+                'order_ids' => array_map(function($o) { return $o->get_id(); }, $guest_orders)
+            )));
         }
-        update_user_meta($user_id, 'shipping_company', $company);
-        update_user_meta($user_id, 'shipping_address_1', $shipping_street);
-        update_user_meta($user_id, 'shipping_address_2', $shipping_street2);
-        update_user_meta($user_id, 'shipping_city', $shipping_city);
-        update_user_meta($user_id, 'shipping_state', $shipping_state);
-        update_user_meta($user_id, 'shipping_postcode', $shipping_zip);
-        update_user_meta($user_id, 'shipping_country', $shipping_country);
-        
-        // Link to Zoho
-        update_user_meta($user_id, '_zoho_contact_id', $zoho_contact_id);
-        
-        // Update display_name for WooCommerce to show customer name properly
-        // Use billing name first (WooCommerce standard), then fallback to first_name/last_name
-        $final_first_name = get_user_meta($user_id, 'billing_first_name', true);
-        $final_last_name = get_user_meta($user_id, 'billing_last_name', true);
-        
-        if (empty($final_first_name)) {
-            $final_first_name = get_user_meta($user_id, 'first_name', true);
-        }
-        if (empty($final_last_name)) {
-            $final_last_name = get_user_meta($user_id, 'last_name', true);
-        }
-        
-        $display_name = trim($final_first_name . ' ' . $final_last_name);
-        
-        // Fallback to company name or email if name is empty
-        if (empty($display_name)) {
-            $company = get_user_meta($user_id, 'billing_company', true);
-            if (!empty($company)) {
-                $display_name = $company;
-            } else {
-                $user = get_user_by('ID', $user_id);
-                if ($user) {
-                    $display_name = $user->user_email;
-                }
-            }
-        }
-        
-        if (!empty($display_name)) {
-            wp_update_user(array(
-                'ID' => $user_id,
-                'display_name' => $display_name
-            ));
-        }
-        
-        zoho_add_detailed_log('contact', 'customer', $user_id, 'contact', $zoho_contact_id, json_encode($contact), json_encode(array('message' => $action, 'user_id' => $user_id)));
     }
     
     // Update stats
-    $stats = get_transient('zoho_contact_sync_stats') ?: array('synced' => 0, 'created' => 0, 'updated' => 0, 'failed' => array());
+    $stats = get_transient('zoho_contact_sync_stats') ?: array('synced' => 0, 'created' => 0, 'updated' => 0, 'skipped' => 0, 'failed' => array());
     $new_offset = $offset + count($batch_contacts);
-    $new_synced = $synced + $batch_created + $batch_updated;
+    $new_synced = $synced + $batch_updated;
     $new_created = $created + $batch_created;
     $new_updated = $updated + $batch_updated;
+    $new_skipped = ($stats['skipped'] ?? 0) + $batch_skipped;
     $stats['failed'] = array_merge($stats['failed'] ?? array(), $batch_failed);
+    $stats['skipped'] = $new_skipped;
     set_transient('zoho_contact_sync_stats', $stats, 600);
     
     $has_more = $new_offset < $total;
@@ -3648,6 +3622,7 @@ function zoho_sync_contacts_to_customers($offset, $total, $synced, $created, $up
         'synced' => $new_synced,
         'created' => $new_created,
         'updated' => $new_updated,
+        'skipped' => $new_skipped,
         'failed' => count($stats['failed']),
         'has_more' => $has_more
     ));
