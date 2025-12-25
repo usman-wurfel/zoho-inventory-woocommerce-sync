@@ -353,25 +353,41 @@ function zoho_dashboard_page() {
     // Get sync statistics from product/customer meta (unique Zoho IDs)
     global $wpdb;
     
-    // Count unique products linked to Zoho (have _zoho_item_id)
-    $items_linked = $wpdb->get_var("
-        SELECT COUNT(DISTINCT meta_value) FROM {$wpdb->postmeta} 
-        WHERE meta_key = '_zoho_item_id' AND meta_value != ''
-    ");
-    $products_linked = $wpdb->get_var("
-        SELECT COUNT(*) FROM {$wpdb->postmeta} 
-        WHERE meta_key = '_zoho_item_id' AND meta_value != ''
-    ");
+    // Count unique Zoho item IDs linked (distinct _zoho_item_id values)
+    $items_linked = $wpdb->get_var($wpdb->prepare("
+        SELECT COUNT(DISTINCT meta_value) 
+        FROM {$wpdb->postmeta} 
+        WHERE meta_key = %s 
+        AND meta_value != '' 
+        AND meta_value IS NOT NULL
+    ", '_zoho_item_id'));
     
-    // Count unique contacts linked to Zoho (have _zoho_contact_id)
-    $contacts_linked = $wpdb->get_var("
-        SELECT COUNT(DISTINCT meta_value) FROM {$wpdb->usermeta} 
-        WHERE meta_key = '_zoho_contact_id' AND meta_value != ''
-    ");
-    $customers_linked = $wpdb->get_var("
-        SELECT COUNT(*) FROM {$wpdb->usermeta} 
-        WHERE meta_key = '_zoho_contact_id' AND meta_value != ''
-    ");
+    // Count WooCommerce products that have _zoho_item_id (products linked)
+    $products_linked = $wpdb->get_var($wpdb->prepare("
+        SELECT COUNT(DISTINCT post_id) 
+        FROM {$wpdb->postmeta} 
+        WHERE meta_key = %s 
+        AND meta_value != '' 
+        AND meta_value IS NOT NULL
+    ", '_zoho_item_id'));
+    
+    // Count unique Zoho contact IDs linked (distinct _zoho_contact_id values)
+    $contacts_linked = $wpdb->get_var($wpdb->prepare("
+        SELECT COUNT(DISTINCT meta_value) 
+        FROM {$wpdb->usermeta} 
+        WHERE meta_key = %s 
+        AND meta_value != '' 
+        AND meta_value IS NOT NULL
+    ", '_zoho_contact_id'));
+    
+    // Count WooCommerce customers that have _zoho_contact_id (customers linked)
+    $customers_linked = $wpdb->get_var($wpdb->prepare("
+        SELECT COUNT(DISTINCT user_id) 
+        FROM {$wpdb->usermeta} 
+        WHERE meta_key = %s 
+        AND meta_value != '' 
+        AND meta_value IS NOT NULL
+    ", '_zoho_contact_id'));
     
     // Get invoices count from logs (no meta tracking for invoices yet)
     $detailed_logs = get_option('zoho_detailed_logs', []);
