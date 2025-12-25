@@ -2394,17 +2394,40 @@ function zoho_sync_orders_to_invoices($offset, $total, $synced, $created, $updat
         
         // Build line items
         $line_items = array();
+        $skipped_items = array(); // Track skipped items for logging
         foreach ($order->get_items() as $item) {
             $product = $item->get_product();
-            $sku = $product ? $product->get_sku() : '';
+            if (!$product) {
+                $skipped_items[] = 'Product not found for item ID: ' . $item->get_id();
+                continue;
+            }
             
-            // Try to find item in Zoho by SKU
-            $zoho_item_id = $sku ? zoho_get_item_by_sku($sku) : null;
+            $product_id = $product->get_id();
+            $sku = $product->get_sku();
+            $product_name = $product->get_name();
+            
+            // First, try to get zoho_item_id from product meta (fastest - already linked)
+            $zoho_item_id = get_post_meta($product_id, '_zoho_item_id', true);
+            
+            // If not found in meta, try to find by SKU
+            if (!$zoho_item_id && $sku) {
+                $zoho_item_id = zoho_get_item_by_sku($sku);
+                
+                // If found by SKU, save it to product meta for future use
+                if ($zoho_item_id) {
+                    update_post_meta($product_id, '_zoho_item_id', $zoho_item_id);
+                }
+            }
             
             // Only add line item if item exists in Zoho (by item_id)
             // Zoho requires item_id or name of existing item - we use item_id for reliability
             if (!$zoho_item_id) {
-                // Skip items that don't exist in Zoho (log as warning but don't fail invoice)
+                // Track skipped items
+                if (!$sku) {
+                    $skipped_items[] = $product_name . ' (ID: ' . $product_id . ') - No SKU';
+                } else {
+                    $skipped_items[] = $product_name . ' (SKU: ' . $sku . ') - Not found in Zoho';
+                }
                 continue;
             }
             
@@ -2427,10 +2450,11 @@ function zoho_sync_orders_to_invoices($offset, $total, $synced, $created, $updat
         
         // Check if we have any valid line items
         if (empty($line_items)) {
-            $error_reason = 'No valid line items (products not found in Zoho)';
+            $skipped_details = !empty($skipped_items) ? implode(' | ', $skipped_items) : 'No items in order';
+            $error_reason = 'No valid line items (products not found in Zoho). Skipped: ' . $skipped_details;
             $batch_failed[] = array('id' => $order_id, 'reason' => $error_reason);
             
-            // Log the failure
+            // Log the failure with detailed skipped items
             $invoice_data = array(
                 'customer_id' => $zoho_customer_id,
                 'date' => $invoice_date,
@@ -2444,7 +2468,11 @@ function zoho_sync_orders_to_invoices($offset, $total, $synced, $created, $updat
                 'invoice',
                 '',
                 json_encode($invoice_data),
-                json_encode(array('error' => $error_reason, 'code' => 'NO_LINE_ITEMS'))
+                json_encode(array(
+                    'error' => $error_reason,
+                    'code' => 'NO_LINE_ITEMS',
+                    'skipped_items' => $skipped_items
+                ))
             );
             continue;
         }
