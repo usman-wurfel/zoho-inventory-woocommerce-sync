@@ -3221,9 +3221,8 @@ function zoho_sync_contacts_ajax_handler() {
         // Build contact data based on customer type
         if ($customer_data['type'] == 'registered') {
             // Handle registered customer
+            // CRITICAL: Create fresh customer object and load meta data
             $customer = new WC_Customer($customer_data['user_id']);
-            // CRITICAL: Force read customer data to ensure latest email is loaded
-            $customer->read();
             $customer->read_meta_data();
             $contact_data = zoho_build_contact_data_from_customer($customer);
             
@@ -4613,9 +4612,8 @@ function zoho_build_contact_data_from_customer($customer) {
     $user_id = $customer->get_id();
     $user = get_user_by('ID', $user_id);
     
-    // CRITICAL: Force reload customer data from database to ensure latest email
+    // CRITICAL: Force reload customer meta data from database to ensure latest email
     $customer->read_meta_data();
-    $customer->read();
     
     // Get first name - try billing, then user meta, then display name
     $first_name = $customer->get_billing_first_name();
