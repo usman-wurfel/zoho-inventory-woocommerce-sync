@@ -3675,17 +3675,28 @@ function zoho_sync_contacts_to_customers($offset, $total, $synced, $created, $up
         
         // Get email - check multiple sources (root level, contact_persons array)
         $email = $contact['email'] ?? '';
+        $email = trim(strtolower($email)); // Normalize email
         
         // If email not in root level, check contact_persons array (primary contact)
         if (empty($email) && isset($contact['contact_persons']) && is_array($contact['contact_persons'])) {
             foreach ($contact['contact_persons'] as $person) {
                 // Check if this is primary contact or first contact
                 if ((isset($person['is_primary_contact']) && $person['is_primary_contact']) || empty($email)) {
-                    $email = $person['email'] ?? '';
-                    if (!empty($email)) {
+                    $person_email = $person['email'] ?? '';
+                    $person_email = trim(strtolower($person_email)); // Normalize
+                    if (!empty($person_email) && is_email($person_email)) {
+                        $email = $person_email;
                         break; // Found email in contact_persons
                     }
                 }
+            }
+        }
+        
+        // Ensure email is valid and normalized
+        if (!empty($email)) {
+            $email = trim(strtolower($email));
+            if (!is_email($email)) {
+                $email = '';
             }
         }
         
@@ -3779,63 +3790,37 @@ function zoho_sync_contacts_to_customers($offset, $total, $synced, $created, $up
         }
         
         // 2. If not found by Zoho ID, match by EMAIL (email is unique identifier)
-        // If email matches, it's the same customer - update existing, don't create new
+        // CRITICAL: Email is unique - if email matches, it's same customer - UPDATE, don't create new
         if (!$existing_user && !empty($email) && is_email($email)) {
-            // Get all users with matching email
-            $users_by_email = get_users(array(
-                'meta_key' => 'billing_email',
-                'meta_value' => $email,
-                'number' => 100 // Limit to avoid performance issues
+            // Normalize email for comparison
+            $search_email = trim(strtolower($email));
+            
+            // Use direct database query for reliable case-insensitive email matching
+            global $wpdb;
+            
+            // Check billing_email in user meta (case-insensitive)
+            $user_id_by_billing_email = $wpdb->get_var($wpdb->prepare(
+                "SELECT user_id FROM {$wpdb->usermeta} 
+                WHERE meta_key = 'billing_email' 
+                AND LOWER(TRIM(meta_value)) = %s 
+                LIMIT 1",
+                $search_email
             ));
             
-            // Also check user_email field
-            if (empty($users_by_email)) {
-                $user_by_email = get_user_by('email', $email);
-                if ($user_by_email) {
-                    $users_by_email = array($user_by_email);
-                }
-            }
+            // Also check user_email in users table (case-insensitive)
+            $user_id_by_user_email = $wpdb->get_var($wpdb->prepare(
+                "SELECT ID FROM {$wpdb->users} 
+                WHERE LOWER(TRIM(user_email)) = %s 
+                LIMIT 1",
+                $search_email
+            ));
             
-            // If email matches, use the first matching user (email is unique)
-            // Prefer user with matching name if available, otherwise use first one
-            if (!empty($users_by_email)) {
-                $matched_user = null;
-                
-                // First try to find user with matching name
-                foreach ($users_by_email as $user) {
-                    // Get user's name from WooCommerce
-                    $user_first_name = get_user_meta($user->ID, 'first_name', true);
-                    $user_last_name = get_user_meta($user->ID, 'last_name', true);
-                    
-                    // Also check billing name
-                    if (empty($user_first_name)) {
-                        $user_first_name = get_user_meta($user->ID, 'billing_first_name', true);
-                    }
-                    if (empty($user_last_name)) {
-                        $user_last_name = get_user_meta($user->ID, 'billing_last_name', true);
-                    }
-                    
-                    // Build full name from WooCommerce
-                    $woo_full_name = trim($user_first_name . ' ' . $user_last_name);
-                    
-                    // Compare names (case-insensitive, trimmed)
-                    $zoho_contact_name_clean = strtolower(trim($contact_name));
-                    $woo_name_clean = strtolower(trim($woo_full_name));
-                    
-                    // If name matches, use this user
-                    if ($zoho_contact_name_clean === $woo_name_clean && !empty($woo_name_clean)) {
-                        $matched_user = $user;
-                        break;
-                    }
-                }
-                
-                // If no name match found, use first user with matching email
-                // Email is unique, so same email = same customer
-                if (!$matched_user) {
-                    $matched_user = $users_by_email[0];
-                }
-                
-                $existing_user = $matched_user;
+            // Use whichever ID we found
+            $matched_user_id = $user_id_by_billing_email ?: $user_id_by_user_email;
+            
+            // CRITICAL: If email matches, it's the same customer - UPDATE, don't create new
+            if ($matched_user_id) {
+                $existing_user = get_user_by('ID', $matched_user_id);
             }
         }
         
