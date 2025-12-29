@@ -2435,7 +2435,7 @@ function zoho_sync_orders_to_invoices($offset, $total, $synced, $created, $updat
                 $zoho_customer_id = $contact_create_response['contact']['contact_id'];
             } else {
                 // Check if contact already exists (Code 3062)
-                // CRITICAL: Email is unique identifier, not name. Only search by email.
+                // Search by email only (email is unique identifier)
                 if (isset($contact_create_response['code']) && $contact_create_response['code'] == 3062) {
                     // Contact already exists - search by EMAIL only (not name)
                     if (!empty($customer_email)) {
@@ -2699,10 +2699,6 @@ function zoho_sync_orders_to_invoices($offset, $total, $synced, $created, $updat
                     }
                 }
                 $error_msg .= ' | Customer ID: ' . $zoho_customer_id . ' | Item IDs: ' . implode(', ', $item_ids) . ' | Rates: ' . implode(', ', $item_rates);
-                
-                // Log full request for debugging
-                error_log('Zoho Invoice Code 1002 - Full Request: ' . $request_data);
-                error_log('Zoho Invoice Code 1002 - Full Response: ' . json_encode($response));
             }
             
             $batch_failed[] = array('id' => $order_id, 'reason' => $error_msg);
@@ -2943,6 +2939,10 @@ function zoho_sync_contacts_ajax_handler() {
         // Clear old transients first
         delete_transient('zoho_contact_sync_customers');
         delete_transient('zoho_contact_sync_stats');
+        
+        // Cleanup orphaned customer lookup records
+        global $wpdb;
+        $wpdb->query("DELETE c FROM {$wpdb->prefix}wc_customer_lookup c LEFT JOIN {$wpdb->prefix}wc_order_stats o ON c.customer_id = o.customer_id WHERE (c.user_id = 0 OR c.user_id IS NULL) AND o.order_id IS NULL");
 
         $all_customers = array();
         
@@ -3060,8 +3060,7 @@ function zoho_sync_contacts_ajax_handler() {
                 continue;
             }
 
-            // === CRITICAL: Convert guest customers to WordPress users ===
-            // This ensures when Zoho to WooCommerce sync happens, it matches existing users
+            // Convert guest customers to WordPress users
             $existing_user = get_user_by('email', $email);
             
             if (!$existing_user) {
@@ -3148,7 +3147,7 @@ function zoho_sync_contacts_ajax_handler() {
                         update_user_meta($new_user_id, 'shipping_country', $order->get_shipping_country());
                     }
                     
-                    // CRITICAL: Set billing_email in user meta AND update user email
+                    // Set billing_email in user meta and update user email
                     update_user_meta($new_user_id, 'billing_email', $email);
                     
                     // Also update the WordPress user email to match billing email
@@ -3221,15 +3220,9 @@ function zoho_sync_contacts_ajax_handler() {
         // Build contact data based on customer type
         if ($customer_data['type'] == 'registered') {
             // Handle registered customer
-            // CRITICAL: Create fresh customer object and load meta data
             $customer = new WC_Customer($customer_data['user_id']);
             $customer->read_meta_data();
             $contact_data = zoho_build_contact_data_from_customer($customer);
-            
-            // Debug: Log email to verify it's being included
-            if (empty($contact_data['email'])) {
-                error_log('Zoho Sync: Customer ' . $customer_data['user_id'] . ' has no email in contact_data');
-            }
             $reference_id = 'User:' . $customer_data['user_id'];
             $saved_zoho_id = get_user_meta($customer_data['user_id'], '_zoho_contact_id', true);
             
@@ -3277,7 +3270,7 @@ function zoho_sync_contacts_ajax_handler() {
         }
 
         // ===== STEP 2: Search by EMAIL if no valid ID =====
-        // CRITICAL: Email is the unique identifier in Zoho, not name
+        // Email is the unique identifier in Zoho
         // Always verify exact email match before updating
         if (empty($action) && !empty($contact_data['email'])) {
             $search_email = strtolower(trim($contact_data['email']));
@@ -3331,7 +3324,7 @@ function zoho_sync_contacts_ajax_handler() {
             // Handle "Contact already exists" error (Code 3062) or Code 1002
             // These errors mean contact exists, so we MUST search by EMAIL only (not name)
             if (isset($response['code']) && ($response['code'] == 3062 || $response['code'] == 1002)) {
-                // CRITICAL: Only search by EMAIL, never by name
+                // Search by email only
                 // Two different people can have the same name but different emails
                 if (!empty($contact_data['email'])) {
                     $search_email = strtolower(trim($contact_data['email']));
@@ -3514,8 +3507,7 @@ function zoho_build_contact_data_from_order($order) {
         $contact_data['phone'] = $billing_phone;
     }
     
-    // CRITICAL: Zoho Inventory requires email in contact_persons array to show in panel
-    // Move email and name to contact_persons array
+    // Add email and name to contact_persons array (required for Zoho panel display)
     if (!empty($billing_email) || !empty($first_name) || !empty($last_name)) {
         $contact_data['contact_persons'] = array();
         $contact_person = array();
@@ -3673,31 +3665,28 @@ function zoho_sync_contacts_to_customers($offset, $total, $synced, $created, $up
         $zoho_contact_id = $contact['contact_id'] ?? '';
         $contact_name = $contact['contact_name'] ?? '';
         
-        // Get email - check multiple sources (root level, contact_persons array)
+        // Get email - check root level first, then contact_persons array
         $email = $contact['email'] ?? '';
-        $email = trim(strtolower($email)); // Normalize email
-        
-        // If email not in root level, check contact_persons array (primary contact)
         if (empty($email) && isset($contact['contact_persons']) && is_array($contact['contact_persons'])) {
             foreach ($contact['contact_persons'] as $person) {
-                // Check if this is primary contact or first contact
-                if ((isset($person['is_primary_contact']) && $person['is_primary_contact']) || empty($email)) {
-                    $person_email = $person['email'] ?? '';
-                    $person_email = trim(strtolower($person_email)); // Normalize
-                    if (!empty($person_email) && is_email($person_email)) {
-                        $email = $person_email;
-                        break; // Found email in contact_persons
-                    }
+                if (isset($person['is_primary_contact']) && $person['is_primary_contact']) {
+                    $email = $person['email'] ?? '';
+                    break;
+                }
+            }
+            // If no primary contact found, use first contact with email
+            if (empty($email)) {
+                foreach ($contact['contact_persons'] as $person) {
+                    $email = $person['email'] ?? '';
+                    if (!empty($email)) break;
                 }
             }
         }
         
-        // Ensure email is valid and normalized
-        if (!empty($email)) {
-            $email = trim(strtolower($email));
-            if (!is_email($email)) {
-                $email = '';
-            }
+        // Normalize and validate email
+        $email = !empty($email) ? trim(strtolower($email)) : '';
+        if (!empty($email) && !is_email($email)) {
+            $email = '';
         }
         
         // Get first/last name - parse from contact_name if not available
@@ -3774,92 +3763,34 @@ function zoho_sync_contacts_to_customers($offset, $total, $synced, $created, $up
         $shipping_zip = $shipping_address['zip'] ?? ($shipping_address['zipcode'] ?? $billing_zip);
         $shipping_country = $shipping_address['country'] ?? $billing_country;
         
-        // Check if user exists - match by BOTH name AND email
         $existing_user = null;
         $user_id = null;
         
-        // 0. CRITICAL: Cleanup duplicate users with same email (delete guest customers without username)
-        if (!empty($email) && is_email($email)) {
-            $search_email = trim(strtolower($email));
-            
-            // Find all users with same email
-            global $wpdb;
-            $duplicate_user_ids = $wpdb->get_col($wpdb->prepare(
-                "SELECT DISTINCT user_id FROM {$wpdb->usermeta} 
-                WHERE meta_key = 'billing_email' 
-                AND LOWER(TRIM(meta_value)) = %s",
-                $search_email
-            ));
-            
-            // Also check user_email field
-            $duplicate_user_ids_by_email = $wpdb->get_col($wpdb->prepare(
-                "SELECT ID FROM {$wpdb->users} 
-                WHERE LOWER(TRIM(user_email)) = %s",
-                $search_email
-            ));
-            
-            // Combine and get unique IDs
-            $all_duplicate_ids = array_unique(array_merge($duplicate_user_ids, $duplicate_user_ids_by_email));
-            
-            // If multiple users with same email exist, delete ones without username (guest customers)
-            if (count($all_duplicate_ids) > 1) {
-                foreach ($all_duplicate_ids as $duplicate_user_id) {
-                    $duplicate_user = get_user_by('ID', $duplicate_user_id);
-                    if ($duplicate_user) {
-                        // Check if username is empty or invalid (guest customer from orders)
-                        $user_login = trim($duplicate_user->user_login);
-                        if (empty($user_login) || strlen($user_login) < 3) {
-                            // This is a guest customer without proper username - delete it permanently
-                            // Use WordPress function to properly delete user (handles all cleanup)
-                            require_once(ABSPATH . 'wp-admin/includes/user.php');
-                            wp_delete_user($duplicate_user_id);
-                        }
-                    }
-                }
-            }
-        }
-        
-        // 1. First check by Zoho contact ID (already synced users)
+        // 1. Check by Zoho contact ID
         global $wpdb;
         $existing_user_id = $wpdb->get_var($wpdb->prepare(
             "SELECT user_id FROM {$wpdb->usermeta} WHERE meta_key = '_zoho_contact_id' AND meta_value = %s LIMIT 1",
             $zoho_contact_id
         ));
-        
         if ($existing_user_id) {
             $existing_user = get_user_by('ID', $existing_user_id);
         }
         
-        // 2. If not found by Zoho ID, match by EMAIL (email is unique identifier)
-        // CRITICAL: Email is unique - if email matches, it's same customer - UPDATE, don't create new
+        // 2. If not found by Zoho ID, match by EMAIL (email is unique)
         if (!$existing_user && !empty($email) && is_email($email)) {
-            // Normalize email for comparison
             $search_email = trim(strtolower($email));
             
-            // Use direct database query for reliable case-insensitive email matching
-            global $wpdb;
-            
-            // Check billing_email in user meta (case-insensitive)
             $user_id_by_billing_email = $wpdb->get_var($wpdb->prepare(
-                "SELECT user_id FROM {$wpdb->usermeta} 
-                WHERE meta_key = 'billing_email' 
-                AND LOWER(TRIM(meta_value)) = %s 
-                LIMIT 1",
+                "SELECT user_id FROM {$wpdb->usermeta} WHERE meta_key = 'billing_email' AND LOWER(TRIM(meta_value)) = %s LIMIT 1",
                 $search_email
             ));
             
-            // Also check user_email in users table (case-insensitive)
             $user_id_by_user_email = $wpdb->get_var($wpdb->prepare(
-                "SELECT ID FROM {$wpdb->users} 
-                WHERE LOWER(TRIM(user_email)) = %s 
-                LIMIT 1",
+                "SELECT ID FROM {$wpdb->users} WHERE LOWER(TRIM(user_email)) = %s LIMIT 1",
                 $search_email
             ));
             
-            // Use whichever ID we found
             $matched_user_id = $user_id_by_billing_email ?: $user_id_by_user_email;
-            
-            // CRITICAL: If email matches, it's the same customer - UPDATE, don't create new
             if ($matched_user_id) {
                 $existing_user = get_user_by('ID', $matched_user_id);
             }
@@ -3891,7 +3822,7 @@ function zoho_sync_contacts_to_customers($offset, $total, $synced, $created, $up
                 update_user_meta($user_id, 'billing_last_name', $last_name);
             }
             
-            // CRITICAL: Fix username if missing or invalid
+            // Fix username if missing or invalid
             $existing_user_obj = get_user_by('ID', $user_id);
             if ($existing_user_obj && (empty($existing_user_obj->user_login) || strlen($existing_user_obj->user_login) < 3)) {
                 // Generate username from email or name
@@ -3927,50 +3858,14 @@ function zoho_sync_contacts_to_customers($offset, $total, $synced, $created, $up
                 clean_user_cache($user_id);
             }
         } else {
-            // Create new user - need a valid email for WooCommerce
+            // Create new user
             $create_email = $email;
-            
-            // If still no valid email, try to find from existing WooCommerce users by matching name
             if (empty($create_email) || !is_email($create_email)) {
-                // Try to find existing user by name and get their email
-                if (!empty($contact_name)) {
-                    $users_by_name = get_users(array(
-                        'number' => 10,
-                        'search' => '*' . esc_attr($contact_name) . '*',
-                        'search_columns' => array('display_name')
-                    ));
-                    
-                    // Also search by first/last name if available
-                    if (empty($users_by_name) && !empty($first_name) && !empty($last_name)) {
-                        $users_by_name = get_users(array(
-                            'meta_query' => array(
-                                'relation' => 'OR',
-                                array('key' => 'first_name', 'value' => $first_name, 'compare' => 'LIKE'),
-                                array('key' => 'billing_first_name', 'value' => $first_name, 'compare' => 'LIKE')
-                            ),
-                            'number' => 5
-                        ));
-                    }
-                    
-                    // Get email from first matching user
-                    if (!empty($users_by_name) && isset($users_by_name[0])) {
-                        $user_email = $users_by_name[0]->user_email;
-                        $billing_email = get_user_meta($users_by_name[0]->ID, 'billing_email', true);
-                        $create_email = !empty($billing_email) ? $billing_email : $user_email;
-                    }
-                }
-            }
-            
-            // LAST RESORT: Only generate dummy email if absolutely no email found
-            if (empty($create_email) || !is_email($create_email)) {
-                // Generate unique email from contact name/ID
-                $slug = sanitize_title($contact_name ?: 'contact-' . $zoho_contact_id);
-                $create_email = $slug . '-' . substr(md5($zoho_contact_id), 0, 6) . '@zoho-import.local';
+                $create_email = sanitize_title($contact_name ?: 'contact-' . $zoho_contact_id) . '-' . substr(md5($zoho_contact_id), 0, 6) . '@zoho-import.local';
             }
             
             $username = sanitize_user($create_email);
             $password = wp_generate_password();
-            
             $user_id = wc_create_new_customer($create_email, $username, $password);
             
             if (is_wp_error($user_id)) {
@@ -4073,6 +3968,10 @@ function zoho_sync_contacts_to_customers($offset, $total, $synced, $created, $up
     $has_more = $new_offset < $total;
     
     if (!$has_more) {
+        // Cleanup orphaned customer lookup records
+        global $wpdb;
+        $wpdb->query("DELETE c FROM {$wpdb->prefix}wc_customer_lookup c LEFT JOIN {$wpdb->prefix}wc_order_stats o ON c.customer_id = o.customer_id WHERE (c.user_id = 0 OR c.user_id IS NULL) AND o.order_id IS NULL");
+        
         delete_transient('zoho_contact_sync_contacts');
         delete_transient('zoho_contact_sync_stats');
     }
@@ -4688,7 +4587,6 @@ function zoho_build_contact_data_from_customer($customer) {
     $user_id = $customer->get_id();
     $user = get_user_by('ID', $user_id);
     
-    // CRITICAL: Force reload customer meta data from database to ensure latest email
     $customer->read_meta_data();
     
     // Get first name - try billing, then user meta, then display name
@@ -4722,7 +4620,7 @@ function zoho_build_contact_data_from_customer($customer) {
         $email = $user->user_email;
     }
     
-    // CRITICAL: If still empty, try to get from order (for guest customers converted to users)
+    // Try to get email from order if still empty
     if (empty($email)) {
         // Get customer's orders to find email
         $customer_orders = wc_get_orders(array(
@@ -4773,8 +4671,7 @@ function zoho_build_contact_data_from_customer($customer) {
         'customer_sub_type' => 'individual',
     );
     
-    // CRITICAL: Always include email - ensure it's not empty and valid
-    // Trim and validate email before adding
+    // Always include email if available
     $email = trim($email);
     if (!empty($email) && is_email($email)) {
         $contact_data['email'] = $email;
@@ -4794,9 +4691,7 @@ function zoho_build_contact_data_from_customer($customer) {
         $contact_data['last_name'] = $last_name;
     }
     
-    // CRITICAL: Zoho Inventory requires email in contact_persons array to show in panel
-    // Move email and name to contact_persons array
-    // Use the validated email from contact_data if available
+    // Add email and name to contact_persons array (required for Zoho panel display)
     $final_email = isset($contact_data['email']) ? $contact_data['email'] : $email;
     if (!empty($final_email) || !empty($first_name) || !empty($last_name)) {
         $contact_data['contact_persons'] = array();
@@ -5057,8 +4952,7 @@ function zoho_get_or_create_contact($order) {
         $contact_data['last_name'] = $last_name;
     }
     
-    // CRITICAL: Zoho Inventory requires email in contact_persons array to show in panel
-    // Move email and name to contact_persons array
+    // Add email and name to contact_persons array (required for Zoho panel display)
     if (!empty($email) || !empty($first_name) || !empty($last_name)) {
         $contact_data['contact_persons'] = array();
         $contact_person = array();
@@ -5169,13 +5063,6 @@ function zoho_get_or_create_contact($order) {
     
     if (!is_wp_error($response) && isset($response['contact']['contact_id'])) {
         return $response['contact']['contact_id'];
-    }
-    
-    // Log the failure for debugging
-    if (is_wp_error($response)) {
-        error_log('Zoho Contact Create Error: ' . $response->get_error_message());
-    } elseif (isset($response['code'])) {
-        error_log('Zoho Contact Create Error (Code ' . $response['code'] . '): ' . ($response['message'] ?? 'Unknown error'));
     }
     
     return null;
