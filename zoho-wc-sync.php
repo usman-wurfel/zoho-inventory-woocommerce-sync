@@ -2665,12 +2665,40 @@ function zoho_sync_orders_to_invoices($offset, $total, $synced, $created, $updat
             $zoho_invoice_id = $response['invoice']['invoice_id'];
             update_post_meta($order_id, '_zoho_invoice_id', $zoho_invoice_id);
             
-            // If order status is "completed", mark invoice as "sent" in Zoho
+            // If order status is "completed", mark invoice as "sent" and record payment in Zoho
             $order_status = $order->get_status();
             if ($order_status === 'completed') {
-                // Mark invoice as sent (changes status from draft to sent)
+                // First, mark invoice as sent (changes status from draft to sent)
                 $status_response = zoho_api_post('invoices/' . $zoho_invoice_id . '/status/sent', array());
-                // Note: We don't fail the sync if status update fails, as invoice was created/updated successfully
+                
+                // Then record payment to mark invoice as paid
+                $order_total = floatval($order->get_total());
+                if ($order_total > 0) {
+                    // Get invoice to check current balance
+                    $invoice_response = zoho_api_get('invoices/' . $zoho_invoice_id);
+                    if (!is_wp_error($invoice_response) && isset($invoice_response['invoice'])) {
+                        $invoice_data = $invoice_response['invoice'];
+                        $invoice_balance = isset($invoice_data['balance']) ? floatval($invoice_data['balance']) : $order_total;
+                        
+                        // Record payment for the invoice
+                        $payment_data = array(
+                            'customer_id' => (string)$zoho_customer_id,
+                            'payment_mode' => 'other', // Default payment mode, can be customized
+                            'amount' => $invoice_balance,
+                            'date' => date('Y-m-d'), // Payment date (today)
+                            'invoices' => array(
+                                array(
+                                    'invoice_id' => $zoho_invoice_id,
+                                    'amount_applied' => $invoice_balance
+                                )
+                            )
+                        );
+                        
+                        // Record payment
+                        $payment_response = zoho_api_post('customerpayments', $payment_data);
+                        // Note: We don't fail the sync if payment recording fails, as invoice was created/updated successfully
+                    }
+                }
             }
         }
         
