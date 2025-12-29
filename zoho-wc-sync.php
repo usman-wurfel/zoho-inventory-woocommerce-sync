@@ -2939,10 +2939,6 @@ function zoho_sync_contacts_ajax_handler() {
         // Clear old transients first
         delete_transient('zoho_contact_sync_customers');
         delete_transient('zoho_contact_sync_stats');
-        
-        // Cleanup orphaned customer lookup records
-        global $wpdb;
-        $wpdb->query("DELETE c FROM {$wpdb->prefix}wc_customer_lookup c LEFT JOIN {$wpdb->prefix}wc_order_stats o ON c.customer_id = o.customer_id WHERE (c.user_id = 0 OR c.user_id IS NULL) AND o.order_id IS NULL");
 
         $all_customers = array();
         
@@ -3449,11 +3445,11 @@ function zoho_sync_contacts_ajax_handler() {
     $stats['failed'] = array_merge($stats['failed'] ?? array(), $batch_failed);
     set_transient('zoho_contact_sync_stats', $stats, 600);
 
-    $has_more = $new_offset < $total;
-    
-    // Cleanup orphaned customer lookup records after each batch (same as Zoho to WooCommerce)
+    // Cleanup orphaned customer lookup records after each batch
     global $wpdb;
     $wpdb->query("DELETE c FROM {$wpdb->prefix}wc_customer_lookup c LEFT JOIN {$wpdb->prefix}wc_order_stats o ON c.customer_id = o.customer_id WHERE (c.user_id = 0 OR c.user_id IS NULL) AND o.order_id IS NULL");
+    
+    $has_more = $new_offset < $total;
     
     // Cleanup transients if done
     if (!$has_more) {
