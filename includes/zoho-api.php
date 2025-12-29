@@ -98,9 +98,9 @@ function zoho_api_get($endpoint, $retry_on_auth_error = true) {
     }
 
     $response = wp_remote_get($url, [
-        'headers' => [
-            'Authorization' => 'Zoho-oauthtoken ' . $token,
-        ],
+            'headers' => [
+                'Authorization' => 'Zoho-oauthtoken ' . $token,
+            ],
         'timeout' => 30
     ]);
     
