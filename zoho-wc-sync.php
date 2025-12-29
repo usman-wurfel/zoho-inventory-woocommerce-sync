@@ -2647,6 +2647,11 @@ function zoho_sync_orders_to_invoices($offset, $total, $synced, $created, $updat
         // Check if invoice already exists for this order
         $existing_invoice_id = get_post_meta($order_id, '_zoho_invoice_id', true);
         
+        // If updating an existing invoice, add reason (required when invoice is already sent)
+        if ($existing_invoice_id) {
+            $invoice_data['reason'] = 'Invoice is paid through WooCommerce';
+        }
+        
         $request_data = json_encode($invoice_data);
         
         if ($existing_invoice_id) {
