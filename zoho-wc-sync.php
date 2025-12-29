@@ -3222,7 +3222,15 @@ function zoho_sync_contacts_ajax_handler() {
         if ($customer_data['type'] == 'registered') {
             // Handle registered customer
             $customer = new WC_Customer($customer_data['user_id']);
+            // CRITICAL: Force read customer data to ensure latest email is loaded
+            $customer->read();
+            $customer->read_meta_data();
             $contact_data = zoho_build_contact_data_from_customer($customer);
+            
+            // Debug: Log email to verify it's being included
+            if (empty($contact_data['email'])) {
+                error_log('Zoho Sync: Customer ' . $customer_data['user_id'] . ' has no email in contact_data');
+            }
             $reference_id = 'User:' . $customer_data['user_id'];
             $saved_zoho_id = get_user_meta($customer_data['user_id'], '_zoho_contact_id', true);
             
@@ -4605,6 +4613,10 @@ function zoho_build_contact_data_from_customer($customer) {
     $user_id = $customer->get_id();
     $user = get_user_by('ID', $user_id);
     
+    // CRITICAL: Force reload customer data from database to ensure latest email
+    $customer->read_meta_data();
+    $customer->read();
+    
     // Get first name - try billing, then user meta, then display name
     $first_name = $customer->get_billing_first_name();
     if (empty($first_name)) {
@@ -4687,9 +4699,17 @@ function zoho_build_contact_data_from_customer($customer) {
         'customer_sub_type' => 'individual',
     );
     
-    // Always include email if available
-    if (!empty($email)) {
+    // CRITICAL: Always include email - ensure it's not empty and valid
+    // Trim and validate email before adding
+    $email = trim($email);
+    if (!empty($email) && is_email($email)) {
         $contact_data['email'] = $email;
+    } else {
+        // If email is still empty or invalid, try one more time from user object
+        if ($user && !empty($user->user_email) && is_email($user->user_email)) {
+            $email = trim($user->user_email);
+            $contact_data['email'] = $email;
+        }
     }
     
     // Add name fields only if not empty
@@ -4702,12 +4722,14 @@ function zoho_build_contact_data_from_customer($customer) {
     
     // CRITICAL: Zoho Inventory requires email in contact_persons array to show in panel
     // Move email and name to contact_persons array
-    if (!empty($email) || !empty($first_name) || !empty($last_name)) {
+    // Use the validated email from contact_data if available
+    $final_email = isset($contact_data['email']) ? $contact_data['email'] : $email;
+    if (!empty($final_email) || !empty($first_name) || !empty($last_name)) {
         $contact_data['contact_persons'] = array();
         $contact_person = array();
         
-        if (!empty($email)) {
-            $contact_person['email'] = $email;
+        if (!empty($final_email) && is_email($final_email)) {
+            $contact_person['email'] = $final_email;
         }
         if (!empty($first_name)) {
             $contact_person['first_name'] = $first_name;
