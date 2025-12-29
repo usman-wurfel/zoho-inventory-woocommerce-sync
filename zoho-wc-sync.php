@@ -3778,6 +3778,47 @@ function zoho_sync_contacts_to_customers($offset, $total, $synced, $created, $up
         $existing_user = null;
         $user_id = null;
         
+        // 0. CRITICAL: Cleanup duplicate users with same email (delete guest customers without username)
+        if (!empty($email) && is_email($email)) {
+            $search_email = trim(strtolower($email));
+            
+            // Find all users with same email
+            global $wpdb;
+            $duplicate_user_ids = $wpdb->get_col($wpdb->prepare(
+                "SELECT DISTINCT user_id FROM {$wpdb->usermeta} 
+                WHERE meta_key = 'billing_email' 
+                AND LOWER(TRIM(meta_value)) = %s",
+                $search_email
+            ));
+            
+            // Also check user_email field
+            $duplicate_user_ids_by_email = $wpdb->get_col($wpdb->prepare(
+                "SELECT ID FROM {$wpdb->users} 
+                WHERE LOWER(TRIM(user_email)) = %s",
+                $search_email
+            ));
+            
+            // Combine and get unique IDs
+            $all_duplicate_ids = array_unique(array_merge($duplicate_user_ids, $duplicate_user_ids_by_email));
+            
+            // If multiple users with same email exist, delete ones without username (guest customers)
+            if (count($all_duplicate_ids) > 1) {
+                foreach ($all_duplicate_ids as $duplicate_user_id) {
+                    $duplicate_user = get_user_by('ID', $duplicate_user_id);
+                    if ($duplicate_user) {
+                        // Check if username is empty or invalid (guest customer from orders)
+                        $user_login = trim($duplicate_user->user_login);
+                        if (empty($user_login) || strlen($user_login) < 3) {
+                            // This is a guest customer without proper username - delete it permanently
+                            // Use WordPress function to properly delete user (handles all cleanup)
+                            require_once(ABSPATH . 'wp-admin/includes/user.php');
+                            wp_delete_user($duplicate_user_id);
+                        }
+                    }
+                }
+            }
+        }
+        
         // 1. First check by Zoho contact ID (already synced users)
         global $wpdb;
         $existing_user_id = $wpdb->get_var($wpdb->prepare(
