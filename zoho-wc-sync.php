@@ -403,19 +403,29 @@ function zoho_dashboard_page() {
             AND role_meta.meta_value LIKE '%customer%'
     ");
     
-    // Get invoices count from logs (no meta tracking for invoices yet)
-    $detailed_logs = get_option('zoho_detailed_logs', []);
-    $invoices_synced = 0;
-    foreach ($detailed_logs as $log) {
-        if (zoho_is_log_successful($log) && ($log['type'] ?? '') === 'invoice') {
-            $invoices_synced++;
-        }
-    }
+    // Count orders that have _zoho_invoice_id (invoices linked/synced)
+    $invoices_synced = $wpdb->get_var("
+        SELECT COUNT(DISTINCT pm.post_id) 
+        FROM {$wpdb->postmeta} pm
+        INNER JOIN {$wpdb->posts} p ON pm.post_id = p.ID
+        WHERE pm.meta_key = '_zoho_invoice_id' 
+        AND pm.meta_value != '' 
+        AND pm.meta_value IS NOT NULL
+        AND p.post_type = 'shop_order'
+        AND p.post_status != 'trash'
+    ");
+    
+    // Get total orders count (excluding trash)
+    $total_orders = $wpdb->get_var("
+        SELECT COUNT(*) 
+        FROM {$wpdb->posts} 
+        WHERE post_type = 'shop_order' 
+        AND post_status != 'trash'
+    ");
     
     // Also get WooCommerce counts for context
     $total_products = wp_count_posts('product');
     $published_products = $total_products->publish ?? 0;
-    $total_orders = wp_count_posts('shop_order');
     
     ?>
     <div class="wrap">
@@ -465,8 +475,8 @@ function zoho_dashboard_page() {
             <!-- Invoices Synced Card -->
             <div class="zoho-stat-card">
                 <h3 class="zoho-stat-label">Invoices Synced</h3>
-                <div class="zoho-stat-number"><?php echo number_format($invoices_synced); ?></div>
-                <div style="font-size: 12px; color: #666; margin-top: 5px;">sync logs (30 days)</div>
+                <div class="zoho-stat-number"><?php echo number_format($invoices_synced ?: 0); ?></div>
+                <div style="font-size: 12px; color: #666; margin-top: 5px;"><?php echo number_format($invoices_synced ?: 0); ?> of <?php echo number_format($total_orders ?: 0); ?> orders linked</div>
             </div>
             
             <!-- Contacts Synced Card -->
