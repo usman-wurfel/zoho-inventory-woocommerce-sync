@@ -2790,7 +2790,13 @@ function zoho_sync_invoices_to_orders($offset, $total, $synced, $created, $updat
         }
         
         set_transient('zoho_invoice_sync_invoices', $all_invoices, 600);
-        set_transient('zoho_invoice_sync_stats', array('synced' => 0, 'created' => 0, 'updated' => 0, 'failed' => array()), 600);
+        set_transient('zoho_invoice_sync_stats', array(
+            'synced' => 0, 
+            'created' => 0, 
+            'updated' => 0, 
+            'failed' => array(),
+            'skipped' => array()
+        ), 600);
     } else {
         $all_invoices = get_transient('zoho_invoice_sync_invoices');
         if (!$all_invoices) {
@@ -2798,6 +2804,8 @@ function zoho_sync_invoices_to_orders($offset, $total, $synced, $created, $updat
             return;
         }
         $total = count($all_invoices);
+        
+        $stats = get_transient('zoho_invoice_sync_stats') ?: array('synced' => 0, 'created' => 0, 'updated' => 0, 'failed' => array());
     }
     
     // Process batch (10 invoices per batch - balanced for performance)
@@ -2806,23 +2814,57 @@ function zoho_sync_invoices_to_orders($offset, $total, $synced, $created, $updat
     $batch_created = 0;
     $batch_updated = 0;
     $batch_failed = array();
+    $batch_skipped = array();
     
     foreach ($batch_invoices as $invoice) {
         $zoho_invoice_id = $invoice['invoice_id'] ?? '';
         $reference_number = $invoice['reference_number'] ?? '';
         
+        // Skip if no invoice ID
+        if (empty($zoho_invoice_id)) {
+            $batch_failed[] = array(
+                'id' => 'Unknown',
+                'reason' => 'Missing invoice ID',
+                'invoice_number' => $invoice['invoice_number'] ?? 'N/A'
+            );
+            continue;
+        }
+        
         // Get full invoice details (including line items and customer info)
         $invoice_details = zoho_api_get('invoices/' . $zoho_invoice_id);
         
-        if (is_wp_error($invoice_details) || !isset($invoice_details['invoice'])) {
+        if (is_wp_error($invoice_details)) {
             $batch_failed[] = array(
                 'id' => $zoho_invoice_id,
-                'reason' => 'Failed to fetch invoice details'
+                'reason' => 'API Error: ' . $invoice_details->get_error_message(),
+                'invoice_number' => $invoice['invoice_number'] ?? 'N/A'
+            );
+            continue;
+        }
+        
+        if (!isset($invoice_details['invoice'])) {
+            $batch_failed[] = array(
+                'id' => $zoho_invoice_id,
+                'reason' => 'Invalid response - no invoice data',
+                'invoice_number' => $invoice['invoice_number'] ?? 'N/A'
             );
             continue;
         }
         
         $full_invoice = $invoice_details['invoice'];
+        
+        // Check invoice status - skip drafts if needed
+        $invoice_status = strtolower($full_invoice['status'] ?? '');
+        
+        // Skip draft invoices (optional - remove this if you want to sync drafts)
+        // if ($invoice_status === 'draft') {
+        //     $batch_skipped[] = array(
+        //         'id' => $zoho_invoice_id,
+        //         'reason' => 'Draft invoice - skipped',
+        //         'invoice_number' => $full_invoice['invoice_number'] ?? 'N/A'
+        //     );
+        //     continue;
+        // }
         
         // Check if order already exists
         $existing_order_id = zoho_get_order_by_zoho_invoice($zoho_invoice_id);
@@ -2955,7 +2997,18 @@ function zoho_sync_invoices_to_orders($offset, $total, $synced, $created, $updat
             }
             
             // ===== ADD LINE ITEMS =====
-            foreach ($full_invoice['line_items'] ?? array() as $line_item) {
+            $line_items = $full_invoice['line_items'] ?? array();
+            
+            if (empty($line_items)) {
+                $batch_failed[] = array(
+                    'id' => $zoho_invoice_id,
+                    'reason' => 'No line items found in invoice',
+                    'invoice_number' => $full_invoice['invoice_number'] ?? 'N/A'
+                );
+                continue;
+            }
+            
+            foreach ($line_items as $line_item) {
                 $item_name = $line_item['name'] ?? 'Item';
                 $quantity = floatval($line_item['quantity'] ?? 1);
                 $rate = floatval($line_item['rate'] ?? 0);
@@ -3053,12 +3106,19 @@ function zoho_sync_invoices_to_orders($offset, $total, $synced, $created, $updat
     }
     
     // Update stats
-    $stats = get_transient('zoho_invoice_sync_stats') ?: array('synced' => 0, 'created' => 0, 'updated' => 0, 'failed' => array());
+    $stats = get_transient('zoho_invoice_sync_stats') ?: array(
+        'synced' => 0, 
+        'created' => 0, 
+        'updated' => 0, 
+        'failed' => array(),
+        'skipped' => array()
+    );
     $new_offset = $offset + count($batch_invoices);
     $new_synced = $synced + $batch_created + $batch_updated;
     $new_created = $created + $batch_created;
     $new_updated = $updated + $batch_updated;
     $stats['failed'] = array_merge($stats['failed'] ?? array(), $batch_failed);
+    $stats['skipped'] = array_merge($stats['skipped'] ?? array(), $batch_skipped);
     set_transient('zoho_invoice_sync_stats', $stats, 600);
     
     $has_more = $new_offset < $total;
@@ -3068,10 +3128,18 @@ function zoho_sync_invoices_to_orders($offset, $total, $synced, $created, $updat
         delete_transient('zoho_invoice_sync_stats');
     }
     
-    // Prepare failure reasons
+    // Prepare failure reasons with invoice numbers
     $failure_reasons = array();
     foreach ($stats['failed'] as $fail) {
-        $failure_reasons[] = $fail['id'] . ': ' . $fail['reason'];
+        $invoice_num = isset($fail['invoice_number']) ? ' [Invoice: ' . $fail['invoice_number'] . ']' : '';
+        $failure_reasons[] = $fail['id'] . ': ' . $fail['reason'] . $invoice_num;
+    }
+    
+    // Prepare skipped reasons
+    $skipped_reasons = array();
+    foreach ($stats['skipped'] ?? array() as $skip) {
+        $invoice_num = isset($skip['invoice_number']) ? ' [Invoice: ' . $skip['invoice_number'] . ']' : '';
+        $skipped_reasons[] = $skip['id'] . ': ' . $skip['reason'] . $invoice_num;
     }
     
     wp_send_json_success(array(
@@ -3082,6 +3150,8 @@ function zoho_sync_invoices_to_orders($offset, $total, $synced, $created, $updat
         'updated' => $new_updated,
         'failed' => count($stats['failed']),
         'failed_reasons' => $failure_reasons,
+        'skipped' => count($stats['skipped'] ?? array()),
+        'skipped_reasons' => $skipped_reasons,
         'has_more' => $has_more
     ));
 }
