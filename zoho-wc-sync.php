@@ -3778,8 +3778,9 @@ function zoho_sync_contacts_to_customers($offset, $total, $synced, $created, $up
             $existing_user = get_user_by('ID', $existing_user_id);
         }
         
-        // 2. If not found by Zoho ID, match by BOTH email AND name (both must match)
-        if (!$existing_user && !empty($email) && !empty($contact_name)) {
+        // 2. If not found by Zoho ID, match by EMAIL (email is unique identifier)
+        // If email matches, it's the same customer - update existing, don't create new
+        if (!$existing_user && !empty($email) && is_email($email)) {
             // Get all users with matching email
             $users_by_email = get_users(array(
                 'meta_key' => 'billing_email',
@@ -3795,33 +3796,46 @@ function zoho_sync_contacts_to_customers($offset, $total, $synced, $created, $up
                 }
             }
             
-            // Now check if name matches for any of these users
-            foreach ($users_by_email as $user) {
-                // Get user's name from WooCommerce
-                $user_first_name = get_user_meta($user->ID, 'first_name', true);
-                $user_last_name = get_user_meta($user->ID, 'last_name', true);
+            // If email matches, use the first matching user (email is unique)
+            // Prefer user with matching name if available, otherwise use first one
+            if (!empty($users_by_email)) {
+                $matched_user = null;
                 
-                // Also check billing name
-                if (empty($user_first_name)) {
-                    $user_first_name = get_user_meta($user->ID, 'billing_first_name', true);
+                // First try to find user with matching name
+                foreach ($users_by_email as $user) {
+                    // Get user's name from WooCommerce
+                    $user_first_name = get_user_meta($user->ID, 'first_name', true);
+                    $user_last_name = get_user_meta($user->ID, 'last_name', true);
+                    
+                    // Also check billing name
+                    if (empty($user_first_name)) {
+                        $user_first_name = get_user_meta($user->ID, 'billing_first_name', true);
+                    }
+                    if (empty($user_last_name)) {
+                        $user_last_name = get_user_meta($user->ID, 'billing_last_name', true);
+                    }
+                    
+                    // Build full name from WooCommerce
+                    $woo_full_name = trim($user_first_name . ' ' . $user_last_name);
+                    
+                    // Compare names (case-insensitive, trimmed)
+                    $zoho_contact_name_clean = strtolower(trim($contact_name));
+                    $woo_name_clean = strtolower(trim($woo_full_name));
+                    
+                    // If name matches, use this user
+                    if ($zoho_contact_name_clean === $woo_name_clean && !empty($woo_name_clean)) {
+                        $matched_user = $user;
+                        break;
+                    }
                 }
-                if (empty($user_last_name)) {
-                    $user_last_name = get_user_meta($user->ID, 'billing_last_name', true);
+                
+                // If no name match found, use first user with matching email
+                // Email is unique, so same email = same customer
+                if (!$matched_user) {
+                    $matched_user = $users_by_email[0];
                 }
                 
-                // Build full name from WooCommerce
-                $woo_full_name = trim($user_first_name . ' ' . $user_last_name);
-                
-                // Compare names (case-insensitive, trimmed)
-                $zoho_contact_name_clean = strtolower(trim($contact_name));
-                $woo_name_clean = strtolower(trim($woo_full_name));
-                
-                // Match if names are same (exact match)
-                if ($zoho_contact_name_clean === $woo_name_clean && !empty($woo_name_clean)) {
-                    // BOTH email AND name match - this is the same customer
-                    $existing_user = $user;
-                    break;
-                }
+                $existing_user = $matched_user;
             }
         }
         
@@ -3849,6 +3863,42 @@ function zoho_sync_contacts_to_customers($offset, $total, $synced, $created, $up
             if (empty($existing_billing_first) && empty($existing_billing_last)) {
                 update_user_meta($user_id, 'billing_first_name', $first_name);
                 update_user_meta($user_id, 'billing_last_name', $last_name);
+            }
+            
+            // CRITICAL: Fix username if missing or invalid
+            $existing_user_obj = get_user_by('ID', $user_id);
+            if ($existing_user_obj && (empty($existing_user_obj->user_login) || strlen($existing_user_obj->user_login) < 3)) {
+                // Generate username from email or name
+                $new_username = '';
+                if (!empty($email)) {
+                    $email_parts = explode('@', $email);
+                    $new_username = sanitize_user($email_parts[0]);
+                } elseif (!empty($contact_name)) {
+                    $new_username = sanitize_user($contact_name);
+                } else {
+                    $new_username = 'user_' . $user_id;
+                }
+                
+                // Ensure unique username
+                $original_username = $new_username;
+                $counter = 1;
+                while (username_exists($new_username)) {
+                    $new_username = $original_username . $counter;
+                    $counter++;
+                }
+                
+                // Update username directly in database
+                global $wpdb;
+                $wpdb->update(
+                    $wpdb->users,
+                    array('user_login' => $new_username),
+                    array('ID' => $user_id),
+                    array('%s'),
+                    array('%d')
+                );
+                
+                // Clear user cache
+                clean_user_cache($user_id);
             }
         } else {
             // Create new user - need a valid email for WooCommerce
