@@ -3653,12 +3653,20 @@ function zoho_sync_contacts_to_customers($offset, $total, $synced, $created, $up
         $zoho_contact_id = $contact['contact_id'] ?? '';
         $contact_name = $contact['contact_name'] ?? '';
         
-        // Get email - if not available, generate dummy from contact name or ID
+        // Get email - check multiple sources (root level, contact_persons array)
         $email = $contact['email'] ?? '';
-        if (empty($email)) {
-            // Generate dummy email from contact name or ID
-            $slug = sanitize_title($contact_name ?: 'contact-' . $zoho_contact_id);
-            $email = $slug . '@zoho-import.local';
+        
+        // If email not in root level, check contact_persons array (primary contact)
+        if (empty($email) && isset($contact['contact_persons']) && is_array($contact['contact_persons'])) {
+            foreach ($contact['contact_persons'] as $person) {
+                // Check if this is primary contact or first contact
+                if ((isset($person['is_primary_contact']) && $person['is_primary_contact']) || empty($email)) {
+                    $email = $person['email'] ?? '';
+                    if (!empty($email)) {
+                        break; // Found email in contact_persons
+                    }
+                }
+            }
         }
         
         // Get first/last name - parse from contact_name if not available
@@ -3670,6 +3678,42 @@ function zoho_sync_contacts_to_customers($offset, $total, $synced, $created, $up
             $name_parts = explode(' ', trim($contact_name), 2);
             $first_name = $name_parts[0] ?? '';
             $last_name = $name_parts[1] ?? '';
+        }
+        
+        // If still no email, try to find from existing WooCommerce user by matching name
+        if (empty($email) && !empty($contact_name)) {
+            // Try to find existing user by name and get their email
+            $users = get_users(array(
+                'number' => 10,
+                'search' => $contact_name,
+                'search_columns' => array('display_name')
+            ));
+            
+            // Also search by first/last name
+            if (empty($users) && !empty($first_name) && !empty($last_name)) {
+                $users = get_users(array(
+                    'meta_query' => array(
+                        'relation' => 'AND',
+                        array('key' => 'first_name', 'value' => $first_name, 'compare' => '='),
+                        array('key' => 'last_name', 'value' => $last_name, 'compare' => '=')
+                    ),
+                    'number' => 5
+                ));
+            }
+            
+            // Get email from first matching user
+            if (!empty($users) && isset($users[0])) {
+                $user_email = $users[0]->user_email;
+                $billing_email = get_user_meta($users[0]->ID, 'billing_email', true);
+                $email = !empty($billing_email) ? $billing_email : $user_email;
+            }
+        }
+        
+        // LAST RESORT: Only generate dummy email if absolutely no email found
+        if (empty($email) || !is_email($email)) {
+            // Generate dummy email from contact name or ID
+            $slug = sanitize_title($contact_name ?: 'contact-' . $zoho_contact_id);
+            $email = $slug . '@zoho-import.local';
         }
         
         // Fallback for names
@@ -3789,7 +3833,40 @@ function zoho_sync_contacts_to_customers($offset, $total, $synced, $created, $up
         } else {
             // Create new user - need a valid email for WooCommerce
             $create_email = $email;
-            if (empty($create_email)) {
+            
+            // If still no valid email, try to find from existing WooCommerce users by matching name
+            if (empty($create_email) || !is_email($create_email)) {
+                // Try to find existing user by name and get their email
+                if (!empty($contact_name)) {
+                    $users_by_name = get_users(array(
+                        'number' => 10,
+                        'search' => '*' . esc_attr($contact_name) . '*',
+                        'search_columns' => array('display_name')
+                    ));
+                    
+                    // Also search by first/last name if available
+                    if (empty($users_by_name) && !empty($first_name) && !empty($last_name)) {
+                        $users_by_name = get_users(array(
+                            'meta_query' => array(
+                                'relation' => 'OR',
+                                array('key' => 'first_name', 'value' => $first_name, 'compare' => 'LIKE'),
+                                array('key' => 'billing_first_name', 'value' => $first_name, 'compare' => 'LIKE')
+                            ),
+                            'number' => 5
+                        ));
+                    }
+                    
+                    // Get email from first matching user
+                    if (!empty($users_by_name) && isset($users_by_name[0])) {
+                        $user_email = $users_by_name[0]->user_email;
+                        $billing_email = get_user_meta($users_by_name[0]->ID, 'billing_email', true);
+                        $create_email = !empty($billing_email) ? $billing_email : $user_email;
+                    }
+                }
+            }
+            
+            // LAST RESORT: Only generate dummy email if absolutely no email found
+            if (empty($create_email) || !is_email($create_email)) {
                 // Generate unique email from contact name/ID
                 $slug = sanitize_title($contact_name ?: 'contact-' . $zoho_contact_id);
                 $create_email = $slug . '-' . substr(md5($zoho_contact_id), 0, 6) . '@zoho-import.local';
@@ -5289,7 +5366,11 @@ function zoho_contact_sync_page() {
                                 resultHtml += '</ul>';
                             }
                             
-                            $('#zoho-contact-sync-result').html(resultHtml).show();
+                            $('#zoho-contact-sync-result').html(resultHtml).css({
+                                'background': '#d4edda',
+                                'border-color': '#c3e6cb',
+                                'color': '#155724'
+                            }).show();
                             $('#zoho-start-contact-sync').prop('disabled', false).text('Sync Contacts Now');
                         }
                     } else {
