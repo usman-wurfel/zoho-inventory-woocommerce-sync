@@ -310,29 +310,40 @@ add_action('admin_init', function () {
    HELPER FUNCTIONS FOR DASHBOARD
 ====================================================== */
 function zoho_get_synced_invoices_count() {
-    // Use WooCommerce function (HPOS compatible)
+    global $wpdb;
+    
+    // Try WooCommerce function first (HPOS compatible)
     if (function_exists('wc_get_orders')) {
         $orders = wc_get_orders(array(
-            'limit' => -1,
+            'limit' => 1,
             'return' => 'ids',
-            'status' => 'any',
-            'meta_query' => array(
-                array(
-                    'key' => '_zoho_invoice_id',
-                    'compare' => 'EXISTS'
-                ),
-                array(
-                    'key' => '_zoho_invoice_id',
-                    'value' => '',
-                    'compare' => '!='
-                )
-            )
+            'meta_key' => '_zoho_invoice_id',
+            'meta_compare' => 'EXISTS'
         ));
-        return is_array($orders) ? count($orders) : 0;
+        
+        // If returns results, use WC function (for smaller datasets)
+        if ($orders !== false) {
+            $all_orders = wc_get_orders(array(
+                'limit' => -1,
+                'return' => 'ids',
+                'status' => 'any',
+                'meta_query' => array(
+                    array(
+                        'key' => '_zoho_invoice_id',
+                        'compare' => 'EXISTS'
+                    ),
+                    array(
+                        'key' => '_zoho_invoice_id',
+                        'value' => '',
+                        'compare' => '!='
+                    )
+                )
+            ));
+            return count($all_orders);
+        }
     }
     
-    // Fallback to SQL (if WooCommerce not available)
-    global $wpdb;
+    // Fallback to SQL (faster for large datasets)
     $hpos_enabled = false;
     if (class_exists('Automattic\WooCommerce\Utilities\OrderUtil')) {
         $hpos_enabled = Automattic\WooCommerce\Utilities\OrderUtil::custom_orders_table_usage_is_enabled();
@@ -345,7 +356,6 @@ function zoho_get_synced_invoices_count() {
             INNER JOIN {$wpdb->prefix}wc_orders o ON om.order_id = o.id
             WHERE om.meta_key = '_zoho_invoice_id' 
             AND om.meta_value != '' 
-            AND om.meta_value IS NOT NULL
             AND o.type = 'shop_order'
             AND o.status NOT IN ('trash', 'auto-draft')
         "));
@@ -356,7 +366,6 @@ function zoho_get_synced_invoices_count() {
             INNER JOIN {$wpdb->posts} p ON pm.post_id = p.ID
             WHERE pm.meta_key = '_zoho_invoice_id' 
             AND pm.meta_value != '' 
-            AND pm.meta_value IS NOT NULL
             AND p.post_type = 'shop_order'
             AND p.post_status NOT IN ('trash', 'auto-draft')
         "));
@@ -364,7 +373,9 @@ function zoho_get_synced_invoices_count() {
 }
 
 function zoho_get_total_orders_count() {
-    // Use WooCommerce function (HPOS compatible)
+    global $wpdb;
+    
+    // Try WooCommerce function first (HPOS compatible)
     if (function_exists('wc_get_orders')) {
         $all_orders = wc_get_orders(array(
             'limit' => -1,
@@ -374,8 +385,7 @@ function zoho_get_total_orders_count() {
         return is_array($all_orders) ? count($all_orders) : 0;
     }
     
-    // Fallback to SQL (if WooCommerce not available)
-    global $wpdb;
+    // Fallback to SQL
     $hpos_enabled = false;
     if (class_exists('Automattic\WooCommerce\Utilities\OrderUtil')) {
         $hpos_enabled = Automattic\WooCommerce\Utilities\OrderUtil::custom_orders_table_usage_is_enabled();
@@ -2553,7 +2563,7 @@ function zoho_sync_orders_to_invoices($offset, $total, $synced, $created, $updat
         }
         
         // Check if order is completed and has invoice - verify if invoice is already paid in Zoho
-        $existing_invoice_id_check = $order->get_meta('_zoho_invoice_id', true);
+        $existing_invoice_id_check = get_post_meta($order_id, '_zoho_invoice_id', true);
         $order_status_check = $order->get_status();
         if ($order_status_check === 'completed' && !empty($existing_invoice_id_check)) {
             // Check invoice status in Zoho - if already paid, skip it
@@ -2570,9 +2580,7 @@ function zoho_sync_orders_to_invoices($offset, $total, $synced, $created, $updat
             } else {
                 // If invoice doesn't exist in Zoho (Code 1002), clear the ID and continue to create new
                 if (isset($invoice_status_check['code']) && $invoice_status_check['code'] == 1002) {
-                    // Clear invalid invoice ID (HPOS compatible)
-                    $order->delete_meta_data('_zoho_invoice_id');
-                    $order->save();
+                    delete_post_meta($order_id, '_zoho_invoice_id');
                     // Continue to create new invoice
                 } else {
                     // Other error - skip this order
@@ -2838,7 +2846,7 @@ function zoho_sync_orders_to_invoices($offset, $total, $synced, $created, $updat
         );
         
         // Check if invoice already exists for this order
-        $existing_invoice_id = $order->get_meta('_zoho_invoice_id', true);
+        $existing_invoice_id = get_post_meta($order_id, '_zoho_invoice_id', true);
         
         // If updating an existing invoice, add reason (required when invoice is already sent)
         if ($existing_invoice_id) {
@@ -2853,9 +2861,8 @@ function zoho_sync_orders_to_invoices($offset, $total, $synced, $created, $updat
             
             // If Code 1002 (invoice doesn't exist), clear stored ID and create new invoice
             if (isset($response['code']) && $response['code'] == 1002) {
-                // Clear invalid invoice ID (HPOS compatible)
-                $order->delete_meta_data('_zoho_invoice_id');
-                $order->save();
+                // Clear invalid invoice ID
+                delete_post_meta($order_id, '_zoho_invoice_id');
                 $existing_invoice_id = '';
                 // Remove reason field for new invoice creation
                 unset($invoice_data['reason']);
@@ -2875,9 +2882,7 @@ function zoho_sync_orders_to_invoices($offset, $total, $synced, $created, $updat
         $zoho_invoice_id = '';
         if (isset($response['invoice']['invoice_id'])) {
             $zoho_invoice_id = $response['invoice']['invoice_id'];
-            // Use order object method for HPOS compatibility
-            $order->update_meta_data('_zoho_invoice_id', $zoho_invoice_id);
-            $order->save();
+            update_post_meta($order_id, '_zoho_invoice_id', $zoho_invoice_id);
             
             // If order status is "completed", mark invoice as "sent" and record payment in Zoho
             $order_status = $order->get_status();
@@ -3340,14 +3345,14 @@ function zoho_sync_invoices_to_orders($offset, $total, $synced, $created, $updat
                 $order->add_order_note('Zoho Reference Number: ' . $reference_number);
             }
             
-            // Save Zoho invoice ID (HPOS compatible)
-            $order->update_meta_data('_zoho_invoice_id', $zoho_invoice_id);
-            if (!empty($reference_number)) {
-                $order->update_meta_data('_zoho_reference_number', $reference_number);
-            }
-            
             // Save order
             $order->save();
+            
+            // Save Zoho invoice ID
+            update_post_meta($order->get_id(), '_zoho_invoice_id', $zoho_invoice_id);
+            if (!empty($reference_number)) {
+                update_post_meta($order->get_id(), '_zoho_reference_number', $reference_number);
+            }
             
             $batch_created++;
             
