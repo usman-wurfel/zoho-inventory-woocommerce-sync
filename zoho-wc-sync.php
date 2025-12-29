@@ -2932,6 +2932,7 @@ function zoho_sync_contacts_ajax_handler() {
 
 /* ====================================================== 
    WOO CUSTOMERS TO ZOHO CONTACTS (Guest + Registered)
+   OPTIMIZED VERSION - No Duplicate Processing
    ====================================================== */
    function zoho_sync_customers_to_contacts($offset, $total, $synced, $created, $updated, $from_date, $to_date) {
     // First call - fetch WooCommerce customers (registered + guest)
@@ -3047,6 +3048,9 @@ function zoho_sync_contacts_ajax_handler() {
 
         $orders = wc_get_orders($order_args);
 
+        // STEP 1: Collect unique guest emails first (avoid duplicate processing)
+        $guest_emails = array();
+        
         foreach ($orders as $order_id) {
             $order = wc_get_order($order_id);
             $email = strtolower(trim($order->get_billing_email()));
@@ -3055,12 +3059,105 @@ function zoho_sync_contacts_ajax_handler() {
             if (empty($email) || isset($all_customers[$email])) {
                 continue;
             }
-
-            // Convert guest customers to WordPress users
-            $existing_user = get_user_by('email', $email);
             
-            if (!$existing_user) {
-                // Guest customer - create WordPress user
+            // Store unique email with order data (latest order will be used)
+            if (!isset($guest_emails[$email])) {
+                $guest_emails[$email] = array(
+                    'email' => $email,
+                    'order_id' => $order_id,
+                    'first_name' => $order->get_billing_first_name(),
+                    'last_name' => $order->get_billing_last_name(),
+                    'company' => $order->get_billing_company(),
+                    'phone' => $order->get_billing_phone(),
+                    'address_1' => $order->get_billing_address_1(),
+                    'address_2' => $order->get_billing_address_2(),
+                    'city' => $order->get_billing_city(),
+                    'state' => $order->get_billing_state(),
+                    'postcode' => $order->get_billing_postcode(),
+                    'country' => $order->get_billing_country(),
+                    'shipping_first_name' => $order->get_shipping_first_name(),
+                    'shipping_last_name' => $order->get_shipping_last_name(),
+                    'shipping_company' => $order->get_shipping_company(),
+                    'shipping_address_1' => $order->get_shipping_address_1(),
+                    'shipping_address_2' => $order->get_shipping_address_2(),
+                    'shipping_city' => $order->get_shipping_city(),
+                    'shipping_state' => $order->get_shipping_state(),
+                    'shipping_postcode' => $order->get_shipping_postcode(),
+                    'shipping_country' => $order->get_shipping_country(),
+                );
+            }
+        }
+
+        // STEP 2: Process unique guest emails
+        global $wpdb;
+        
+        foreach ($guest_emails as $email => $order_data) {
+            // Check if orphaned customer lookup record exists for this email
+            $orphaned_customer_id = $wpdb->get_var($wpdb->prepare(
+                "SELECT customer_id FROM {$wpdb->prefix}wc_customer_lookup 
+                WHERE email = %s AND (user_id = 0 OR user_id IS NULL) 
+                LIMIT 1",
+                $email
+            ));
+            
+            $existing_user = get_user_by('email', $email);
+            $new_user_id = null;
+            
+            if ($existing_user) {
+                // User already exists - just update customer_lookup table
+                $new_user_id = $existing_user->ID;
+                
+                if ($orphaned_customer_id) {
+                    // Update orphaned lookup record
+                    $wpdb->update(
+                        $wpdb->prefix . 'wc_customer_lookup',
+                        array(
+                            'user_id' => $new_user_id,
+                            'username' => $existing_user->user_login
+                        ),
+                        array('customer_id' => $orphaned_customer_id),
+                        array('%d', '%s'),
+                        array('%d')
+                    );
+                } else {
+                    // Check if any customer_lookup entry exists for this email
+                    $existing_lookup = $wpdb->get_row($wpdb->prepare(
+                        "SELECT customer_id FROM {$wpdb->prefix}wc_customer_lookup WHERE email = %s LIMIT 1",
+                        $email
+                    ));
+                    
+                    if ($existing_lookup) {
+                        // Update existing lookup entry
+                        $wpdb->update(
+                            $wpdb->prefix . 'wc_customer_lookup',
+                            array(
+                                'user_id' => $new_user_id,
+                                'username' => $existing_user->user_login
+                            ),
+                            array('customer_id' => $existing_lookup->customer_id),
+                            array('%d', '%s'),
+                            array('%d')
+                        );
+                    }
+                }
+                
+                // Link ALL orders for this email to the existing user
+                $all_orders_for_email = wc_get_orders(array(
+                    'billing_email' => $email,
+                    'limit' => -1,
+                    'return' => 'ids',
+                ));
+                
+                foreach ($all_orders_for_email as $order_id) {
+                    $order = wc_get_order($order_id);
+                    if ($order && $order->get_customer_id() == 0) {
+                        $order->set_customer_id($new_user_id);
+                        $order->save();
+                    }
+                }
+                
+            } else {
+                // Guest customer - create new WordPress user
                 $email_parts = explode('@', $email);
                 $username = sanitize_user($email_parts[0]);
                 
@@ -3075,21 +3172,13 @@ function zoho_sync_contacts_ajax_handler() {
                 // Generate password
                 $password = wp_generate_password();
                 
-                // Check if orphaned customer lookup record exists for this email
-                global $wpdb;
-                $orphaned_customer_id = $wpdb->get_var($wpdb->prepare(
-                    "SELECT customer_id FROM {$wpdb->prefix}wc_customer_lookup 
-                    WHERE email = %s AND (user_id = 0 OR user_id IS NULL) 
-                    LIMIT 1",
-                    $email
-                ));
-                
                 // Create WordPress user using WooCommerce function
                 $new_user_id = wc_create_new_customer($email, $username, $password);
                 
                 if (!is_wp_error($new_user_id)) {
-                    // If orphaned record exists, update it instead of creating new entry
+                    // If orphaned record exists, update it and delete duplicate entries
                     if ($orphaned_customer_id) {
+                        // Update the orphaned record with new user_id and username
                         $wpdb->update(
                             $wpdb->prefix . 'wc_customer_lookup',
                             array(
@@ -3100,69 +3189,75 @@ function zoho_sync_contacts_ajax_handler() {
                             array('%d', '%s'),
                             array('%d')
                         );
+                        
+                        // Delete any NEW entry that WooCommerce created (keep orphaned one)
+                        $wpdb->query($wpdb->prepare(
+                            "DELETE FROM {$wpdb->prefix}wc_customer_lookup 
+                            WHERE user_id = %d AND customer_id != %d",
+                            $new_user_id,
+                            $orphaned_customer_id
+                        ));
                     }
-                    // Set billing information from order
-                    $first_name = $order->get_billing_first_name();
-                    $last_name = $order->get_billing_last_name();
                     
-                    if (!empty($first_name)) {
-                        update_user_meta($new_user_id, 'billing_first_name', $first_name);
-                        update_user_meta($new_user_id, 'first_name', $first_name);
+                    // Set billing information from order data
+                    if (!empty($order_data['first_name'])) {
+                        update_user_meta($new_user_id, 'billing_first_name', $order_data['first_name']);
+                        update_user_meta($new_user_id, 'first_name', $order_data['first_name']);
                     }
-                    if (!empty($last_name)) {
-                        update_user_meta($new_user_id, 'billing_last_name', $last_name);
-                        update_user_meta($new_user_id, 'last_name', $last_name);
+                    if (!empty($order_data['last_name'])) {
+                        update_user_meta($new_user_id, 'billing_last_name', $order_data['last_name']);
+                        update_user_meta($new_user_id, 'last_name', $order_data['last_name']);
                     }
-                    if (!empty($order->get_billing_company())) {
-                        update_user_meta($new_user_id, 'billing_company', $order->get_billing_company());
+                    if (!empty($order_data['company'])) {
+                        update_user_meta($new_user_id, 'billing_company', $order_data['company']);
                     }
-                    if (!empty($order->get_billing_phone())) {
-                        update_user_meta($new_user_id, 'billing_phone', $order->get_billing_phone());
+                    if (!empty($order_data['phone'])) {
+                        update_user_meta($new_user_id, 'billing_phone', $order_data['phone']);
                     }
-                    if (!empty($order->get_billing_address_1())) {
-                        update_user_meta($new_user_id, 'billing_address_1', $order->get_billing_address_1());
+                    if (!empty($order_data['address_1'])) {
+                        update_user_meta($new_user_id, 'billing_address_1', $order_data['address_1']);
                     }
-                    if (!empty($order->get_billing_address_2())) {
-                        update_user_meta($new_user_id, 'billing_address_2', $order->get_billing_address_2());
+                    if (!empty($order_data['address_2'])) {
+                        update_user_meta($new_user_id, 'billing_address_2', $order_data['address_2']);
                     }
-                    if (!empty($order->get_billing_city())) {
-                        update_user_meta($new_user_id, 'billing_city', $order->get_billing_city());
+                    if (!empty($order_data['city'])) {
+                        update_user_meta($new_user_id, 'billing_city', $order_data['city']);
                     }
-                    if (!empty($order->get_billing_state())) {
-                        update_user_meta($new_user_id, 'billing_state', $order->get_billing_state());
+                    if (!empty($order_data['state'])) {
+                        update_user_meta($new_user_id, 'billing_state', $order_data['state']);
                     }
-                    if (!empty($order->get_billing_postcode())) {
-                        update_user_meta($new_user_id, 'billing_postcode', $order->get_billing_postcode());
+                    if (!empty($order_data['postcode'])) {
+                        update_user_meta($new_user_id, 'billing_postcode', $order_data['postcode']);
                     }
-                    if (!empty($order->get_billing_country())) {
-                        update_user_meta($new_user_id, 'billing_country', $order->get_billing_country());
+                    if (!empty($order_data['country'])) {
+                        update_user_meta($new_user_id, 'billing_country', $order_data['country']);
                     }
-                    if (!empty($order->get_shipping_first_name())) {
-                        update_user_meta($new_user_id, 'shipping_first_name', $order->get_shipping_first_name());
+                    if (!empty($order_data['shipping_first_name'])) {
+                        update_user_meta($new_user_id, 'shipping_first_name', $order_data['shipping_first_name']);
                     }
-                    if (!empty($order->get_shipping_last_name())) {
-                        update_user_meta($new_user_id, 'shipping_last_name', $order->get_shipping_last_name());
+                    if (!empty($order_data['shipping_last_name'])) {
+                        update_user_meta($new_user_id, 'shipping_last_name', $order_data['shipping_last_name']);
                     }
-                    if (!empty($order->get_shipping_company())) {
-                        update_user_meta($new_user_id, 'shipping_company', $order->get_shipping_company());
+                    if (!empty($order_data['shipping_company'])) {
+                        update_user_meta($new_user_id, 'shipping_company', $order_data['shipping_company']);
                     }
-                    if (!empty($order->get_shipping_address_1())) {
-                        update_user_meta($new_user_id, 'shipping_address_1', $order->get_shipping_address_1());
+                    if (!empty($order_data['shipping_address_1'])) {
+                        update_user_meta($new_user_id, 'shipping_address_1', $order_data['shipping_address_1']);
                     }
-                    if (!empty($order->get_shipping_address_2())) {
-                        update_user_meta($new_user_id, 'shipping_address_2', $order->get_shipping_address_2());
+                    if (!empty($order_data['shipping_address_2'])) {
+                        update_user_meta($new_user_id, 'shipping_address_2', $order_data['shipping_address_2']);
                     }
-                    if (!empty($order->get_shipping_city())) {
-                        update_user_meta($new_user_id, 'shipping_city', $order->get_shipping_city());
+                    if (!empty($order_data['shipping_city'])) {
+                        update_user_meta($new_user_id, 'shipping_city', $order_data['shipping_city']);
                     }
-                    if (!empty($order->get_shipping_state())) {
-                        update_user_meta($new_user_id, 'shipping_state', $order->get_shipping_state());
+                    if (!empty($order_data['shipping_state'])) {
+                        update_user_meta($new_user_id, 'shipping_state', $order_data['shipping_state']);
                     }
-                    if (!empty($order->get_shipping_postcode())) {
-                        update_user_meta($new_user_id, 'shipping_postcode', $order->get_shipping_postcode());
+                    if (!empty($order_data['shipping_postcode'])) {
+                        update_user_meta($new_user_id, 'shipping_postcode', $order_data['shipping_postcode']);
                     }
-                    if (!empty($order->get_shipping_country())) {
-                        update_user_meta($new_user_id, 'shipping_country', $order->get_shipping_country());
+                    if (!empty($order_data['shipping_country'])) {
+                        update_user_meta($new_user_id, 'shipping_country', $order_data['shipping_country']);
                     }
                     
                     // Set billing_email in user meta and update user email
@@ -3180,25 +3275,31 @@ function zoho_sync_contacts_ajax_handler() {
                     $customer->set_email($email);
                     $customer->save();
                     
-                    // Update order to link to new user
-                    $order->set_customer_id($new_user_id);
-                    $order->save();
+                    // Link ALL orders for this email to the new user
+                    $all_orders_for_email = wc_get_orders(array(
+                        'billing_email' => $email,
+                        'limit' => -1,
+                        'return' => 'ids',
+                    ));
                     
-                    // Now treat as registered user
-                    $all_customers[$email] = array(
-                        'type' => 'registered',
-                        'user_id' => $new_user_id,
-                        'email' => $email
-                    );
+                    foreach ($all_orders_for_email as $order_id) {
+                        $order = wc_get_order($order_id);
+                        if ($order) {
+                            $order->set_customer_id($new_user_id);
+                            $order->save();
+                        }
+                    }
                 } else {
                     // User creation failed, skip this guest
                     continue;
                 }
-            } else {
-                // User already exists, add as registered
+            }
+            
+            // Add to all_customers list
+            if (!is_wp_error($new_user_id) && $new_user_id) {
                 $all_customers[$email] = array(
                     'type' => 'registered',
-                    'user_id' => $existing_user->ID,
+                    'user_id' => $new_user_id,
                     'email' => $email
                 );
             }
@@ -3235,22 +3336,12 @@ function zoho_sync_contacts_ajax_handler() {
     foreach ($batch as $customer_data) {
         $contact_data = array();
         
-        // Build contact data based on customer type
-        if ($customer_data['type'] == 'registered') {
-            // Handle registered customer
-            $customer = new WC_Customer($customer_data['user_id']);
-            $customer->read_meta_data();
-            $contact_data = zoho_build_contact_data_from_customer($customer);
-            $reference_id = 'User:' . $customer_data['user_id'];
-            $saved_zoho_id = get_user_meta($customer_data['user_id'], '_zoho_contact_id', true);
-            
-        } else {
-            // Handle guest customer from order
-            $order = wc_get_order($customer_data['order_id']);
-            $contact_data = zoho_build_contact_data_from_order($order);
-            $reference_id = 'Guest:' . $customer_data['email'];
-            $saved_zoho_id = get_option('_zoho_guest_contact_' . md5($customer_data['email']), '');
-        }
+        // Build contact data (all are now registered users)
+        $customer = new WC_Customer($customer_data['user_id']);
+        $customer->read_meta_data();
+        $contact_data = zoho_build_contact_data_from_customer($customer);
+        $reference_id = 'User:' . $customer_data['user_id'];
+        $saved_zoho_id = get_user_meta($customer_data['user_id'], '_zoho_contact_id', true);
 
         // Validate contact name
         if (empty($contact_data['contact_name'])) {
@@ -3272,24 +3363,15 @@ function zoho_sync_contacts_ajax_handler() {
             
             // If Code 1002 (contact doesn't exist), clear saved ID and search
             if (isset($response['code']) && $response['code'] == 1002) {
-                // Clear invalid ID
-                if ($customer_data['type'] == 'registered') {
-                    delete_user_meta($customer_data['user_id'], '_zoho_contact_id');
-                } else {
-                    delete_option('_zoho_guest_contact_' . md5($customer_data['email']));
-                }
-                
-                $existing_contact_id = ''; // Reset for next steps
-                $response = null; // Reset response
+                delete_user_meta($customer_data['user_id'], '_zoho_contact_id');
+                $existing_contact_id = '';
+                $response = null;
             } else {
-                // Update was successful (or other error we'll handle later)
                 $action = 'updated';
             }
         }
 
         // ===== STEP 2: Search by EMAIL if no valid ID =====
-        // Email is the unique identifier in Zoho
-        // Always verify exact email match before updating
         if (empty($action) && !empty($contact_data['email'])) {
             $search_email = strtolower(trim($contact_data['email']));
             $search_response = zoho_api_get('contacts?email=' . urlencode($search_email));
@@ -3299,103 +3381,62 @@ function zoho_sync_contacts_ajax_handler() {
                 foreach ($search_response['contacts'] as $found_contact) {
                     $found_email = isset($found_contact['email']) ? strtolower(trim($found_contact['email'])) : '';
                     if ($found_email === $search_email) {
-                        // Exact email match found - update this contact
                         $existing_contact_id = $found_contact['contact_id'];
-                        
-                        // Try UPDATE with found ID
                         $response = zoho_api_put('contacts/' . $existing_contact_id, $contact_data);
                         $action = 'updated';
-                        
-                        // Save the found ID
-                        if ($customer_data['type'] == 'registered') {
-                            update_user_meta($customer_data['user_id'], '_zoho_contact_id', $existing_contact_id);
-                        } else {
-                            update_option('_zoho_guest_contact_' . md5($customer_data['email']), $existing_contact_id, false);
-                        }
+                        update_user_meta($customer_data['user_id'], '_zoho_contact_id', $existing_contact_id);
                         break;
                     }
                 }
                 
-                // If no exact email match but contacts found, use first one as fallback
-                // (in case email field is missing in response)
+                // Fallback if email field missing in response
                 if (empty($action) && !empty($search_response['contacts'][0]['contact_id'])) {
                     $existing_contact_id = $search_response['contacts'][0]['contact_id'];
                     $response = zoho_api_put('contacts/' . $existing_contact_id, $contact_data);
                     $action = 'updated';
-                    
-                    // Save the found ID
-                    if ($customer_data['type'] == 'registered') {
-                        update_user_meta($customer_data['user_id'], '_zoho_contact_id', $existing_contact_id);
-                    } else {
-                        update_option('_zoho_guest_contact_' . md5($customer_data['email']), $existing_contact_id, false);
-                    }
+                    update_user_meta($customer_data['user_id'], '_zoho_contact_id', $existing_contact_id);
                 }
             }
         }
 
         // ===== STEP 3: CREATE if still not found =====
         if (empty($action)) {
-            // According to Zoho API: Email is the unique identifier, not name
-            // Always create if email doesn't exist, even if name matches
             $response = zoho_api_post('contacts', $contact_data);
             
-            // Handle "Contact already exists" error (Code 3062) or Code 1002
-            // These errors mean contact exists, so we MUST search by EMAIL only (not name)
+            // Handle "Contact already exists" error
             if (isset($response['code']) && ($response['code'] == 3062 || $response['code'] == 1002)) {
-                // Search by email only
-                // Two different people can have the same name but different emails
                 if (!empty($contact_data['email'])) {
                     $search_email = strtolower(trim($contact_data['email']));
                     $search_response = zoho_api_get('contacts?email=' . urlencode($search_email));
                     
                     if (!is_wp_error($search_response) && isset($search_response['contacts']) && !empty($search_response['contacts'])) {
-                        // Verify email match (case-insensitive)
                         foreach ($search_response['contacts'] as $found_contact) {
                             $found_email = isset($found_contact['email']) ? strtolower(trim($found_contact['email'])) : '';
                             if ($found_email === $search_email) {
-                                // Exact email match found - update this contact
                                 $existing_contact_id = $found_contact['contact_id'];
                                 $response = zoho_api_put('contacts/' . $existing_contact_id, $contact_data);
                                 $action = 'updated';
-                                
-                                // Save the found ID
-                                if ($customer_data['type'] == 'registered') {
-                                    update_user_meta($customer_data['user_id'], '_zoho_contact_id', $existing_contact_id);
-                                } else {
-                                    update_option('_zoho_guest_contact_' . md5($customer_data['email']), $existing_contact_id, false);
-                                }
+                                update_user_meta($customer_data['user_id'], '_zoho_contact_id', $existing_contact_id);
                                 break;
                             }
                         }
                         
-                        // If no exact email match but contacts found, still try first one
-                        // (in case email field is missing in response but contact exists)
                         if (empty($action) && !empty($search_response['contacts'][0]['contact_id'])) {
                             $existing_contact_id = $search_response['contacts'][0]['contact_id'];
                             $response = zoho_api_put('contacts/' . $existing_contact_id, $contact_data);
                             $action = 'updated';
-                            
-                            // Save the found ID
-                            if ($customer_data['type'] == 'registered') {
-                                update_user_meta($customer_data['user_id'], '_zoho_contact_id', $existing_contact_id);
-                            } else {
-                                update_option('_zoho_guest_contact_' . md5($customer_data['email']), $existing_contact_id, false);
-                            }
+                            update_user_meta($customer_data['user_id'], '_zoho_contact_id', $existing_contact_id);
                         }
                     }
                 }
                 
-                // If still no match found by email, create new contact
-                // DO NOT search by name - same name != same person
                 if (empty($action)) {
-                    // Force create - email is unique, so this is a new contact
                     $response = zoho_api_post('contacts', $contact_data);
                     if (isset($response['contact']['contact_id'])) {
                         $action = 'created';
                     }
                 }
             } else {
-                // Create was successful
                 $action = 'created';
             }
         }
@@ -3410,11 +3451,7 @@ function zoho_sync_contacts_ajax_handler() {
         }
         
         if (!empty($zoho_contact_id)) {
-            if ($customer_data['type'] == 'registered') {
-                update_user_meta($customer_data['user_id'], '_zoho_contact_id', $zoho_contact_id);
-            } else {
-                update_option('_zoho_guest_contact_' . md5($customer_data['email']), $zoho_contact_id, false);
-            }
+            update_user_meta($customer_data['user_id'], '_zoho_contact_id', $zoho_contact_id);
         }
 
         // Log the attempt
