@@ -2833,20 +2833,73 @@ function zoho_sync_invoices_to_orders($offset, $total, $synced, $created, $updat
                 zoho_add_detailed_log('invoice', 'order', $existing_order_id, 'invoice', $zoho_invoice_id, json_encode($full_invoice), json_encode(array('message' => 'Updated')));
             }
         } else {
+            // Check prerequisites before creating order
+            $customer_id = $full_invoice['customer_id'] ?? '';
+            $wc_customer = null;
+            if ($customer_id) {
+                // Try to find WooCommerce customer by Zoho contact (should exist from contact sync)
+                $wc_customer = zoho_get_wc_customer_by_zoho_contact($customer_id);
+                if (!$wc_customer) {
+                    $error_msg = 'Customer not found in WooCommerce. Please sync contacts first. Customer ID: ' . $customer_id;
+                    error_log('Zoho Invoice Sync Error: ' . $error_msg);
+                    $batch_failed[] = array('id' => $zoho_invoice_id, 'error' => $error_msg);
+                    continue; // Skip this invoice
+                }
+            } else {
+                $error_msg = 'Invoice has no customer ID: ' . $zoho_invoice_id;
+                error_log('Zoho Invoice Sync Error: ' . $error_msg);
+                $batch_failed[] = array('id' => $zoho_invoice_id, 'error' => $error_msg);
+                continue; // Skip this invoice
+            }
+            
+            // Check if products exist before creating order
+            $line_items = $full_invoice['line_items'] ?? array();
+            $missing_products = array();
+            $valid_products = array();
+            
+            foreach ($line_items as $line_item) {
+                $item_name = $line_item['name'] ?? 'Item';
+                $quantity = floatval($line_item['quantity'] ?? 1);
+                $sku = $line_item['sku'] ?? '';
+                
+                // Try to find product by SKU (should exist from inventory sync)
+                $product_id = 0;
+                if (!empty($sku)) {
+                    $product_id = wc_get_product_id_by_sku($sku);
+                }
+                
+                if ($product_id) {
+                    $product = wc_get_product($product_id);
+                    if ($product) {
+                        $valid_products[] = array('product' => $product, 'quantity' => $quantity);
+                    } else {
+                        $missing_products[] = array('sku' => $sku, 'name' => $item_name, 'reason' => 'Product found by SKU but failed to load');
+                    }
+                } else {
+                    // Product not found - log error
+                    $missing_products[] = array('sku' => $sku, 'name' => $item_name, 'reason' => 'Product not found in WooCommerce. Please sync inventory first.');
+                }
+            }
+            
+            // Skip order creation if no valid products found
+            if (empty($valid_products)) {
+                $error_msg = 'No valid products found in invoice ' . $zoho_invoice_id . '. Missing products: ' . json_encode($missing_products);
+                error_log('Zoho Invoice Sync Error: ' . $error_msg);
+                $batch_failed[] = array('id' => $zoho_invoice_id, 'error' => $error_msg);
+                continue; // Skip this invoice
+            }
+            
+            // Log missing products as warnings but continue if we have at least some products
+            if (!empty($missing_products)) {
+                $error_msg = 'Some products missing in invoice ' . $zoho_invoice_id . ': ' . json_encode($missing_products);
+                error_log('Zoho Invoice Sync Warning: ' . $error_msg);
+            }
+            
             // Create new order
             $order = wc_create_order();
             
             // Set customer
-            $customer_id = $full_invoice['customer_id'] ?? '';
-            if ($customer_id) {
-                // Try to find WooCommerce customer by Zoho contact (should exist from contact sync)
-                $wc_customer = zoho_get_wc_customer_by_zoho_contact($customer_id);
-                if ($wc_customer) {
-                    $order->set_customer_id($wc_customer);
-                } else {
-                    $batch_failed[] = array('id' => $zoho_invoice_id, 'error' => 'Customer not found in WooCommerce. Please sync contacts first. Customer ID: ' . $customer_id);
-                }
-            }
+            $order->set_customer_id($wc_customer);
             
             // Get contact person details (if available)
             $contact_person = null;
@@ -2898,39 +2951,9 @@ function zoho_sync_invoices_to_orders($offset, $total, $synced, $created, $updat
                 $order->set_shipping_country($shipping_address['country'] ?? '');
             }
             
-            // Add line items - only use products that already exist from inventory sync
-            $line_items = $full_invoice['line_items'] ?? array();
-            $missing_products = array();
-            
-            foreach ($line_items as $line_item) {
-                $item_name = $line_item['name'] ?? 'Item';
-                $quantity = floatval($line_item['quantity'] ?? 1);
-                $sku = $line_item['sku'] ?? '';
-                
-                // Try to find product by SKU (should exist from inventory sync)
-                $product_id = 0;
-                if (!empty($sku)) {
-                    $product_id = wc_get_product_id_by_sku($sku);
-                }
-                
-                if ($product_id) {
-                    $product = wc_get_product($product_id);
-                    if ($product) {
-                        $order->add_product($product, $quantity);
-                    } else {
-                        $missing_products[] = array('sku' => $sku, 'name' => $item_name, 'reason' => 'Product found by SKU but failed to load');
-                    }
-                } else {
-                    // Product not found - log error instead of creating manual item
-                    $missing_products[] = array('sku' => $sku, 'name' => $item_name, 'reason' => 'Product not found in WooCommerce. Please sync inventory first.');
-                }
-            }
-            
-            // Log missing products as errors
-            if (!empty($missing_products)) {
-                $error_msg = 'Missing products in invoice ' . $zoho_invoice_id . ': ' . json_encode($missing_products);
-                error_log('Zoho Invoice Sync Error: ' . $error_msg);
-                $batch_failed[] = array('id' => $zoho_invoice_id, 'error' => $error_msg);
+            // Add valid products to order
+            foreach ($valid_products as $product_data) {
+                $order->add_product($product_data['product'], $product_data['quantity']);
             }
             
             $order->calculate_totals();
