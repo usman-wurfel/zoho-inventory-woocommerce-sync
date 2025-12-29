@@ -310,40 +310,29 @@ add_action('admin_init', function () {
    HELPER FUNCTIONS FOR DASHBOARD
 ====================================================== */
 function zoho_get_synced_invoices_count() {
-    global $wpdb;
-    
-    // Try WooCommerce function first (HPOS compatible)
+    // Use WooCommerce function (HPOS compatible)
     if (function_exists('wc_get_orders')) {
         $orders = wc_get_orders(array(
-            'limit' => 1,
+            'limit' => -1,
             'return' => 'ids',
-            'meta_key' => '_zoho_invoice_id',
-            'meta_compare' => 'EXISTS'
-        ));
-        
-        // If returns results, use WC function (for smaller datasets)
-        if ($orders !== false) {
-            $all_orders = wc_get_orders(array(
-                'limit' => -1,
-                'return' => 'ids',
-                'status' => 'any',
-                'meta_query' => array(
-                    array(
-                        'key' => '_zoho_invoice_id',
-                        'compare' => 'EXISTS'
-                    ),
-                    array(
-                        'key' => '_zoho_invoice_id',
-                        'value' => '',
-                        'compare' => '!='
-                    )
+            'status' => 'any',
+            'meta_query' => array(
+                array(
+                    'key' => '_zoho_invoice_id',
+                    'compare' => 'EXISTS'
+                ),
+                array(
+                    'key' => '_zoho_invoice_id',
+                    'value' => '',
+                    'compare' => '!='
                 )
-            ));
-            return count($all_orders);
-        }
+            )
+        ));
+        return is_array($orders) ? count($orders) : 0;
     }
     
-    // Fallback to SQL (faster for large datasets)
+    // Fallback to SQL (if WooCommerce not available)
+    global $wpdb;
     $hpos_enabled = false;
     if (class_exists('Automattic\WooCommerce\Utilities\OrderUtil')) {
         $hpos_enabled = Automattic\WooCommerce\Utilities\OrderUtil::custom_orders_table_usage_is_enabled();
@@ -356,6 +345,7 @@ function zoho_get_synced_invoices_count() {
             INNER JOIN {$wpdb->prefix}wc_orders o ON om.order_id = o.id
             WHERE om.meta_key = '_zoho_invoice_id' 
             AND om.meta_value != '' 
+            AND om.meta_value IS NOT NULL
             AND o.type = 'shop_order'
             AND o.status NOT IN ('trash', 'auto-draft')
         "));
@@ -366,6 +356,7 @@ function zoho_get_synced_invoices_count() {
             INNER JOIN {$wpdb->posts} p ON pm.post_id = p.ID
             WHERE pm.meta_key = '_zoho_invoice_id' 
             AND pm.meta_value != '' 
+            AND pm.meta_value IS NOT NULL
             AND p.post_type = 'shop_order'
             AND p.post_status NOT IN ('trash', 'auto-draft')
         "));
@@ -373,9 +364,7 @@ function zoho_get_synced_invoices_count() {
 }
 
 function zoho_get_total_orders_count() {
-    global $wpdb;
-    
-    // Try WooCommerce function first (HPOS compatible)
+    // Use WooCommerce function (HPOS compatible)
     if (function_exists('wc_get_orders')) {
         $all_orders = wc_get_orders(array(
             'limit' => -1,
@@ -385,7 +374,8 @@ function zoho_get_total_orders_count() {
         return is_array($all_orders) ? count($all_orders) : 0;
     }
     
-    // Fallback to SQL
+    // Fallback to SQL (if WooCommerce not available)
+    global $wpdb;
     $hpos_enabled = false;
     if (class_exists('Automattic\WooCommerce\Utilities\OrderUtil')) {
         $hpos_enabled = Automattic\WooCommerce\Utilities\OrderUtil::custom_orders_table_usage_is_enabled();
