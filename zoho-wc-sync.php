@@ -2482,11 +2482,31 @@ function zoho_sync_orders_to_invoices($offset, $total, $synced, $created, $updat
             continue;
         }
         
-        // Check if already completed and has invoice - skip it
+        // Check if order is completed and has invoice - verify if invoice is already paid in Zoho
         $existing_invoice_id_check = get_post_meta($order_id, '_zoho_invoice_id', true);
         $order_status_check = $order->get_status();
         if ($order_status_check === 'completed' && !empty($existing_invoice_id_check)) {
-            continue; // Skip already processed completed orders
+            // Check invoice status in Zoho - if already paid, skip it
+            $invoice_status_check = zoho_api_get('invoices/' . $existing_invoice_id_check);
+            if (!is_wp_error($invoice_status_check) && isset($invoice_status_check['invoice'])) {
+                $invoice_status = strtolower($invoice_status_check['invoice']['status'] ?? '');
+                $invoice_balance = isset($invoice_status_check['invoice']['balance']) ? floatval($invoice_status_check['invoice']['balance']) : 0;
+                
+                // If invoice is paid (status is 'paid' or balance is 0), skip it
+                if ($invoice_status === 'paid' || $invoice_balance <= 0) {
+                    continue; // Skip already paid invoices
+                }
+                // Otherwise, continue processing to update payment
+            } else {
+                // If invoice doesn't exist in Zoho (Code 1002), clear the ID and continue to create new
+                if (isset($invoice_status_check['code']) && $invoice_status_check['code'] == 1002) {
+                    delete_post_meta($order_id, '_zoho_invoice_id');
+                    // Continue to create new invoice
+                } else {
+                    // Other error - skip this order
+                    continue;
+                }
+            }
         }
         
         // Get customer email and find in bulk contacts map
