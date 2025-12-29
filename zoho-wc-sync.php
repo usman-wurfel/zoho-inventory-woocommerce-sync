@@ -2932,7 +2932,7 @@ function zoho_sync_contacts_ajax_handler() {
 
 /* ====================================================== 
    WOO CUSTOMERS TO ZOHO CONTACTS (Guest + Registered)
-   OPTIMIZED VERSION - No Duplicate Processing
+   FIXED: Prevents duplicate wc_customer_lookup entries
    ====================================================== */
    function zoho_sync_customers_to_contacts($offset, $total, $synced, $created, $updated, $from_date, $to_date) {
     // First call - fetch WooCommerce customers (registered + guest)
@@ -3092,54 +3092,24 @@ function zoho_sync_contacts_ajax_handler() {
         global $wpdb;
         
         foreach ($guest_emails as $email => $order_data) {
-            // Check if orphaned customer lookup record exists for this email
-            $orphaned_customer_id = $wpdb->get_var($wpdb->prepare(
-                "SELECT customer_id FROM {$wpdb->prefix}wc_customer_lookup 
-                WHERE email = %s AND (user_id = 0 OR user_id IS NULL) 
-                LIMIT 1",
-                $email
-            ));
-            
             $existing_user = get_user_by('email', $email);
             $new_user_id = null;
             
             if ($existing_user) {
-                // User already exists - just update customer_lookup table
+                // ===== EXISTING USER - Just Link Everything =====
                 $new_user_id = $existing_user->ID;
                 
-                if ($orphaned_customer_id) {
-                    // Update orphaned lookup record
-                    $wpdb->update(
-                        $wpdb->prefix . 'wc_customer_lookup',
-                        array(
-                            'user_id' => $new_user_id,
-                            'username' => $existing_user->user_login
-                        ),
-                        array('customer_id' => $orphaned_customer_id),
-                        array('%d', '%s'),
-                        array('%d')
-                    );
-                } else {
-                    // Check if any customer_lookup entry exists for this email
-                    $existing_lookup = $wpdb->get_row($wpdb->prepare(
-                        "SELECT customer_id FROM {$wpdb->prefix}wc_customer_lookup WHERE email = %s LIMIT 1",
-                        $email
-                    ));
-                    
-                    if ($existing_lookup) {
-                        // Update existing lookup entry
-                        $wpdb->update(
-                            $wpdb->prefix . 'wc_customer_lookup',
-                            array(
-                                'user_id' => $new_user_id,
-                                'username' => $existing_user->user_login
-                            ),
-                            array('customer_id' => $existing_lookup->customer_id),
-                            array('%d', '%s'),
-                            array('%d')
-                        );
-                    }
-                }
+                // Update ALL customer_lookup entries for this email
+                $wpdb->update(
+                    $wpdb->prefix . 'wc_customer_lookup',
+                    array(
+                        'user_id' => $new_user_id,
+                        'username' => $existing_user->user_login
+                    ),
+                    array('email' => $email),
+                    array('%d', '%s'),
+                    array('%s')
+                );
                 
                 // Link ALL orders for this email to the existing user
                 $all_orders_for_email = wc_get_orders(array(
@@ -3157,7 +3127,14 @@ function zoho_sync_contacts_ajax_handler() {
                 }
                 
             } else {
-                // Guest customer - create new WordPress user
+                // ===== NEW USER - Create with Proper Handling =====
+                
+                // Check if customer_lookup entry already exists for this email
+                $existing_lookup = $wpdb->get_row($wpdb->prepare(
+                    "SELECT customer_id FROM {$wpdb->prefix}wc_customer_lookup WHERE email = %s LIMIT 1",
+                    $email
+                ));
+                
                 $email_parts = explode('@', $email);
                 $username = sanitize_user($email_parts[0]);
                 
@@ -3172,31 +3149,42 @@ function zoho_sync_contacts_ajax_handler() {
                 // Generate password
                 $password = wp_generate_password();
                 
-                // Create WordPress user using WooCommerce function
-                $new_user_id = wc_create_new_customer($email, $username, $password);
+                // Create WordPress user DIRECTLY (bypass WooCommerce function to control customer_lookup)
+                $new_user_id = wp_create_user($username, $password, $email);
                 
                 if (!is_wp_error($new_user_id)) {
-                    // If orphaned record exists, update it and delete duplicate entries
-                    if ($orphaned_customer_id) {
-                        // Update the orphaned record with new user_id and username
+                    // Set user role to customer
+                    $user = new WP_User($new_user_id);
+                    $user->set_role('customer');
+                    
+                    // If customer_lookup entry exists, UPDATE it instead of creating new
+                    if ($existing_lookup) {
+                        // Update existing customer_lookup record
                         $wpdb->update(
                             $wpdb->prefix . 'wc_customer_lookup',
                             array(
                                 'user_id' => $new_user_id,
                                 'username' => $username
                             ),
-                            array('customer_id' => $orphaned_customer_id),
+                            array('customer_id' => $existing_lookup->customer_id),
                             array('%d', '%s'),
                             array('%d')
                         );
+                    } else {
+                        // Create new customer_lookup entry using WooCommerce DataStore
+                        $data_store = WC_Data_Store::load('customer');
                         
-                        // Delete any NEW entry that WooCommerce created (keep orphaned one)
-                        $wpdb->query($wpdb->prepare(
-                            "DELETE FROM {$wpdb->prefix}wc_customer_lookup 
-                            WHERE user_id = %d AND customer_id != %d",
-                            $new_user_id,
-                            $orphaned_customer_id
-                        ));
+                        // Get customer data
+                        $customer = new WC_Customer($new_user_id);
+                        
+                        // Set billing data
+                        $customer->set_billing_first_name($order_data['first_name']);
+                        $customer->set_billing_last_name($order_data['last_name']);
+                        $customer->set_billing_email($email);
+                        $customer->set_email($email);
+                        
+                        // Save customer (this will create customer_lookup entry)
+                        $customer->save();
                     }
                     
                     // Set billing information from order data
@@ -3260,20 +3248,8 @@ function zoho_sync_contacts_ajax_handler() {
                         update_user_meta($new_user_id, 'shipping_country', $order_data['shipping_country']);
                     }
                     
-                    // Set billing_email in user meta and update user email
+                    // Set billing_email in user meta
                     update_user_meta($new_user_id, 'billing_email', $email);
-                    
-                    // Also update the WordPress user email to match billing email
-                    wp_update_user(array(
-                        'ID' => $new_user_id,
-                        'user_email' => $email
-                    ));
-                    
-                    // Update WC_Customer object to ensure email is synced
-                    $customer = new WC_Customer($new_user_id);
-                    $customer->set_billing_email($email);
-                    $customer->set_email($email);
-                    $customer->save();
                     
                     // Link ALL orders for this email to the new user
                     $all_orders_for_email = wc_get_orders(array(
@@ -3288,6 +3264,23 @@ function zoho_sync_contacts_ajax_handler() {
                             $order->set_customer_id($new_user_id);
                             $order->save();
                         }
+                    }
+                    
+                    // CRITICAL: Delete any duplicate customer_lookup entries for this user
+                    // Keep only ONE entry per email
+                    $all_lookup_entries = $wpdb->get_results($wpdb->prepare(
+                        "SELECT customer_id FROM {$wpdb->prefix}wc_customer_lookup WHERE email = %s ORDER BY customer_id ASC",
+                        $email
+                    ));
+                    
+                    if (count($all_lookup_entries) > 1) {
+                        // Keep first entry, delete rest
+                        $keep_id = $all_lookup_entries[0]->customer_id;
+                        $wpdb->query($wpdb->prepare(
+                            "DELETE FROM {$wpdb->prefix}wc_customer_lookup WHERE email = %s AND customer_id != %d",
+                            $email,
+                            $keep_id
+                        ));
                     }
                 } else {
                     // User creation failed, skip this guest
@@ -3472,7 +3465,7 @@ function zoho_sync_contacts_ajax_handler() {
         if (is_wp_error($response)) {
             $has_error = true;
             $error_msg = $response->get_error_message();
-        } elseif (isset($response['error'])) {
+            } elseif (isset($response['error'])) {
             $has_error = true;
             $error_msg = $response['error'];
         } elseif (isset($response['code']) && $response['code'] != 0 && !isset($response['contact'])) {
