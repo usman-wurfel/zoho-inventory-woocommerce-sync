@@ -3075,10 +3075,32 @@ function zoho_sync_contacts_ajax_handler() {
                 // Generate password
                 $password = wp_generate_password();
                 
+                // Check if orphaned customer lookup record exists for this email
+                global $wpdb;
+                $orphaned_customer_id = $wpdb->get_var($wpdb->prepare(
+                    "SELECT customer_id FROM {$wpdb->prefix}wc_customer_lookup 
+                    WHERE email = %s AND (user_id = 0 OR user_id IS NULL) 
+                    LIMIT 1",
+                    $email
+                ));
+                
                 // Create WordPress user using WooCommerce function
                 $new_user_id = wc_create_new_customer($email, $username, $password);
                 
                 if (!is_wp_error($new_user_id)) {
+                    // If orphaned record exists, update it instead of creating new entry
+                    if ($orphaned_customer_id) {
+                        $wpdb->update(
+                            $wpdb->prefix . 'wc_customer_lookup',
+                            array(
+                                'user_id' => $new_user_id,
+                                'username' => $username
+                            ),
+                            array('customer_id' => $orphaned_customer_id),
+                            array('%d', '%s'),
+                            array('%d')
+                        );
+                    }
                     // Set billing information from order
                     $first_name = $order->get_billing_first_name();
                     $last_name = $order->get_billing_last_name();
@@ -3162,45 +3184,6 @@ function zoho_sync_contacts_ajax_handler() {
                     $order->set_customer_id($new_user_id);
                     $order->save();
                     
-                    // Force WooCommerce to update customer lookup table immediately
-                    // This ensures orders are assigned to the new user right away (not delayed)
-                    global $wpdb;
-                    $customer_lookup_table = $wpdb->prefix . 'wc_customer_lookup';
-                    $table_exists = $wpdb->get_var("SHOW TABLES LIKE '$customer_lookup_table'");
-                    if ($table_exists) {
-                        $user = get_user_by('id', $new_user_id);
-                        if ($user) {
-                            // Check if entry already exists
-                            $existing = $wpdb->get_var($wpdb->prepare(
-                                "SELECT customer_id FROM $customer_lookup_table WHERE user_id = %d",
-                                $new_user_id
-                            ));
-                            if (!$existing) {
-                                // Insert customer lookup entry immediately
-                                $wpdb->insert(
-                                    $customer_lookup_table,
-                                    array(
-                                        'user_id' => $new_user_id,
-                                        'username' => $user->user_login,
-                                        'first_name' => get_user_meta($new_user_id, 'first_name', true) ?: '',
-                                        'last_name' => get_user_meta($new_user_id, 'last_name', true) ?: '',
-                                        'email' => $user->user_email,
-                                        'date_last_active' => current_time('mysql'),
-                                        'date_registered' => $user->user_registered,
-                                        'country' => get_user_meta($new_user_id, 'billing_country', true) ?: '',
-                                        'postcode' => get_user_meta($new_user_id, 'billing_postcode', true) ?: '',
-                                        'city' => get_user_meta($new_user_id, 'billing_city', true) ?: '',
-                                        'state' => get_user_meta($new_user_id, 'billing_state', true) ?: ''
-                                    )
-                                );
-                            }
-                        }
-                    }
-                    // Trigger action to ensure WooCommerce updates any related data
-                    do_action('woocommerce_update_customer', $new_user_id);
-                    // Also trigger the action to ensure lookup table is updated
-                    do_action('woocommerce_update_customer', $new_user_id);
-                    
                     // Now treat as registered user
                     $all_customers[$email] = array(
                         'type' => 'registered',
@@ -3248,6 +3231,10 @@ function zoho_sync_contacts_ajax_handler() {
     $batch_created = 0;
     $batch_updated = 0;
     $batch_failed = array();
+
+    // Cleanup orphaned customer lookup records BEFORE processing batch
+    global $wpdb;
+    $wpdb->query("DELETE c FROM {$wpdb->prefix}wc_customer_lookup c LEFT JOIN {$wpdb->prefix}wc_order_stats o ON c.customer_id = o.customer_id WHERE (c.user_id = 0 OR c.user_id IS NULL) AND o.order_id IS NULL");
 
     foreach ($batch as $customer_data) {
         $contact_data = array();
@@ -3483,10 +3470,6 @@ function zoho_sync_contacts_ajax_handler() {
     $new_updated = $updated + $batch_updated;
     $stats['failed'] = array_merge($stats['failed'] ?? array(), $batch_failed);
     set_transient('zoho_contact_sync_stats', $stats, 600);
-    
-    // Cleanup orphaned customer lookup records AFTER processing batch (so orders are assigned first)
-    global $wpdb;
-    $wpdb->query("DELETE c FROM {$wpdb->prefix}wc_customer_lookup c LEFT JOIN {$wpdb->prefix}wc_order_stats o ON c.customer_id = o.customer_id WHERE (c.user_id = 0 OR c.user_id IS NULL) AND o.order_id IS NULL");
     
     $has_more = $new_offset < $total;
     
