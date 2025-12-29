@@ -2664,6 +2664,14 @@ function zoho_sync_orders_to_invoices($offset, $total, $synced, $created, $updat
         if (isset($response['invoice']['invoice_id'])) {
             $zoho_invoice_id = $response['invoice']['invoice_id'];
             update_post_meta($order_id, '_zoho_invoice_id', $zoho_invoice_id);
+            
+            // If order status is "completed", mark invoice as "sent" in Zoho
+            $order_status = $order->get_status();
+            if ($order_status === 'completed') {
+                // Mark invoice as sent (changes status from draft to sent)
+                $status_response = zoho_api_post('invoices/' . $zoho_invoice_id . '/status/sent', array());
+                // Note: We don't fail the sync if status update fails, as invoice was created/updated successfully
+            }
         }
         
         // Ensure response is properly formatted for logging
