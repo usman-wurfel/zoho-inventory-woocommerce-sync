@@ -2758,7 +2758,20 @@ function zoho_sync_orders_to_invoices($offset, $total, $synced, $created, $updat
         if ($existing_invoice_id) {
             // Update existing invoice
             $response = zoho_api_put('invoices/' . $existing_invoice_id, $invoice_data);
-            $action = 'updated';
+            
+            // If Code 1002 (invoice doesn't exist), clear stored ID and create new invoice
+            if (isset($response['code']) && $response['code'] == 1002) {
+                // Clear invalid invoice ID
+                delete_post_meta($order_id, '_zoho_invoice_id');
+                $existing_invoice_id = '';
+                // Remove reason field for new invoice creation
+                unset($invoice_data['reason']);
+                // Create new invoice
+                $response = zoho_api_post('invoices', $invoice_data);
+                $action = 'created';
+            } else {
+                $action = 'updated';
+            }
         } else {
             // Create new invoice
             $response = zoho_api_post('invoices', $invoice_data);
