@@ -2360,25 +2360,7 @@ function zoho_sync_orders_to_invoices($offset, $total, $synced, $created, $updat
             }
         }
         
-        $all_order_ids = wc_get_orders($args);
-        
-        // Filter out completed orders that already have invoices and are paid
-        $order_ids = array();
-        foreach ($all_order_ids as $order_id) {
-            $order = wc_get_order($order_id);
-            if (!$order) continue;
-            
-            $existing_invoice_id = get_post_meta($order_id, '_zoho_invoice_id', true);
-            $order_status = $order->get_status();
-            
-            // Skip completed orders that already have invoices (already processed)
-            if ($order_status === 'completed' && !empty($existing_invoice_id)) {
-                continue;
-            }
-            
-            $order_ids[] = $order_id;
-        }
-        
+        $order_ids = wc_get_orders($args);
         $total = count($order_ids);
         
         if ($total == 0) {
