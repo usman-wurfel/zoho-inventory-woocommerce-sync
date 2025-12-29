@@ -3493,6 +3493,33 @@ function zoho_build_contact_data_from_order($order) {
     if (!empty($billing_phone)) {
         $contact_data['phone'] = $billing_phone;
     }
+    
+    // CRITICAL: Zoho Inventory requires email in contact_persons array to show in panel
+    // Move email and name to contact_persons array
+    if (!empty($billing_email) || !empty($first_name) || !empty($last_name)) {
+        $contact_data['contact_persons'] = array();
+        $contact_person = array();
+        
+        if (!empty($billing_email)) {
+            $contact_person['email'] = $billing_email;
+        }
+        if (!empty($first_name)) {
+            $contact_person['first_name'] = $first_name;
+        }
+        if (!empty($last_name)) {
+            $contact_person['last_name'] = $last_name;
+        }
+        
+        // Mark as primary contact person
+        $contact_person['is_primary_contact'] = true;
+        
+        // Add phone if available
+        if (!empty($billing_phone)) {
+            $contact_person['phone'] = $billing_phone;
+        }
+        
+        $contact_data['contact_persons'][] = $contact_person;
+    }
 
     // Add first/last name if available
     if (!empty($first_name)) {
@@ -4555,6 +4582,37 @@ function zoho_build_contact_data_from_customer($customer) {
     if (!empty($last_name)) {
         $contact_data['last_name'] = $last_name;
     }
+    
+    // CRITICAL: Zoho Inventory requires email in contact_persons array to show in panel
+    // Move email and name to contact_persons array
+    if (!empty($email) || !empty($first_name) || !empty($last_name)) {
+        $contact_data['contact_persons'] = array();
+        $contact_person = array();
+        
+        if (!empty($email)) {
+            $contact_person['email'] = $email;
+        }
+        if (!empty($first_name)) {
+            $contact_person['first_name'] = $first_name;
+        }
+        if (!empty($last_name)) {
+            $contact_person['last_name'] = $last_name;
+        }
+        
+        // Mark as primary contact person
+        $contact_person['is_primary_contact'] = true;
+        
+        // Add phone if available
+        $billing_phone = $customer->get_billing_phone();
+        if (empty($billing_phone)) {
+            $billing_phone = get_user_meta($user_id, 'billing_phone', true);
+        }
+        if (!empty($billing_phone)) {
+            $contact_person['phone'] = $billing_phone;
+        }
+        
+        $contact_data['contact_persons'][] = $contact_person;
+    }
     $company_name_meta = $customer->get_billing_company();
     if (empty($company_name_meta)) {
         $company_name_meta = get_user_meta($user_id, 'billing_company', true);
@@ -4784,6 +4842,33 @@ function zoho_get_or_create_contact($order) {
     }
     if (!empty($last_name)) {
         $contact_data['last_name'] = $last_name;
+    }
+    
+    // CRITICAL: Zoho Inventory requires email in contact_persons array to show in panel
+    // Move email and name to contact_persons array
+    if (!empty($email) || !empty($first_name) || !empty($last_name)) {
+        $contact_data['contact_persons'] = array();
+        $contact_person = array();
+        
+        if (!empty($email)) {
+            $contact_person['email'] = $email;
+        }
+        if (!empty($first_name)) {
+            $contact_person['first_name'] = $first_name;
+        }
+        if (!empty($last_name)) {
+            $contact_person['last_name'] = $last_name;
+        }
+        
+        // Mark as primary contact person
+        $contact_person['is_primary_contact'] = true;
+        
+        // Add phone if available
+        if (!empty($order->get_billing_phone())) {
+            $contact_person['phone'] = $order->get_billing_phone();
+        }
+        
+        $contact_data['contact_persons'][] = $contact_person;
     }
     
     // Add company if available
