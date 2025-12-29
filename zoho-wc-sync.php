@@ -3148,7 +3148,20 @@ function zoho_sync_contacts_ajax_handler() {
                         update_user_meta($new_user_id, 'shipping_country', $order->get_shipping_country());
                     }
                     
+                    // CRITICAL: Set billing_email in user meta AND update user email
                     update_user_meta($new_user_id, 'billing_email', $email);
+                    
+                    // Also update the WordPress user email to match billing email
+                    wp_update_user(array(
+                        'ID' => $new_user_id,
+                        'user_email' => $email
+                    ));
+                    
+                    // Update WC_Customer object to ensure email is synced
+                    $customer = new WC_Customer($new_user_id);
+                    $customer->set_billing_email($email);
+                    $customer->set_email($email);
+                    $customer->save();
                     
                     // Update order to link to new user
                     $order->set_customer_id($new_user_id);
@@ -4610,12 +4623,39 @@ function zoho_build_contact_data_from_customer($customer) {
         }
     }
     
-    // Get email - try billing email, then user email
+    // Get email - try multiple sources to ensure we get it
     $email = $customer->get_billing_email();
+    
+    // If empty, try user meta
     if (empty($email)) {
         $email = get_user_meta($user_id, 'billing_email', true);
-        if (empty($email) && $user) {
-            $email = $user->user_email;
+    }
+    
+    // If still empty, try user object email
+    if (empty($email) && $user) {
+        $email = $user->user_email;
+    }
+    
+    // CRITICAL: If still empty, try to get from order (for guest customers converted to users)
+    if (empty($email)) {
+        // Get customer's orders to find email
+        $customer_orders = wc_get_orders(array(
+            'customer_id' => $user_id,
+            'limit' => 1,
+            'orderby' => 'date',
+            'order' => 'DESC'
+        ));
+        
+        if (!empty($customer_orders)) {
+            $latest_order = $customer_orders[0];
+            $order_email = $latest_order->get_billing_email();
+            if (!empty($order_email)) {
+                $email = $order_email;
+                // Save it for future use
+                update_user_meta($user_id, 'billing_email', $email);
+                $customer->set_billing_email($email);
+                $customer->save();
+            }
         }
     }
     
