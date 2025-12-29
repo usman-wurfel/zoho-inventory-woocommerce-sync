@@ -3060,22 +3060,118 @@ function zoho_sync_contacts_ajax_handler() {
                 continue;
             }
 
-            // This is a guest customer
-            $all_customers[$email] = array(
-                'type' => 'guest',
-                'order_id' => $order_id,
-                'email' => $email,
-                'first_name' => $order->get_billing_first_name(),
-                'last_name' => $order->get_billing_last_name(),
-                'phone' => $order->get_billing_phone(),
-                'company' => $order->get_billing_company(),
-                'address_1' => $order->get_billing_address_1(),
-                'address_2' => $order->get_billing_address_2(),
-                'city' => $order->get_billing_city(),
-                'state' => $order->get_billing_state(),
-                'postcode' => $order->get_billing_postcode(),
-                'country' => $order->get_billing_country(),
-            );
+            // === CRITICAL: Convert guest customers to WordPress users ===
+            // This ensures when Zoho to WooCommerce sync happens, it matches existing users
+            $existing_user = get_user_by('email', $email);
+            
+            if (!$existing_user) {
+                // Guest customer - create WordPress user
+                $email_parts = explode('@', $email);
+                $username = sanitize_user($email_parts[0]);
+                
+                // Ensure unique username
+                $original_username = $username;
+                $counter = 1;
+                while (username_exists($username)) {
+                    $username = $original_username . $counter;
+                    $counter++;
+                }
+                
+                // Generate password
+                $password = wp_generate_password();
+                
+                // Create WordPress user using WooCommerce function
+                $new_user_id = wc_create_new_customer($email, $username, $password);
+                
+                if (!is_wp_error($new_user_id)) {
+                    // Set billing information from order
+                    $first_name = $order->get_billing_first_name();
+                    $last_name = $order->get_billing_last_name();
+                    
+                    if (!empty($first_name)) {
+                        update_user_meta($new_user_id, 'billing_first_name', $first_name);
+                        update_user_meta($new_user_id, 'first_name', $first_name);
+                    }
+                    if (!empty($last_name)) {
+                        update_user_meta($new_user_id, 'billing_last_name', $last_name);
+                        update_user_meta($new_user_id, 'last_name', $last_name);
+                    }
+                    if (!empty($order->get_billing_company())) {
+                        update_user_meta($new_user_id, 'billing_company', $order->get_billing_company());
+                    }
+                    if (!empty($order->get_billing_phone())) {
+                        update_user_meta($new_user_id, 'billing_phone', $order->get_billing_phone());
+                    }
+                    if (!empty($order->get_billing_address_1())) {
+                        update_user_meta($new_user_id, 'billing_address_1', $order->get_billing_address_1());
+                    }
+                    if (!empty($order->get_billing_address_2())) {
+                        update_user_meta($new_user_id, 'billing_address_2', $order->get_billing_address_2());
+                    }
+                    if (!empty($order->get_billing_city())) {
+                        update_user_meta($new_user_id, 'billing_city', $order->get_billing_city());
+                    }
+                    if (!empty($order->get_billing_state())) {
+                        update_user_meta($new_user_id, 'billing_state', $order->get_billing_state());
+                    }
+                    if (!empty($order->get_billing_postcode())) {
+                        update_user_meta($new_user_id, 'billing_postcode', $order->get_billing_postcode());
+                    }
+                    if (!empty($order->get_billing_country())) {
+                        update_user_meta($new_user_id, 'billing_country', $order->get_billing_country());
+                    }
+                    if (!empty($order->get_shipping_first_name())) {
+                        update_user_meta($new_user_id, 'shipping_first_name', $order->get_shipping_first_name());
+                    }
+                    if (!empty($order->get_shipping_last_name())) {
+                        update_user_meta($new_user_id, 'shipping_last_name', $order->get_shipping_last_name());
+                    }
+                    if (!empty($order->get_shipping_company())) {
+                        update_user_meta($new_user_id, 'shipping_company', $order->get_shipping_company());
+                    }
+                    if (!empty($order->get_shipping_address_1())) {
+                        update_user_meta($new_user_id, 'shipping_address_1', $order->get_shipping_address_1());
+                    }
+                    if (!empty($order->get_shipping_address_2())) {
+                        update_user_meta($new_user_id, 'shipping_address_2', $order->get_shipping_address_2());
+                    }
+                    if (!empty($order->get_shipping_city())) {
+                        update_user_meta($new_user_id, 'shipping_city', $order->get_shipping_city());
+                    }
+                    if (!empty($order->get_shipping_state())) {
+                        update_user_meta($new_user_id, 'shipping_state', $order->get_shipping_state());
+                    }
+                    if (!empty($order->get_shipping_postcode())) {
+                        update_user_meta($new_user_id, 'shipping_postcode', $order->get_shipping_postcode());
+                    }
+                    if (!empty($order->get_shipping_country())) {
+                        update_user_meta($new_user_id, 'shipping_country', $order->get_shipping_country());
+                    }
+                    
+                    update_user_meta($new_user_id, 'billing_email', $email);
+                    
+                    // Update order to link to new user
+                    $order->set_customer_id($new_user_id);
+                    $order->save();
+                    
+                    // Now treat as registered user
+                    $all_customers[$email] = array(
+                        'type' => 'registered',
+                        'user_id' => $new_user_id,
+                        'email' => $email
+                    );
+                } else {
+                    // User creation failed, skip this guest
+                    continue;
+                }
+            } else {
+                // User already exists, add as registered
+                $all_customers[$email] = array(
+                    'type' => 'registered',
+                    'user_id' => $existing_user->ID,
+                    'email' => $email
+                );
+            }
         }
 
         // Convert to indexed array
