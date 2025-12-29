@@ -2810,6 +2810,14 @@ function zoho_sync_invoices_to_orders($offset, $total, $synced, $created, $updat
         $zoho_invoice_id = $invoice['invoice_id'] ?? '';
         $reference_number = $invoice['reference_number'] ?? '';
         
+        // Fetch full invoice details to get billing/shipping address and line items
+        $full_invoice_response = zoho_api_get('invoices/' . $zoho_invoice_id);
+        if (is_wp_error($full_invoice_response) || !isset($full_invoice_response['invoice'])) {
+            $batch_failed[] = array('id' => $zoho_invoice_id, 'error' => 'Failed to fetch invoice details: ' . (is_wp_error($full_invoice_response) ? $full_invoice_response->get_error_message() : 'Invalid response'));
+            continue;
+        }
+        $full_invoice = $full_invoice_response['invoice'];
+        
         // Check if order already exists
         $existing_order_id = zoho_get_order_by_zoho_invoice($zoho_invoice_id);
         
@@ -2822,44 +2830,107 @@ function zoho_sync_invoices_to_orders($offset, $total, $synced, $created, $updat
                 $order->save();
                 $batch_updated++;
                 
-                zoho_add_detailed_log('invoice', 'order', $existing_order_id, 'invoice', $zoho_invoice_id, json_encode($invoice), json_encode(array('message' => 'Updated')));
+                zoho_add_detailed_log('invoice', 'order', $existing_order_id, 'invoice', $zoho_invoice_id, json_encode($full_invoice), json_encode(array('message' => 'Updated')));
             }
         } else {
             // Create new order
             $order = wc_create_order();
             
             // Set customer
-            $customer_id = $invoice['customer_id'] ?? '';
+            $customer_id = $full_invoice['customer_id'] ?? '';
             if ($customer_id) {
-                // Try to find WooCommerce customer by Zoho contact
+                // Try to find WooCommerce customer by Zoho contact (should exist from contact sync)
                 $wc_customer = zoho_get_wc_customer_by_zoho_contact($customer_id);
                 if ($wc_customer) {
                     $order->set_customer_id($wc_customer);
+                } else {
+                    $batch_failed[] = array('id' => $zoho_invoice_id, 'error' => 'Customer not found in WooCommerce. Please sync contacts first. Customer ID: ' . $customer_id);
                 }
             }
             
-            // Add line items
-            foreach ($invoice['line_items'] ?? array() as $line_item) {
+            // Get contact person details (if available)
+            $contact_person = null;
+            if (!empty($full_invoice['contact_persons']) && is_array($full_invoice['contact_persons'])) {
+                // Find primary contact person
+                foreach ($full_invoice['contact_persons'] as $person) {
+                    if (isset($person['is_primary_contact']) && $person['is_primary_contact']) {
+                        $contact_person = $person;
+                        break;
+                    }
+                }
+                // If no primary, use first one
+                if (!$contact_person && !empty($full_invoice['contact_persons'][0])) {
+                    $contact_person = $full_invoice['contact_persons'][0];
+                }
+            }
+            
+            // Set billing address from invoice
+            $billing_address = $full_invoice['billing_address'] ?? array();
+            if (!empty($billing_address)) {
+                if ($contact_person) {
+                    $order->set_billing_first_name($contact_person['first_name'] ?? '');
+                    $order->set_billing_last_name($contact_person['last_name'] ?? '');
+                }
+                $order->set_billing_company($billing_address['attention'] ?? '');
+                $order->set_billing_address_1($billing_address['address'] ?? '');
+                $order->set_billing_address_2($billing_address['street2'] ?? '');
+                $order->set_billing_city($billing_address['city'] ?? '');
+                $order->set_billing_state($billing_address['state'] ?? '');
+                $order->set_billing_postcode($billing_address['zip'] ?? '');
+                $order->set_billing_country($billing_address['country'] ?? '');
+                $order->set_billing_phone($billing_address['phone'] ?? ($contact_person['phone'] ?? ''));
+                $order->set_billing_email($full_invoice['email'] ?? ($contact_person['email'] ?? ''));
+            }
+            
+            // Set shipping address from invoice
+            $shipping_address = $full_invoice['shipping_address'] ?? array();
+            if (!empty($shipping_address)) {
+                if ($contact_person) {
+                    $order->set_shipping_first_name($contact_person['first_name'] ?? '');
+                    $order->set_shipping_last_name($contact_person['last_name'] ?? '');
+                }
+                $order->set_shipping_company($shipping_address['attention'] ?? '');
+                $order->set_shipping_address_1($shipping_address['address'] ?? '');
+                $order->set_shipping_address_2($shipping_address['street2'] ?? '');
+                $order->set_shipping_city($shipping_address['city'] ?? '');
+                $order->set_shipping_state($shipping_address['state'] ?? '');
+                $order->set_shipping_postcode($shipping_address['zip'] ?? '');
+                $order->set_shipping_country($shipping_address['country'] ?? '');
+            }
+            
+            // Add line items - only use products that already exist from inventory sync
+            $line_items = $full_invoice['line_items'] ?? array();
+            $missing_products = array();
+            
+            foreach ($line_items as $line_item) {
                 $item_name = $line_item['name'] ?? 'Item';
-                $quantity = $line_item['quantity'] ?? 1;
-                $rate = $line_item['rate'] ?? 0;
+                $quantity = floatval($line_item['quantity'] ?? 1);
+                $sku = $line_item['sku'] ?? '';
                 
-                // Try to find product by SKU
+                // Try to find product by SKU (should exist from inventory sync)
                 $product_id = 0;
-                if (!empty($line_item['sku'])) {
-                    $product_id = wc_get_product_id_by_sku($line_item['sku']);
+                if (!empty($sku)) {
+                    $product_id = wc_get_product_id_by_sku($sku);
                 }
                 
                 if ($product_id) {
-                    $order->add_product(wc_get_product($product_id), $quantity);
+                    $product = wc_get_product($product_id);
+                    if ($product) {
+                        $order->add_product($product, $quantity);
+                    } else {
+                        $missing_products[] = array('sku' => $sku, 'name' => $item_name, 'reason' => 'Product found by SKU but failed to load');
+                    }
                 } else {
-                    $item = new WC_Order_Item_Product();
-                    $item->set_name($item_name);
-                    $item->set_quantity($quantity);
-                    $item->set_subtotal($rate * $quantity);
-                    $item->set_total($rate * $quantity);
-                    $order->add_item($item);
+                    // Product not found - log error instead of creating manual item
+                    $missing_products[] = array('sku' => $sku, 'name' => $item_name, 'reason' => 'Product not found in WooCommerce. Please sync inventory first.');
                 }
+            }
+            
+            // Log missing products as errors
+            if (!empty($missing_products)) {
+                $error_msg = 'Missing products in invoice ' . $zoho_invoice_id . ': ' . json_encode($missing_products);
+                error_log('Zoho Invoice Sync Error: ' . $error_msg);
+                $batch_failed[] = array('id' => $zoho_invoice_id, 'error' => $error_msg);
             }
             
             $order->calculate_totals();
@@ -2871,7 +2942,7 @@ function zoho_sync_invoices_to_orders($offset, $total, $synced, $created, $updat
             
             $batch_created++;
             
-            zoho_add_detailed_log('invoice', 'order', $order->get_id(), 'invoice', $zoho_invoice_id, json_encode($invoice), json_encode(array('message' => 'Created', 'order_id' => $order->get_id())));
+            zoho_add_detailed_log('invoice', 'order', $order->get_id(), 'invoice', $zoho_invoice_id, json_encode($full_invoice), json_encode(array('message' => 'Created', 'order_id' => $order->get_id())));
         }
     }
     
