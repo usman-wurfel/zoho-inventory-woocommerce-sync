@@ -2975,18 +2975,61 @@ function zoho_sync_contacts_ajax_handler() {
         $wp_user_query = new WP_User_Query($wp_query_args);
         $registered_users = $wp_user_query->get_results();
 
-        // Add registered customers with type marker
+        // Add registered customers with type marker and fix missing usernames
         foreach ($registered_users as $user_id) {
+            $user = get_user_by('ID', $user_id);
+            if (!$user) {
+                continue;
+            }
+            
             $customer = new WC_Customer($user_id);
             $email = strtolower(trim($customer->get_email()));
             
-            if (!empty($email)) {
-                $all_customers[$email] = array(
-                    'type' => 'registered',
-                    'user_id' => $user_id,
-                    'email' => $email
-                );
+            if (empty($email)) {
+                // Try to get email from user object
+                $email = strtolower(trim($user->user_email));
             }
+            
+            if (empty($email)) {
+                continue; // Skip if no email
+            }
+            
+            // Fix username if missing or invalid
+            if (empty($user->user_login) || strlen($user->user_login) < 3) {
+                // Extract username from email (part before @)
+                $email_parts = explode('@', $email);
+                $new_username = sanitize_user($email_parts[0]);
+                
+                // Ensure unique username
+                $original_username = $new_username;
+                $counter = 1;
+                while (username_exists($new_username)) {
+                    $new_username = $original_username . $counter;
+                    $counter++;
+                }
+                
+                // Update username directly in database
+                global $wpdb;
+                $wpdb->update(
+                    $wpdb->users,
+                    array('user_login' => $new_username),
+                    array('ID' => $user_id),
+                    array('%s'),
+                    array('%d')
+                );
+                
+                // Clear user cache
+                clean_user_cache($user_id);
+                
+                // Update user object
+                $user->user_login = $new_username;
+            }
+            
+            $all_customers[$email] = array(
+                'type' => 'registered',
+                'user_id' => $user_id,
+                'email' => $email
+            );
         }
 
         // === PART 2: Fetch Guest Customers from Orders ===
@@ -3290,13 +3333,24 @@ function zoho_build_contact_data_from_order($order) {
         $contact_name = $order->get_billing_email();
     }
 
+    $billing_email = $order->get_billing_email();
+    $billing_phone = $order->get_billing_phone();
+    
     $contact_data = array(
         'contact_name' => $contact_name,
         'contact_type' => 'customer',
         'customer_sub_type' => 'individual',
-        'email' => $order->get_billing_email(),
-        'phone' => $order->get_billing_phone(),
     );
+    
+    // Always include email if available
+    if (!empty($billing_email)) {
+        $contact_data['email'] = $billing_email;
+    }
+    
+    // Include phone if available
+    if (!empty($billing_phone)) {
+        $contact_data['phone'] = $billing_phone;
+    }
 
     // Add first/last name if available
     if (!empty($first_name)) {
@@ -3311,13 +3365,14 @@ function zoho_build_contact_data_from_order($order) {
         $contact_data['company_name'] = $order->get_billing_company();
     }
 
-    // Add billing address if available
-    if (!empty($order->get_billing_address_1()) || !empty($order->get_billing_city())) {
-        $contact_data['billing_address'] = array();
-        
-        if (!empty($order->get_billing_address_1())) {
-            $contact_data['billing_address']['street'] = $order->get_billing_address_1();
-        }
+        // Add billing address if available
+        // Note: Zoho uses 'address' field, not 'street'
+        if (!empty($order->get_billing_address_1()) || !empty($order->get_billing_city())) {
+            $contact_data['billing_address'] = array();
+            
+            if (!empty($order->get_billing_address_1())) {
+                $contact_data['billing_address']['address'] = $order->get_billing_address_1();
+            }
         if (!empty($order->get_billing_address_2())) {
             $contact_data['billing_address']['street2'] = $order->get_billing_address_2();
         }
@@ -3336,12 +3391,13 @@ function zoho_build_contact_data_from_order($order) {
     }
 
     // Add shipping address if available
-if (!empty($order->get_shipping_address_1()) || !empty($order->get_shipping_city())) {
-    $contact_data['shipping_address'] = array();
-    
-    if (!empty($order->get_shipping_address_1())) {
-        $contact_data['shipping_address']['street'] = $order->get_shipping_address_1();
-    }
+    // Note: Zoho uses 'address' field, not 'street'
+    if (!empty($order->get_shipping_address_1()) || !empty($order->get_shipping_city())) {
+        $contact_data['shipping_address'] = array();
+        
+        if (!empty($order->get_shipping_address_1())) {
+            $contact_data['shipping_address']['address'] = $order->get_shipping_address_1();
+        }
     if (!empty($order->get_shipping_address_2())) {
         $contact_data['shipping_address']['street2'] = $order->get_shipping_address_2();
     }
@@ -4323,13 +4379,17 @@ function zoho_build_contact_data_from_customer($customer) {
         }
     }
     
-    // Build contact data
+    // Build contact data - ensure email is always included
     $contact_data = array(
         'contact_name' => $contact_name,
         'contact_type' => 'customer',
         'customer_sub_type' => 'individual',
-        'email' => $email,
     );
+    
+    // Always include email if available
+    if (!empty($email)) {
+        $contact_data['email'] = $email;
+    }
     
     // Add name fields only if not empty
     if (!empty($first_name)) {
@@ -4407,8 +4467,14 @@ function zoho_build_contact_data_from_customer($customer) {
     }
     
     // Add billing_address if it has at least one field
+    // Note: Zoho uses 'address' field, not 'street'
     if (!empty($billing_address)) {
         $contact_data['billing_address'] = $billing_address;
+    }
+    
+    // Also add phone at root level if not in billing_address or if billing_address is empty
+    if (!empty($billing_phone) && empty($contact_data['phone'])) {
+        $contact_data['phone'] = $billing_phone;
     }
     
     // Build shipping address - include all available fields
