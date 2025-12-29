@@ -2333,11 +2333,13 @@ function zoho_sync_invoices_ajax_handler() {
    WOO ORDERS TO ZOHO INVOICES
 ====================================================== */
 function zoho_sync_orders_to_invoices($offset, $total, $synced, $created, $updated, $from_date, $to_date) {
-    // First call - fetch WooCommerce orders
+    // First call - fetch WooCommerce orders and bulk data from Zoho
     if ($offset == 0 && $total == 0) {
         // Clear old transients
         delete_transient('zoho_invoice_sync_orders');
         delete_transient('zoho_invoice_sync_stats');
+        delete_transient('zoho_invoice_sync_contacts_map');
+        delete_transient('zoho_invoice_sync_items_map');
         
         $args = array(
             'status' => array('completed', 'processing', 'pending', 'on-hold'),
@@ -2358,7 +2360,25 @@ function zoho_sync_orders_to_invoices($offset, $total, $synced, $created, $updat
             }
         }
         
-        $order_ids = wc_get_orders($args);
+        $all_order_ids = wc_get_orders($args);
+        
+        // Filter out completed orders that already have invoices and are paid
+        $order_ids = array();
+        foreach ($all_order_ids as $order_id) {
+            $order = wc_get_order($order_id);
+            if (!$order) continue;
+            
+            $existing_invoice_id = get_post_meta($order_id, '_zoho_invoice_id', true);
+            $order_status = $order->get_status();
+            
+            // Skip completed orders that already have invoices (already processed)
+            if ($order_status === 'completed' && !empty($existing_invoice_id)) {
+                continue;
+            }
+            
+            $order_ids[] = $order_id;
+        }
+        
         $total = count($order_ids);
         
         if ($total == 0) {
@@ -2366,8 +2386,63 @@ function zoho_sync_orders_to_invoices($offset, $total, $synced, $created, $updat
             return;
         }
         
+        // Fetch all contacts from Zoho in bulk (create email->contact_id map)
+        $contacts_map = array(); // email => contact_id
+        $page = 1;
+        $per_page = 200;
+        do {
+            $contacts_response = zoho_api_get('contacts?page=' . $page . '&per_page=' . $per_page);
+            if (!is_wp_error($contacts_response) && isset($contacts_response['contacts']) && !empty($contacts_response['contacts'])) {
+                foreach ($contacts_response['contacts'] as $contact) {
+                    if (!empty($contact['email'])) {
+                        $email_key = strtolower(trim($contact['email']));
+                        $contacts_map[$email_key] = $contact['contact_id'];
+                    }
+                }
+            }
+            $page++;
+        } while (!is_wp_error($contacts_response) && isset($contacts_response['page_context']) && 
+                 isset($contacts_response['page_context']['has_more_page']) && 
+                 $contacts_response['page_context']['has_more_page']);
+        
+        // Fetch all items from Zoho in bulk (create item_id map and SKU/name maps)
+        $items_map = array(); // item_id => item_data
+        $items_sku_map = array(); // sku => item_id
+        $items_name_map = array(); // name => item_id
+        $page = 1;
+        $per_page = 200;
+        do {
+            $items_response = zoho_api_get('items?page=' . $page . '&per_page=' . $per_page);
+            if (!is_wp_error($items_response) && isset($items_response['items']) && !empty($items_response['items'])) {
+                foreach ($items_response['items'] as $item) {
+                    if (!empty($item['item_id'])) {
+                        $item_id = $item['item_id'];
+                        $items_map[$item_id] = $item;
+                        
+                        // Map by SKU
+                        if (!empty($item['sku'])) {
+                            $items_sku_map[strtolower(trim($item['sku']))] = $item_id;
+                        }
+                        
+                        // Map by name
+                        if (!empty($item['name'])) {
+                            $items_name_map[strtolower(trim($item['name']))] = $item_id;
+                        }
+                    }
+                }
+            }
+            $page++;
+        } while (!is_wp_error($items_response) && isset($items_response['page_context']) && 
+                 isset($items_response['page_context']['has_more_page']) && 
+                 $items_response['page_context']['has_more_page']);
+        
+        // Store in transients for batch processing
         set_transient('zoho_invoice_sync_orders', $order_ids, 600);
         set_transient('zoho_invoice_sync_stats', array('synced' => 0, 'created' => 0, 'updated' => 0, 'failed' => array()), 600);
+        set_transient('zoho_invoice_sync_contacts_map', $contacts_map, 600);
+        set_transient('zoho_invoice_sync_items_map', $items_map, 600);
+        set_transient('zoho_invoice_sync_items_sku_map', $items_sku_map, 600);
+        set_transient('zoho_invoice_sync_items_name_map', $items_name_map, 600);
     } else {
         $order_ids = get_transient('zoho_invoice_sync_orders');
         if (!$order_ids) {
@@ -2375,6 +2450,12 @@ function zoho_sync_orders_to_invoices($offset, $total, $synced, $created, $updat
             return;
         }
         $total = count($order_ids);
+        
+        // Get cached maps
+        $contacts_map = get_transient('zoho_invoice_sync_contacts_map') ?: array();
+        $items_map = get_transient('zoho_invoice_sync_items_map') ?: array();
+        $items_sku_map = get_transient('zoho_invoice_sync_items_sku_map') ?: array();
+        $items_name_map = get_transient('zoho_invoice_sync_items_name_map') ?: array();
     }
     
     // Process batch (10 orders per batch - balanced for API rate limits)
@@ -2401,39 +2482,70 @@ function zoho_sync_orders_to_invoices($offset, $total, $synced, $created, $updat
             continue;
         }
         
-        // Get or create customer in Zoho
-        $customer_email = $order->get_billing_email();
+        // Check if already completed and has invoice - skip it
+        $existing_invoice_id_check = get_post_meta($order_id, '_zoho_invoice_id', true);
+        $order_status_check = $order->get_status();
+        if ($order_status_check === 'completed' && !empty($existing_invoice_id_check)) {
+            continue; // Skip already processed completed orders
+        }
         
-        // Try to find contact by email first
-        $contact_search_response = zoho_api_get('contacts?email=' . urlencode($customer_email));
+        // Get customer email and find in bulk contacts map
+        $customer_email_raw = $order->get_billing_email();
+        $customer_email = strtolower(trim($customer_email_raw));
         $zoho_customer_id = null;
         
-        if (!is_wp_error($contact_search_response) && isset($contact_search_response['contacts']) && !empty($contact_search_response['contacts'])) {
-            $zoho_customer_id = $contact_search_response['contacts'][0]['contact_id'];
+        // Check in bulk contacts map first
+        if (!empty($customer_email) && isset($contacts_map[$customer_email])) {
+            $zoho_customer_id = $contacts_map[$customer_email];
         } else {
-            // Contact not found, try to create
-            $contact_data = array(
-                'contact_name' => trim($order->get_billing_first_name() . ' ' . $order->get_billing_last_name()) ?: ($order->get_billing_company() ?: $customer_email),
-                'contact_type' => 'customer',
-                'customer_sub_type' => 'individual',
-                'email' => $customer_email,
-            );
+            // Not found in map, need to create (or search as fallback)
+            $contact_search_response = zoho_api_get('contacts?email=' . urlencode($customer_email_raw));
             
-            if (!empty($order->get_billing_first_name())) {
-                $contact_data['first_name'] = $order->get_billing_first_name();
-            }
-            if (!empty($order->get_billing_last_name())) {
-                $contact_data['last_name'] = $order->get_billing_last_name();
-            }
-            if (!empty($order->get_billing_company())) {
-                $contact_data['company_name'] = $order->get_billing_company();
-            }
-            
-            $contact_create_response = zoho_api_post('contacts', $contact_data);
-            
-            if (!is_wp_error($contact_create_response) && isset($contact_create_response['contact']['contact_id'])) {
-                $zoho_customer_id = $contact_create_response['contact']['contact_id'];
+            if (!is_wp_error($contact_search_response) && isset($contact_search_response['contacts']) && !empty($contact_search_response['contacts'])) {
+                $zoho_customer_id = $contact_search_response['contacts'][0]['contact_id'];
+                // Add to map for future use
+                $contacts_map[$customer_email] = $zoho_customer_id;
+                set_transient('zoho_invoice_sync_contacts_map', $contacts_map, 600);
             } else {
+                // Contact not found, try to create
+                $contact_data = array(
+                    'contact_name' => trim($order->get_billing_first_name() . ' ' . $order->get_billing_last_name()) ?: ($order->get_billing_company() ?: $customer_email_raw),
+                    'contact_type' => 'customer',
+                    'customer_sub_type' => 'individual',
+                    'email' => $customer_email_raw,
+                );
+                
+                if (!empty($order->get_billing_first_name())) {
+                    $contact_data['first_name'] = $order->get_billing_first_name();
+                }
+                if (!empty($order->get_billing_last_name())) {
+                    $contact_data['last_name'] = $order->get_billing_last_name();
+                }
+                if (!empty($order->get_billing_company())) {
+                    $contact_data['company_name'] = $order->get_billing_company();
+                }
+                
+                $contact_create_response = zoho_api_post('contacts', $contact_data);
+                
+                if (!is_wp_error($contact_create_response) && isset($contact_create_response['contact']['contact_id'])) {
+                    $zoho_customer_id = $contact_create_response['contact']['contact_id'];
+                    // Add to map for future use
+                    $contacts_map[$customer_email] = $zoho_customer_id;
+                    set_transient('zoho_invoice_sync_contacts_map', $contacts_map, 600);
+                } else {
+                    // Check if contact already exists (Code 3062) - might have been added after bulk fetch
+                    if (isset($contact_create_response['code']) && $contact_create_response['code'] == 3062) {
+                        // Try one more search as fallback
+                        $email_search_response = zoho_api_get('contacts?email=' . urlencode($customer_email_raw));
+                        if (!is_wp_error($email_search_response) && isset($email_search_response['contacts']) && !empty($email_search_response['contacts'])) {
+                            $zoho_customer_id = $email_search_response['contacts'][0]['contact_id'];
+                            $contacts_map[$customer_email] = $zoho_customer_id;
+                            set_transient('zoho_invoice_sync_contacts_map', $contacts_map, 600);
+                        }
+                    }
+                    
+                    // If still no contact ID found, log error
+                    if (!$zoho_customer_id) {
                 // Check if contact already exists (Code 3062)
                 // Search by email only (email is unique identifier)
                 if (isset($contact_create_response['code']) && $contact_create_response['code'] == 3062) {
@@ -2460,26 +2572,25 @@ function zoho_sync_orders_to_invoices($offset, $total, $synced, $created, $updat
                     }
                 }
                 
-                // If still no contact ID found, log error
-                if (!$zoho_customer_id) {
-                    $contact_error = is_wp_error($contact_create_response) 
-                        ? $contact_create_response->get_error_message() 
-                        : (isset($contact_create_response['message']) ? 'Code ' . ($contact_create_response['code'] ?? '') . ': ' . $contact_create_response['message'] : 'Unknown error');
-                    
-                    $error_reason = 'Failed to create/find customer: ' . $contact_error;
-                    $batch_failed[] = array('id' => $order_id, 'reason' => $error_reason);
-                    
-                    // Log the failure with detailed error
-                    zoho_add_detailed_log(
-                        'invoice',
-                        'order',
-                        $order_id,
-                        'invoice',
-                        '',
-                        json_encode(array('order_id' => $order_id, 'customer_email' => $customer_email, 'contact_data' => $contact_data)),
-                        json_encode(array('error' => $error_reason, 'code' => 'CUSTOMER_CREATE_FAILED', 'zoho_response' => $contact_create_response))
-                    );
-                    continue;
+                        $contact_error = is_wp_error($contact_create_response) 
+                            ? $contact_create_response->get_error_message() 
+                            : (isset($contact_create_response['message']) ? 'Code ' . ($contact_create_response['code'] ?? '') . ': ' . $contact_create_response['message'] : 'Unknown error');
+                        
+                        $error_reason = 'Failed to create/find customer: ' . $contact_error;
+                        $batch_failed[] = array('id' => $order_id, 'reason' => $error_reason);
+                        
+                        // Log the failure with detailed error
+                        zoho_add_detailed_log(
+                            'invoice',
+                            'order',
+                            $order_id,
+                            'invoice',
+                            '',
+                            json_encode(array('order_id' => $order_id, 'customer_email' => $customer_email_raw, 'contact_data' => $contact_data)),
+                            json_encode(array('error' => $error_reason, 'code' => 'CUSTOMER_CREATE_FAILED', 'zoho_response' => $contact_create_response))
+                        );
+                        continue;
+                    }
                 }
             }
         }
@@ -2495,8 +2606,8 @@ function zoho_sync_orders_to_invoices($offset, $total, $synced, $created, $updat
                 $order_id,
                 'invoice',
                 '',
-                json_encode(array('order_id' => $order_id, 'customer_email' => $customer_email)),
-                json_encode(array('error' => $error_reason, 'code' => 'CUSTOMER_CREATE_FAILED', 'search_response' => $contact_search_response))
+                json_encode(array('order_id' => $order_id, 'customer_email' => $customer_email_raw)),
+                json_encode(array('error' => $error_reason, 'code' => 'CUSTOMER_CREATE_FAILED'))
             );
             continue;
         }
@@ -2506,7 +2617,7 @@ function zoho_sync_orders_to_invoices($offset, $total, $synced, $created, $updat
         $reference_number = str_replace('{shop_order_order_id}', $order_id, $reference_number_value);
         $invoice_number = str_replace('{shop_order_order_id}', $order_id, $invoice_number_value);
         
-        // Build line items
+        // Build line items using bulk items map
         $line_items = array();
         $skipped_items = array(); // Track skipped items for logging
         foreach ($order->get_items() as $item) {
@@ -2523,48 +2634,38 @@ function zoho_sync_orders_to_invoices($offset, $total, $synced, $created, $updat
             // First, try to get zoho_item_id from product meta (fastest - already linked)
             $zoho_item_id = get_post_meta($product_id, '_zoho_item_id', true);
             
-            // If not found in meta, try to find by SKU
-            if (!$zoho_item_id && $sku) {
-                $zoho_item_id = zoho_get_item_by_sku($sku);
+            // Verify item exists in bulk map
+            if ($zoho_item_id && isset($items_map[$zoho_item_id])) {
+                // Item found in map, use it
+                $zoho_item = $items_map[$zoho_item_id];
+            } else {
+                // Not in meta or not in map, try to find in bulk maps
+                $zoho_item_id = null;
                 
-                // If found by SKU, save it to product meta for future use
-                if ($zoho_item_id) {
-                    update_post_meta($product_id, '_zoho_item_id', $zoho_item_id);
+                // Try SKU map
+                if (!empty($sku) && isset($items_sku_map[strtolower(trim($sku))])) {
+                    $zoho_item_id = $items_sku_map[strtolower(trim($sku))];
                 }
-            }
-            
-            // If still not found and SKU is empty or SKU search failed, try searching by product name
-            if (!$zoho_item_id && !empty($product_name)) {
-                $zoho_item_id = zoho_get_item_by_name($product_name);
                 
-                // If found by name, save it to product meta for future use
-                if ($zoho_item_id) {
-                    update_post_meta($product_id, '_zoho_item_id', $zoho_item_id);
+                // Try name map if SKU not found
+                if (!$zoho_item_id && !empty($product_name) && isset($items_name_map[strtolower(trim($product_name))])) {
+                    $zoho_item_id = $items_name_map[strtolower(trim($product_name))];
                 }
-            }
-            
-            // Only add line item if item exists in Zoho (by item_id)
-            // Zoho requires item_id or name of existing item - we use item_id for reliability
-            if (!$zoho_item_id) {
-                // Track skipped items
-                if (!$sku) {
-                    $skipped_items[] = $product_name . ' (ID: ' . $product_id . ') - No SKU and not found by name in Zoho';
+                
+                // If found, save to meta and get item data
+                if ($zoho_item_id && isset($items_map[$zoho_item_id])) {
+                    update_post_meta($product_id, '_zoho_item_id', $zoho_item_id);
+                    $zoho_item = $items_map[$zoho_item_id];
                 } else {
-                    $skipped_items[] = $product_name . ' (SKU: ' . $sku . ') - Not found in Zoho by SKU or name';
+                    // Not found in bulk maps - track as skipped
+                    if (!$sku) {
+                        $skipped_items[] = $product_name . ' (ID: ' . $product_id . ') - No SKU and not found by name in Zoho';
+                    } else {
+                        $skipped_items[] = $product_name . ' (SKU: ' . $sku . ') - Not found in Zoho by SKU or name';
+                    }
+                    continue;
                 }
-                continue;
             }
-            
-            // For invoices, verify item exists (invoice sync has fewer items, so verification is safe)
-            $zoho_item_response = zoho_api_get('items/' . urlencode($zoho_item_id));
-            if (is_wp_error($zoho_item_response) || !isset($zoho_item_response['item']['item_id'])) {
-                // Item doesn't exist or can't be accessed - skip it and remove from meta
-                $skipped_items[] = $product_name . ' (Item ID: ' . $zoho_item_id . ') - Item not found/accessible in Zoho';
-                delete_post_meta($product_id, '_zoho_item_id');
-                continue;
-            }
-            
-            $zoho_item = $zoho_item_response['item'];
             $quantity = absint($item->get_quantity()); // Ensure integer
             $item_total = floatval($item->get_total()); // Ensure float
             
