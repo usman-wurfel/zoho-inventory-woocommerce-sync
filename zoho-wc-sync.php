@@ -3969,13 +3969,13 @@ function zoho_sync_contacts_to_customers($offset, $total, $synced, $created, $up
     $stats['failed'] = array_merge($stats['failed'] ?? array(), $batch_failed);
     set_transient('zoho_contact_sync_stats', $stats, 600);
     
+    // Cleanup orphaned customer lookup records after each batch (same as WooCommerce to Zoho)
+    global $wpdb;
+    $wpdb->query("DELETE c FROM {$wpdb->prefix}wc_customer_lookup c LEFT JOIN {$wpdb->prefix}wc_order_stats o ON c.customer_id = o.customer_id WHERE (c.user_id = 0 OR c.user_id IS NULL) AND o.order_id IS NULL");
+    
     $has_more = $new_offset < $total;
     
     if (!$has_more) {
-        // Cleanup orphaned customer lookup records
-        global $wpdb;
-        $wpdb->query("DELETE c FROM {$wpdb->prefix}wc_customer_lookup c LEFT JOIN {$wpdb->prefix}wc_order_stats o ON c.customer_id = o.customer_id WHERE (c.user_id = 0 OR c.user_id IS NULL) AND o.order_id IS NULL");
-        
         delete_transient('zoho_contact_sync_contacts');
         delete_transient('zoho_contact_sync_stats');
     }
