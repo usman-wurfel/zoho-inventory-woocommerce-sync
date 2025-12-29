@@ -2563,7 +2563,7 @@ function zoho_sync_orders_to_invoices($offset, $total, $synced, $created, $updat
         }
         
         // Check if order is completed and has invoice - verify if invoice is already paid in Zoho
-        $existing_invoice_id_check = get_post_meta($order_id, '_zoho_invoice_id', true);
+        $existing_invoice_id_check = $order->get_meta('_zoho_invoice_id', true);
         $order_status_check = $order->get_status();
         if ($order_status_check === 'completed' && !empty($existing_invoice_id_check)) {
             // Check invoice status in Zoho - if already paid, skip it
@@ -2580,7 +2580,9 @@ function zoho_sync_orders_to_invoices($offset, $total, $synced, $created, $updat
             } else {
                 // If invoice doesn't exist in Zoho (Code 1002), clear the ID and continue to create new
                 if (isset($invoice_status_check['code']) && $invoice_status_check['code'] == 1002) {
-                    delete_post_meta($order_id, '_zoho_invoice_id');
+                    // Clear invalid invoice ID (HPOS compatible)
+                    $order->delete_meta_data('_zoho_invoice_id');
+                    $order->save();
                     // Continue to create new invoice
                 } else {
                     // Other error - skip this order
@@ -2846,7 +2848,7 @@ function zoho_sync_orders_to_invoices($offset, $total, $synced, $created, $updat
         );
         
         // Check if invoice already exists for this order
-        $existing_invoice_id = get_post_meta($order_id, '_zoho_invoice_id', true);
+        $existing_invoice_id = $order->get_meta('_zoho_invoice_id', true);
         
         // If updating an existing invoice, add reason (required when invoice is already sent)
         if ($existing_invoice_id) {
@@ -2861,8 +2863,9 @@ function zoho_sync_orders_to_invoices($offset, $total, $synced, $created, $updat
             
             // If Code 1002 (invoice doesn't exist), clear stored ID and create new invoice
             if (isset($response['code']) && $response['code'] == 1002) {
-                // Clear invalid invoice ID
-                delete_post_meta($order_id, '_zoho_invoice_id');
+                // Clear invalid invoice ID (HPOS compatible)
+                $order->delete_meta_data('_zoho_invoice_id');
+                $order->save();
                 $existing_invoice_id = '';
                 // Remove reason field for new invoice creation
                 unset($invoice_data['reason']);
@@ -2882,7 +2885,9 @@ function zoho_sync_orders_to_invoices($offset, $total, $synced, $created, $updat
         $zoho_invoice_id = '';
         if (isset($response['invoice']['invoice_id'])) {
             $zoho_invoice_id = $response['invoice']['invoice_id'];
-            update_post_meta($order_id, '_zoho_invoice_id', $zoho_invoice_id);
+            // Use order object method for HPOS compatibility
+            $order->update_meta_data('_zoho_invoice_id', $zoho_invoice_id);
+            $order->save();
             
             // If order status is "completed", mark invoice as "sent" and record payment in Zoho
             $order_status = $order->get_status();
@@ -3345,14 +3350,14 @@ function zoho_sync_invoices_to_orders($offset, $total, $synced, $created, $updat
                 $order->add_order_note('Zoho Reference Number: ' . $reference_number);
             }
             
+            // Save Zoho invoice ID (HPOS compatible)
+            $order->update_meta_data('_zoho_invoice_id', $zoho_invoice_id);
+            if (!empty($reference_number)) {
+                $order->update_meta_data('_zoho_reference_number', $reference_number);
+            }
+            
             // Save order
             $order->save();
-            
-            // Save Zoho invoice ID
-            update_post_meta($order->get_id(), '_zoho_invoice_id', $zoho_invoice_id);
-            if (!empty($reference_number)) {
-                update_post_meta($order->get_id(), '_zoho_reference_number', $reference_number);
-            }
             
             $batch_created++;
             
