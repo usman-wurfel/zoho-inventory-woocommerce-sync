@@ -404,24 +404,52 @@ function zoho_dashboard_page() {
     ");
     
     // Count orders that have _zoho_invoice_id (invoices linked/synced)
-    $invoices_synced = $wpdb->get_var("
-        SELECT COUNT(DISTINCT pm.post_id) 
-        FROM {$wpdb->postmeta} pm
-        INNER JOIN {$wpdb->posts} p ON pm.post_id = p.ID
-        WHERE pm.meta_key = '_zoho_invoice_id' 
-        AND pm.meta_value != '' 
-        AND pm.meta_value IS NOT NULL
-        AND p.post_type = 'shop_order'
-        AND p.post_status != 'trash'
-    ");
+    // Use WooCommerce's OrderUtil to handle both HPOS and legacy storage
+    $invoices_synced = 0;
+    $total_orders = 0;
     
-    // Get total orders count (excluding trash)
-    $total_orders = $wpdb->get_var("
-        SELECT COUNT(*) 
-        FROM {$wpdb->posts} 
-        WHERE post_type = 'shop_order' 
-        AND post_status != 'trash'
-    ");
+    if (class_exists('WC_Order') && function_exists('wc_get_orders')) {
+        // Use WooCommerce functions to count orders (works with both HPOS and legacy)
+        $orders_with_invoice = wc_get_orders(array(
+            'limit' => -1,
+            'return' => 'ids',
+            'meta_query' => array(
+                array(
+                    'key' => '_zoho_invoice_id',
+                    'value' => '',
+                    'compare' => '!='
+                )
+            )
+        ));
+        $invoices_synced = is_array($orders_with_invoice) ? count($orders_with_invoice) : 0;
+        
+        // Get total orders count using WooCommerce function
+        $all_orders = wc_get_orders(array(
+            'limit' => -1,
+            'return' => 'ids',
+            'status' => 'any'
+        ));
+        $total_orders = is_array($all_orders) ? count($all_orders) : 0;
+    } else {
+        // Fallback: Direct SQL query (legacy storage)
+        $invoices_synced = $wpdb->get_var("
+            SELECT COUNT(DISTINCT pm.post_id) 
+            FROM {$wpdb->postmeta} pm
+            INNER JOIN {$wpdb->posts} p ON pm.post_id = p.ID
+            WHERE pm.meta_key = '_zoho_invoice_id' 
+            AND pm.meta_value != '' 
+            AND pm.meta_value IS NOT NULL
+            AND p.post_type = 'shop_order'
+            AND p.post_status != 'trash'
+        ");
+        
+        $total_orders = $wpdb->get_var("
+            SELECT COUNT(*) 
+            FROM {$wpdb->posts} 
+            WHERE post_type = 'shop_order' 
+            AND post_status != 'trash'
+        ");
+    }
     
     // Also get WooCommerce counts for context
     $total_products = wp_count_posts('product');
