@@ -306,6 +306,108 @@ add_action('admin_init', function () {
 /* ======================================================
    DASHBOARD PAGE
 ====================================================== */
+/* ======================================================
+   HELPER FUNCTIONS FOR DASHBOARD
+====================================================== */
+function zoho_get_synced_invoices_count() {
+    global $wpdb;
+    
+    // Try WooCommerce function first (HPOS compatible)
+    if (function_exists('wc_get_orders')) {
+        $orders = wc_get_orders(array(
+            'limit' => 1,
+            'return' => 'ids',
+            'meta_key' => '_zoho_invoice_id',
+            'meta_compare' => 'EXISTS'
+        ));
+        
+        // If returns results, use WC function (for smaller datasets)
+        if ($orders !== false) {
+            $all_orders = wc_get_orders(array(
+                'limit' => -1,
+                'return' => 'ids',
+                'status' => 'any',
+                'meta_query' => array(
+                    array(
+                        'key' => '_zoho_invoice_id',
+                        'compare' => 'EXISTS'
+                    ),
+                    array(
+                        'key' => '_zoho_invoice_id',
+                        'value' => '',
+                        'compare' => '!='
+                    )
+                )
+            ));
+            return count($all_orders);
+        }
+    }
+    
+    // Fallback to SQL (faster for large datasets)
+    $hpos_enabled = false;
+    if (class_exists('Automattic\WooCommerce\Utilities\OrderUtil')) {
+        $hpos_enabled = Automattic\WooCommerce\Utilities\OrderUtil::custom_orders_table_usage_is_enabled();
+    }
+    
+    if ($hpos_enabled) {
+        return intval($wpdb->get_var("
+            SELECT COUNT(DISTINCT om.order_id) 
+            FROM {$wpdb->prefix}wc_orders_meta om
+            INNER JOIN {$wpdb->prefix}wc_orders o ON om.order_id = o.id
+            WHERE om.meta_key = '_zoho_invoice_id' 
+            AND om.meta_value != '' 
+            AND o.type = 'shop_order'
+            AND o.status NOT IN ('trash', 'auto-draft')
+        "));
+    } else {
+        return intval($wpdb->get_var("
+            SELECT COUNT(DISTINCT pm.post_id) 
+            FROM {$wpdb->postmeta} pm
+            INNER JOIN {$wpdb->posts} p ON pm.post_id = p.ID
+            WHERE pm.meta_key = '_zoho_invoice_id' 
+            AND pm.meta_value != '' 
+            AND p.post_type = 'shop_order'
+            AND p.post_status NOT IN ('trash', 'auto-draft')
+        "));
+    }
+}
+
+function zoho_get_total_orders_count() {
+    global $wpdb;
+    
+    // Try WooCommerce function first (HPOS compatible)
+    if (function_exists('wc_get_orders')) {
+        $all_orders = wc_get_orders(array(
+            'limit' => -1,
+            'return' => 'ids',
+            'status' => 'any'
+        ));
+        return is_array($all_orders) ? count($all_orders) : 0;
+    }
+    
+    // Fallback to SQL
+    $hpos_enabled = false;
+    if (class_exists('Automattic\WooCommerce\Utilities\OrderUtil')) {
+        $hpos_enabled = Automattic\WooCommerce\Utilities\OrderUtil::custom_orders_table_usage_is_enabled();
+    }
+    
+    if ($hpos_enabled) {
+        return intval($wpdb->get_var("
+            SELECT COUNT(*) 
+            FROM {$wpdb->prefix}wc_orders 
+            WHERE type = 'shop_order'
+            AND status NOT IN ('trash', 'auto-draft')
+        "));
+    } else {
+        return intval($wpdb->get_var("
+            SELECT COUNT(*) 
+            FROM {$wpdb->posts} 
+            WHERE post_type = 'shop_order' 
+            AND post_status NOT IN ('trash', 'auto-draft')
+        "));
+    }
+}
+
 function zoho_dashboard_page() {
 
     if (isset($_POST['save_zoho_credentials'])) {
@@ -403,53 +505,11 @@ function zoho_dashboard_page() {
             AND role_meta.meta_value LIKE '%customer%'
     ");
     
-    // Count orders that have _zoho_invoice_id (invoices linked/synced)
-    // Use WooCommerce's OrderUtil to handle both HPOS and legacy storage
-    $invoices_synced = 0;
-    $total_orders = 0;
+    // Get invoices synced count using helper function
+    $invoices_synced = zoho_get_synced_invoices_count();
     
-    if (class_exists('WC_Order') && function_exists('wc_get_orders')) {
-        // Use WooCommerce functions to count orders (works with both HPOS and legacy)
-        $orders_with_invoice = wc_get_orders(array(
-            'limit' => -1,
-            'return' => 'ids',
-            'meta_query' => array(
-                array(
-                    'key' => '_zoho_invoice_id',
-                    'value' => '',
-                    'compare' => '!='
-                )
-            )
-        ));
-        $invoices_synced = is_array($orders_with_invoice) ? count($orders_with_invoice) : 0;
-        
-        // Get total orders count using WooCommerce function
-        $all_orders = wc_get_orders(array(
-            'limit' => -1,
-            'return' => 'ids',
-            'status' => 'any'
-        ));
-        $total_orders = is_array($all_orders) ? count($all_orders) : 0;
-    } else {
-        // Fallback: Direct SQL query (legacy storage)
-        $invoices_synced = $wpdb->get_var("
-            SELECT COUNT(DISTINCT pm.post_id) 
-            FROM {$wpdb->postmeta} pm
-            INNER JOIN {$wpdb->posts} p ON pm.post_id = p.ID
-            WHERE pm.meta_key = '_zoho_invoice_id' 
-            AND pm.meta_value != '' 
-            AND pm.meta_value IS NOT NULL
-            AND p.post_type = 'shop_order'
-            AND p.post_status != 'trash'
-        ");
-        
-        $total_orders = $wpdb->get_var("
-            SELECT COUNT(*) 
-            FROM {$wpdb->posts} 
-            WHERE post_type = 'shop_order' 
-            AND post_status != 'trash'
-        ");
-    }
+    // Get total orders count using helper function
+    $total_orders = zoho_get_total_orders_count();
     
     // Also get WooCommerce counts for context
     $total_products = wp_count_posts('product');
