@@ -2435,31 +2435,27 @@ function zoho_sync_orders_to_invoices($offset, $total, $synced, $created, $updat
                 $zoho_customer_id = $contact_create_response['contact']['contact_id'];
             } else {
                 // Check if contact already exists (Code 3062)
+                // CRITICAL: Email is unique identifier, not name. Only search by email.
                 if (isset($contact_create_response['code']) && $contact_create_response['code'] == 3062) {
-                    // Contact already exists - search by name to get existing contact
-                    $contact_name = $contact_data['contact_name'];
-                    $name_search_response = zoho_api_get('contacts?search_text=' . urlencode($contact_name));
-                    
-                    if (!is_wp_error($name_search_response) && isset($name_search_response['contacts']) && !empty($name_search_response['contacts'])) {
-                        // Find exact match by name
-                        foreach ($name_search_response['contacts'] as $contact) {
-                            if (isset($contact['contact_name']) && $contact['contact_name'] === $contact_name) {
-                                $zoho_customer_id = $contact['contact_id'];
-                                break;
-                            }
-                        }
+                    // Contact already exists - search by EMAIL only (not name)
+                    if (!empty($customer_email)) {
+                        $search_email = strtolower(trim($customer_email));
+                        $email_search_response = zoho_api_get('contacts?email=' . urlencode($search_email));
                         
-                        // If no exact match, use first result
-                        if (!$zoho_customer_id && isset($name_search_response['contacts'][0]['contact_id'])) {
-                            $zoho_customer_id = $name_search_response['contacts'][0]['contact_id'];
-                        }
-                    }
-                    
-                    // If still not found, try search by email again
-                    if (!$zoho_customer_id) {
-                        $email_search_response = zoho_api_get('contacts?email=' . urlencode($customer_email));
                         if (!is_wp_error($email_search_response) && isset($email_search_response['contacts']) && !empty($email_search_response['contacts'])) {
-                            $zoho_customer_id = $email_search_response['contacts'][0]['contact_id'];
+                            // Verify exact email match
+                            foreach ($email_search_response['contacts'] as $contact) {
+                                $found_email = isset($contact['email']) ? strtolower(trim($contact['email'])) : '';
+                                if ($found_email === $search_email) {
+                                    $zoho_customer_id = $contact['contact_id'];
+                                    break;
+                                }
+                            }
+                            
+                            // If no exact match, use first result as fallback
+                            if (!$zoho_customer_id && isset($email_search_response['contacts'][0]['contact_id'])) {
+                                $zoho_customer_id = $email_search_response['contacts'][0]['contact_id'];
+                            }
                         }
                     }
                 }
@@ -3165,64 +3161,114 @@ function zoho_sync_contacts_ajax_handler() {
         }
 
         // ===== STEP 2: Search by EMAIL if no valid ID =====
+        // CRITICAL: Email is the unique identifier in Zoho, not name
+        // Always verify exact email match before updating
         if (empty($action) && !empty($contact_data['email'])) {
             $search_email = strtolower(trim($contact_data['email']));
             $search_response = zoho_api_get('contacts?email=' . urlencode($search_email));
             
             if (!is_wp_error($search_response) && isset($search_response['contacts']) && !empty($search_response['contacts'])) {
-                // Found existing contact by email
-                $existing_contact_id = $search_response['contacts'][0]['contact_id'];
+                // Verify exact email match (case-insensitive)
+                foreach ($search_response['contacts'] as $found_contact) {
+                    $found_email = isset($found_contact['email']) ? strtolower(trim($found_contact['email'])) : '';
+                    if ($found_email === $search_email) {
+                        // Exact email match found - update this contact
+                        $existing_contact_id = $found_contact['contact_id'];
+                        
+                        // Try UPDATE with found ID
+                        $response = zoho_api_put('contacts/' . $existing_contact_id, $contact_data);
+                        $action = 'updated';
+                        
+                        // Save the found ID
+                        if ($customer_data['type'] == 'registered') {
+                            update_user_meta($customer_data['user_id'], '_zoho_contact_id', $existing_contact_id);
+                        } else {
+                            update_option('_zoho_guest_contact_' . md5($customer_data['email']), $existing_contact_id, false);
+                        }
+                        break;
+                    }
+                }
                 
-                // Try UPDATE with found ID
-                $response = zoho_api_put('contacts/' . $existing_contact_id, $contact_data);
-                $action = 'updated';
-                
-                // Save the found ID
-                if ($customer_data['type'] == 'registered') {
-                    update_user_meta($customer_data['user_id'], '_zoho_contact_id', $existing_contact_id);
-                } else {
-                    update_option('_zoho_guest_contact_' . md5($customer_data['email']), $existing_contact_id, false);
+                // If no exact email match but contacts found, use first one as fallback
+                // (in case email field is missing in response)
+                if (empty($action) && !empty($search_response['contacts'][0]['contact_id'])) {
+                    $existing_contact_id = $search_response['contacts'][0]['contact_id'];
+                    $response = zoho_api_put('contacts/' . $existing_contact_id, $contact_data);
+                    $action = 'updated';
+                    
+                    // Save the found ID
+                    if ($customer_data['type'] == 'registered') {
+                        update_user_meta($customer_data['user_id'], '_zoho_contact_id', $existing_contact_id);
+                    } else {
+                        update_option('_zoho_guest_contact_' . md5($customer_data['email']), $existing_contact_id, false);
+                    }
                 }
             }
         }
 
         // ===== STEP 3: CREATE if still not found =====
         if (empty($action)) {
+            // According to Zoho API: Email is the unique identifier, not name
+            // Always create if email doesn't exist, even if name matches
             $response = zoho_api_post('contacts', $contact_data);
             
-            // Handle "Contact already exists" error (Code 3062)
-            if (isset($response['code']) && $response['code'] == 3062) {
-                // Search again by email (more thorough)
+            // Handle "Contact already exists" error (Code 3062) or Code 1002
+            // These errors mean contact exists, so we MUST search by EMAIL only (not name)
+            if (isset($response['code']) && ($response['code'] == 3062 || $response['code'] == 1002)) {
+                // CRITICAL: Only search by EMAIL, never by name
+                // Two different people can have the same name but different emails
                 if (!empty($contact_data['email'])) {
                     $search_email = strtolower(trim($contact_data['email']));
                     $search_response = zoho_api_get('contacts?email=' . urlencode($search_email));
                     
                     if (!is_wp_error($search_response) && isset($search_response['contacts']) && !empty($search_response['contacts'])) {
-                        $existing_contact_id = $search_response['contacts'][0]['contact_id'];
-                        $response = zoho_api_put('contacts/' . $existing_contact_id, $contact_data);
-                        $action = 'updated';
-                    }
-                }
-                
-                // If still not found, search by name
-                if (empty($action) && !empty($contact_data['contact_name'])) {
-                    $search_name = trim($contact_data['contact_name']);
-                    $name_search = zoho_api_get('contacts?search_text=' . urlencode($search_name));
-                    
-                    if (!is_wp_error($name_search) && isset($name_search['contacts']) && !empty($name_search['contacts'])) {
-                        foreach ($name_search['contacts'] as $contact) {
-                            $found_name = isset($contact['contact_name']) ? trim($contact['contact_name']) : '';
-                            if (strcasecmp($found_name, $search_name) === 0) {
-                                $existing_contact_id = $contact['contact_id'];
+                        // Verify email match (case-insensitive)
+                        foreach ($search_response['contacts'] as $found_contact) {
+                            $found_email = isset($found_contact['email']) ? strtolower(trim($found_contact['email'])) : '';
+                            if ($found_email === $search_email) {
+                                // Exact email match found - update this contact
+                                $existing_contact_id = $found_contact['contact_id'];
                                 $response = zoho_api_put('contacts/' . $existing_contact_id, $contact_data);
                                 $action = 'updated';
+                                
+                                // Save the found ID
+                                if ($customer_data['type'] == 'registered') {
+                                    update_user_meta($customer_data['user_id'], '_zoho_contact_id', $existing_contact_id);
+                                } else {
+                                    update_option('_zoho_guest_contact_' . md5($customer_data['email']), $existing_contact_id, false);
+                                }
                                 break;
+                            }
+                        }
+                        
+                        // If no exact email match but contacts found, still try first one
+                        // (in case email field is missing in response but contact exists)
+                        if (empty($action) && !empty($search_response['contacts'][0]['contact_id'])) {
+                            $existing_contact_id = $search_response['contacts'][0]['contact_id'];
+                            $response = zoho_api_put('contacts/' . $existing_contact_id, $contact_data);
+                            $action = 'updated';
+                            
+                            // Save the found ID
+                            if ($customer_data['type'] == 'registered') {
+                                update_user_meta($customer_data['user_id'], '_zoho_contact_id', $existing_contact_id);
+                            } else {
+                                update_option('_zoho_guest_contact_' . md5($customer_data['email']), $existing_contact_id, false);
                             }
                         }
                     }
                 }
+                
+                // If still no match found by email, create new contact
+                // DO NOT search by name - same name != same person
+                if (empty($action)) {
+                    // Force create - email is unique, so this is a new contact
+                    $response = zoho_api_post('contacts', $contact_data);
+                    if (isset($response['contact']['contact_id'])) {
+                        $action = 'created';
+                    }
+                }
             } else {
-                // Create was successful (or other error we'll handle later)
+                // Create was successful
                 $action = 'created';
             }
         }
@@ -4211,24 +4257,9 @@ function zoho_retry_all_failed_handler() {
                         }
                     }
                     
-                    // If still not found, try search by name
-                    if (empty($existing_contact_id) && !empty($contact_data['contact_name'])) {
-                        $search_name = trim($contact_data['contact_name']);
-                        $name_search = zoho_api_get('contacts?search_text=' . urlencode($search_name));
-                        if (!is_wp_error($name_search) && isset($name_search['contacts']) && !empty($name_search['contacts'])) {
-                            foreach ($name_search['contacts'] as $contact) {
-                                $found_name = isset($contact['contact_name']) ? trim($contact['contact_name']) : '';
-                                if (strcasecmp($found_name, $search_name) === 0) {
-                                    $existing_contact_id = $contact['contact_id'];
-                                    // Update with correct ID
-                                    $response = zoho_api_put('contacts/' . $existing_contact_id, $contact_data);
-                                    break;
-                                }
-                            }
-                        }
-                    }
-                    
-                    // If still not found, create new contact
+                    // DO NOT search by name - email is unique identifier
+                    // If email search didn't find it, create new contact
+                    // Same name != same person
                     if (empty($existing_contact_id)) {
                         $response = zoho_api_post('contacts', $contact_data);
                     }
@@ -4266,22 +4297,15 @@ function zoho_retry_all_failed_handler() {
                         }
                     }
                     
-                    // If not found by email, try search by name (case-insensitive)
-                    if (!$contact_found && !empty($contact_data['contact_name'])) {
-                        $search_name = trim($contact_data['contact_name']);
-                        $name_search = zoho_api_get('contacts?search_text=' . urlencode($search_name));
-                        if (!is_wp_error($name_search) && isset($name_search['contacts']) && !empty($name_search['contacts'])) {
-                            // Find exact match by name (case-insensitive)
-                            foreach ($name_search['contacts'] as $contact) {
-                                $found_name = isset($contact['contact_name']) ? trim($contact['contact_name']) : '';
-                                if (strcasecmp($found_name, $search_name) === 0) {
-                                    $existing_contact_id = $contact['contact_id'];
-                                    // Update with correct ID
-                                    $response = zoho_api_put('contacts/' . $existing_contact_id, $contact_data);
-                                    $contact_found = true;
-                                    break;
-                                }
-                            }
+                    // DO NOT search by name - email is the unique identifier in Zoho
+                    // If email search didn't find it, create new contact
+                    // Two people can have same name but different emails
+                    if (!$contact_found) {
+                        $response = zoho_api_post('contacts', $contact_data);
+                        if (isset($response['contact']['contact_id'])) {
+                            $existing_contact_id = $response['contact']['contact_id'];
+                            $contact_found = true;
+                            update_user_meta($woo_id, '_zoho_contact_id', $existing_contact_id);
                         }
                     }
                 }
@@ -4706,20 +4730,10 @@ function zoho_get_or_create_contact($order) {
             }
         }
         
-        // Try search by name if email search fails (case-insensitive)
-        if (!empty($contact_name)) {
-            $search_name = trim($contact_name);
-            $name_search = zoho_api_get('contacts?search_text=' . urlencode($search_name));
-            if (!is_wp_error($name_search) && isset($name_search['contacts']) && !empty($name_search['contacts'])) {
-                // Find exact match by name (case-insensitive)
-                foreach ($name_search['contacts'] as $contact) {
-                    $found_name = isset($contact['contact_name']) ? trim($contact['contact_name']) : '';
-                    if (strcasecmp($found_name, $search_name) === 0) {
-                        return $contact['contact_id'];
-                    }
-                }
-            }
-        }
+        // DO NOT search by name - email is the unique identifier
+        // If email search failed, contact doesn't exist - return null
+        // Two people can have same name but different emails
+        return null;
     }
     
     if (!is_wp_error($response) && isset($response['contact']['contact_id'])) {
