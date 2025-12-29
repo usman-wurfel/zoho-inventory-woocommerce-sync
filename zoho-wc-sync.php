@@ -3672,7 +3672,7 @@ function zoho_sync_contacts_to_customers($offset, $total, $synced, $created, $up
         $shipping_zip = $shipping_address['zip'] ?? ($shipping_address['zipcode'] ?? $billing_zip);
         $shipping_country = $shipping_address['country'] ?? $billing_country;
         
-        // Check if user exists - first by Zoho contact ID, then by email
+        // Check if user exists - match by BOTH name AND email
         $existing_user = null;
         $user_id = null;
         
@@ -3687,14 +3687,51 @@ function zoho_sync_contacts_to_customers($offset, $total, $synced, $created, $up
             $existing_user = get_user_by('ID', $existing_user_id);
         }
         
-        // 2. If not found by Zoho ID, try by email
-        if (!$existing_user && !empty($email)) {
-            $existing_user = get_user_by('email', $email);
-        }
-        
-        // 3. If not found by email, try by contact name (username might match)
-        if (!$existing_user && !empty($contact_name)) {
-            $existing_user = get_user_by('login', sanitize_user($contact_name));
+        // 2. If not found by Zoho ID, match by BOTH email AND name (both must match)
+        if (!$existing_user && !empty($email) && !empty($contact_name)) {
+            // Get all users with matching email
+            $users_by_email = get_users(array(
+                'meta_key' => 'billing_email',
+                'meta_value' => $email,
+                'number' => 100 // Limit to avoid performance issues
+            ));
+            
+            // Also check user_email field
+            if (empty($users_by_email)) {
+                $user_by_email = get_user_by('email', $email);
+                if ($user_by_email) {
+                    $users_by_email = array($user_by_email);
+                }
+            }
+            
+            // Now check if name matches for any of these users
+            foreach ($users_by_email as $user) {
+                // Get user's name from WooCommerce
+                $user_first_name = get_user_meta($user->ID, 'first_name', true);
+                $user_last_name = get_user_meta($user->ID, 'last_name', true);
+                
+                // Also check billing name
+                if (empty($user_first_name)) {
+                    $user_first_name = get_user_meta($user->ID, 'billing_first_name', true);
+                }
+                if (empty($user_last_name)) {
+                    $user_last_name = get_user_meta($user->ID, 'billing_last_name', true);
+                }
+                
+                // Build full name from WooCommerce
+                $woo_full_name = trim($user_first_name . ' ' . $user_last_name);
+                
+                // Compare names (case-insensitive, trimmed)
+                $zoho_contact_name_clean = strtolower(trim($contact_name));
+                $woo_name_clean = strtolower(trim($woo_full_name));
+                
+                // Match if names are same (exact match)
+                if ($zoho_contact_name_clean === $woo_name_clean && !empty($woo_name_clean)) {
+                    // BOTH email AND name match - this is the same customer
+                    $existing_user = $user;
+                    break;
+                }
+            }
         }
         
         if ($existing_user) {
