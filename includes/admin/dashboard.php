@@ -141,22 +141,22 @@ function zoho_dashboard_page() {
 
     $connected = get_option('zoho_access_token');
     $refresh_token = get_option('zoho_refresh_token');
-    $token_expires_at = get_option('zoho_token_expires_at');
+    $token_expires_at = get_option('zoho_token_expires_at', 0);
     $default_redirect_uri = admin_url('admin.php?page=zoho-sync');
     
+    // If token exists but expiry time is not set, set it to 1 hour from now
+    if ($connected && !$token_expires_at) {
+        $token_expires_at = time() + 3600;
+        update_option('zoho_token_expires_at', $token_expires_at);
+    }
+    
     // Calculate token expiry time
-    $expires_in = '';
-    if ($connected) {
-        if ($token_expires_at) {
-            $time_left = $token_expires_at - time();
-            if ($time_left > 0) {
-                $minutes = round($time_left / 60);
-                $expires_in = $minutes . ' minutes';
-            } else {
-                $expires_in = '60 minutes'; // Default if expired
-            }
-        } else {
-            $expires_in = '60 minutes'; // Default if not set
+    $expires_in = '60 minutes'; // Default
+    if ($connected && $token_expires_at > 0) {
+        $time_left = $token_expires_at - time();
+        if ($time_left > 0) {
+            $minutes = round($time_left / 60);
+            $expires_in = $minutes . ' minutes';
         }
     }
 
