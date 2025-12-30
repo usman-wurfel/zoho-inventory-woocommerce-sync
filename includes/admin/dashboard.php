@@ -146,11 +146,17 @@ function zoho_dashboard_page() {
     
     // Calculate token expiry time
     $expires_in = '';
-    if ($token_expires_at && $connected) {
-        $time_left = $token_expires_at - time();
-        if ($time_left > 0) {
-            $minutes = round($time_left / 60);
-            $expires_in = $minutes . ' minutes';
+    if ($connected) {
+        if ($token_expires_at) {
+            $time_left = $token_expires_at - time();
+            if ($time_left > 0) {
+                $minutes = round($time_left / 60);
+                $expires_in = $minutes . ' minutes';
+            } else {
+                $expires_in = '60 minutes'; // Default if expired
+            }
+        } else {
+            $expires_in = '60 minutes'; // Default if not set
         }
     }
 
@@ -234,11 +240,9 @@ function zoho_dashboard_page() {
             
             <?php if ($connected): ?>
                 <div style="margin-bottom: 15px;">
-                    <?php if ($expires_in): ?>
-                        <p style="margin: 5px 0; color: #666;">
-                            Access token will expire in <?php echo esc_html($expires_in); ?>.
-                        </p>
-                    <?php endif; ?>
+                    <p style="margin: 5px 0; color: #666;">
+                        Access token will expire in <?php echo esc_html($expires_in); ?>.
+                    </p>
                 </div>
                 
                 <div style="margin-top: 15px;">
