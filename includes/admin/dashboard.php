@@ -241,11 +241,14 @@ function zoho_dashboard_page() {
                         <?php else: ?>
                             <span id="zoho-token-expiry-text">Access token is active.</span>
                         <?php endif; ?>
-                        <button type="button" id="zoho-refresh-token-btn" class="button button-small" style="margin-left: 5px; padding: 2px 8px; height: auto; line-height: 1.5;">
-                            <span class="dashicons dashicons-update" style="vertical-align: middle; font-size: 16px; width: 16px; height: 16px;"></span>
-                        </button>
-                        <span id="zoho-refresh-status" style="display: none; margin-left: 10px; color: #00a32a; font-weight: bold;"></span>
                     </p>
+                    <div style="margin-top: 10px; display: flex; align-items: center; gap: 10px;">
+                        <button type="button" id="zoho-refresh-token-btn" class="button button-secondary" style="padding: 6px 12px;">
+                            <span class="dashicons dashicons-update" style="vertical-align: middle; font-size: 16px; width: 16px; height: 16px; margin-right: 5px;"></span>
+                            Refresh Token
+                        </button>
+                        <span id="zoho-refresh-status" style="display: none; color: #00a32a; font-weight: 500;"></span>
+                    </div>
                 </div>
                 
                 <div style="margin-top: 15px;">
@@ -413,24 +416,14 @@ function zoho_refresh_token_ajax_handler() {
     $result = zoho_refresh_access_token();
     
     if ($result) {
-        // Get updated expiry time
-        $token_expires_at = get_option('zoho_token_expires_at');
-        $expires_in = '';
-        if ($token_expires_at) {
-            $time_left = $token_expires_at - time();
-            if ($time_left > 0) {
-                $minutes = round($time_left / 60);
-                $expires_in = $minutes . ' minutes';
-            } else {
-                $expires_in = '60 minutes'; // Default fallback
-            }
-        } else {
-            $expires_in = '60 minutes'; // Default fallback
-        }
+        // Set expiry time to 1 hour (3600 seconds) from now
+        $new_expiry_time = time() + 3600;
+        update_option('zoho_token_expires_at', $new_expiry_time);
         
+        // Return fixed 1 hour expiry
         wp_send_json_success(array(
             'message' => 'Token refreshed successfully',
-            'expires_in' => $expires_in
+            'expires_in' => '60 minutes'
         ));
     } else {
         wp_send_json_error('Failed to refresh token. Please check your credentials or reconnect to Zoho.');
