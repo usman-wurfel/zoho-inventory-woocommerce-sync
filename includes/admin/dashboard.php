@@ -234,14 +234,12 @@ function zoho_dashboard_page() {
             
             <?php if ($connected): ?>
                 <div style="margin-bottom: 15px;">
-                    <p style="margin: 5px 0; color: #666; display: flex; align-items: center; gap: 8px;">
-                        <span class="dashicons dashicons-clock" style="vertical-align: middle;"></span>
-                        <?php if ($expires_in): ?>
-                            <span id="zoho-token-expiry-text">Access token will expire in <?php echo esc_html($expires_in); ?>.</span>
-                        <?php else: ?>
-                            <span id="zoho-token-expiry-text">Access token is active.</span>
-                        <?php endif; ?>
-                    </p>
+                    <?php if ($expires_in): ?>
+                        <p style="margin: 5px 0; color: #666;">
+                            <span class="dashicons dashicons-update" style="vertical-align: middle;"></span>
+                            Access token will expire in <?php echo esc_html($expires_in); ?>.
+                        </p>
+                    <?php endif; ?>
                 </div>
                 
                 <div style="margin-top: 15px;">
@@ -254,15 +252,9 @@ function zoho_dashboard_page() {
                 </div>
                 
                 <div style="margin-top: 15px;">
-                    <button type="button" id="zoho-refresh-token-btn" class="button button-secondary" style="padding: 6px 12px;">
-                        <span class="dashicons dashicons-update" style="vertical-align: middle; font-size: 16px; width: 16px; height: 16px; margin-right: 5px;"></span>
-                        <span id="zoho-refresh-btn-text">
-                            <?php if ($expires_in): ?>
-                                Access token will expire in <?php echo esc_html($expires_in); ?>.
-                            <?php else: ?>
-                                Refresh Token
-                            <?php endif; ?>
-                        </span>
+                    <button type="button" id="zoho-refresh-token-btn" class="button button-secondary">
+                        <span class="dashicons dashicons-update" style="vertical-align: middle;"></span>
+                        Refresh Token
                     </button>
                     <span id="zoho-refresh-status" style="display: none; margin-left: 10px; color: #00a32a; font-weight: 500;"></span>
                 </div>
@@ -333,8 +325,6 @@ function zoho_dashboard_page() {
     <script>
     jQuery(document).ready(function($) {
         var $refreshBtn = $('#zoho-refresh-token-btn');
-        var $expiryText = $('#zoho-token-expiry-text');
-        var $refreshBtnText = $('#zoho-refresh-btn-text');
         var $refreshStatus = $('#zoho-refresh-status');
         
         $refreshBtn.on('click', function(e) {
@@ -358,25 +348,19 @@ function zoho_dashboard_page() {
                 },
                 success: function(response) {
                     if (response.success) {
-                        // Update expiry text in both places
-                        var newTime = '60 minutes';
-                        var newText = 'Access token will expire in ' + newTime + '.';
-                        $expiryText.text(newText);
-                        $refreshBtnText.text(newText);
-                        $refreshStatus.text('Token refreshed!').css('color', '#00a32a').fadeIn(300);
-                        
-                        // Hide status after 3 seconds
+                        $refreshStatus.text('Token refreshed successfully!').css('color', '#00a32a').fadeIn(300);
+                        // Reload page after 1 second to show updated expiry time
                         setTimeout(function() {
-                            $refreshStatus.fadeOut(300);
-                        }, 3000);
+                            location.reload();
+                        }, 1000);
                     } else {
                         $refreshStatus.text('Error: ' + (response.data || 'Failed to refresh token')).css('color', '#d63638').fadeIn(300);
+                        $btn.prop('disabled', false);
+                        $icon.removeClass('spin');
                     }
                 },
                 error: function() {
                     $refreshStatus.text('Error: Request failed').css('color', '#d63638').fadeIn(300);
-                },
-                complete: function() {
                     $btn.prop('disabled', false);
                     $icon.removeClass('spin');
                 }
@@ -385,9 +369,11 @@ function zoho_dashboard_page() {
     });
     
     // Add CSS for spin animation
-    if (!$('style#zoho-refresh-spin').length) {
-        $('head').append('<style id="zoho-refresh-spin">.dashicons.spin { animation: zoho-spin 1s linear infinite; } @keyframes zoho-spin { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }</style>');
-    }
+    jQuery(document).ready(function($) {
+        if (!$('style#zoho-refresh-spin').length) {
+            $('head').append('<style id="zoho-refresh-spin">.dashicons.spin { animation: zoho-spin 1s linear infinite; } @keyframes zoho-spin { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }</style>');
+        }
+    });
     </script>
     <?php
 }
@@ -422,18 +408,15 @@ function zoho_refresh_token_ajax_handler() {
         return;
     }
     
-    // Refresh the token
+    // Refresh the token using the same method as Reauthorize
     $result = zoho_refresh_access_token();
     
     if ($result) {
         // Set expiry time to 1 hour (3600 seconds) from now
-        $new_expiry_time = time() + 3600;
-        update_option('zoho_token_expires_at', $new_expiry_time);
+        update_option('zoho_token_expires_at', time() + 3600);
         
-        // Return fixed 1 hour expiry
         wp_send_json_success(array(
-            'message' => 'Token refreshed successfully',
-            'expires_in' => '60 minutes'
+            'message' => 'Token refreshed successfully'
         ));
     } else {
         wp_send_json_error('Failed to refresh token. Please check your credentials or reconnect to Zoho.');
