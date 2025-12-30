@@ -242,13 +242,6 @@ function zoho_dashboard_page() {
                             <span id="zoho-token-expiry-text">Access token is active.</span>
                         <?php endif; ?>
                     </p>
-                    <div style="margin-top: 10px; display: flex; align-items: center; gap: 10px;">
-                        <button type="button" id="zoho-refresh-token-btn" class="button button-secondary" style="padding: 6px 12px;">
-                            <span class="dashicons dashicons-update" style="vertical-align: middle; font-size: 16px; width: 16px; height: 16px; margin-right: 5px;"></span>
-                            Refresh Token
-                        </button>
-                        <span id="zoho-refresh-status" style="display: none; color: #00a32a; font-weight: 500;"></span>
-                    </div>
                 </div>
                 
                 <div style="margin-top: 15px;">
@@ -258,6 +251,20 @@ function zoho_dashboard_page() {
                     <a href="<?php echo esc_url(admin_url('admin.php?page=zoho-sync&disconnect=1&_wpnonce=' . wp_create_nonce('zoho_disconnect'))); ?>" class="button button-link-delete" onclick="return confirm('Are you sure you want to disconnect?');">
                         Disconnect
                     </a>
+                </div>
+                
+                <div style="margin-top: 15px;">
+                    <button type="button" id="zoho-refresh-token-btn" class="button button-secondary" style="padding: 6px 12px;">
+                        <span class="dashicons dashicons-update" style="vertical-align: middle; font-size: 16px; width: 16px; height: 16px; margin-right: 5px;"></span>
+                        <span id="zoho-refresh-btn-text">
+                            <?php if ($expires_in): ?>
+                                Access token will expire in <?php echo esc_html($expires_in); ?>.
+                            <?php else: ?>
+                                Refresh Token
+                            <?php endif; ?>
+                        </span>
+                    </button>
+                    <span id="zoho-refresh-status" style="display: none; margin-left: 10px; color: #00a32a; font-weight: 500;"></span>
                 </div>
             <?php endif; ?>
         </div>
@@ -327,6 +334,7 @@ function zoho_dashboard_page() {
     jQuery(document).ready(function($) {
         var $refreshBtn = $('#zoho-refresh-token-btn');
         var $expiryText = $('#zoho-token-expiry-text');
+        var $refreshBtnText = $('#zoho-refresh-btn-text');
         var $refreshStatus = $('#zoho-refresh-status');
         
         $refreshBtn.on('click', function(e) {
@@ -350,9 +358,11 @@ function zoho_dashboard_page() {
                 },
                 success: function(response) {
                     if (response.success) {
-                        // Update expiry text
-                        var newTime = response.data.expires_in || '60 minutes';
-                        $expiryText.text('Access token will expire in ' + newTime + '.');
+                        // Update expiry text in both places
+                        var newTime = '60 minutes';
+                        var newText = 'Access token will expire in ' + newTime + '.';
+                        $expiryText.text(newText);
+                        $refreshBtnText.text(newText);
                         $refreshStatus.text('Token refreshed!').css('color', '#00a32a').fadeIn(300);
                         
                         // Hide status after 3 seconds
