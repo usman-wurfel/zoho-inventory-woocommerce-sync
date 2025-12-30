@@ -234,16 +234,18 @@ function zoho_dashboard_page() {
             
             <?php if ($connected): ?>
                 <div style="margin-bottom: 15px;">
-                    <?php if ($expires_in): ?>
-                        <p style="margin: 5px 0; color: #666; display: flex; align-items: center; gap: 8px;">
-                            <span class="dashicons dashicons-clock" style="vertical-align: middle;"></span>
+                    <p style="margin: 5px 0; color: #666; display: flex; align-items: center; gap: 8px;">
+                        <span class="dashicons dashicons-clock" style="vertical-align: middle;"></span>
+                        <?php if ($expires_in): ?>
                             <span id="zoho-token-expiry-text">Access token will expire in <?php echo esc_html($expires_in); ?>.</span>
-                            <button type="button" id="zoho-refresh-token-btn" class="button button-small" style="margin-left: 5px; padding: 2px 8px; height: auto; line-height: 1.5;">
-                                <span class="dashicons dashicons-update" style="vertical-align: middle; font-size: 16px; width: 16px; height: 16px;"></span>
-                            </button>
-                            <span id="zoho-refresh-status" style="display: none; margin-left: 10px; color: #00a32a; font-weight: bold;"></span>
-                        </p>
-                    <?php endif; ?>
+                        <?php else: ?>
+                            <span id="zoho-token-expiry-text">Access token is active.</span>
+                        <?php endif; ?>
+                        <button type="button" id="zoho-refresh-token-btn" class="button button-small" style="margin-left: 5px; padding: 2px 8px; height: auto; line-height: 1.5;">
+                            <span class="dashicons dashicons-update" style="vertical-align: middle; font-size: 16px; width: 16px; height: 16px;"></span>
+                        </button>
+                        <span id="zoho-refresh-status" style="display: none; margin-left: 10px; color: #00a32a; font-weight: bold;"></span>
+                    </p>
                 </div>
                 
                 <div style="margin-top: 15px;">
