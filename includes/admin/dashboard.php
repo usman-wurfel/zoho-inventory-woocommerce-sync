@@ -235,9 +235,13 @@ function zoho_dashboard_page() {
             <?php if ($connected): ?>
                 <div style="margin-bottom: 15px;">
                     <?php if ($expires_in): ?>
-                        <p style="margin: 5px 0; color: #666;">
-                            <span class="dashicons dashicons-update" style="vertical-align: middle;"></span>
-                            Access token will expire in <?php echo esc_html($expires_in); ?>.
+                        <p style="margin: 5px 0; color: #666; display: flex; align-items: center; gap: 8px;">
+                            <span class="dashicons dashicons-clock" style="vertical-align: middle;"></span>
+                            <span id="zoho-token-expiry-text">Access token will expire in <?php echo esc_html($expires_in); ?>.</span>
+                            <button type="button" id="zoho-refresh-token-btn" class="button button-small" style="margin-left: 5px; padding: 2px 8px; height: auto; line-height: 1.5;">
+                                <span class="dashicons dashicons-update" style="vertical-align: middle; font-size: 16px; width: 16px; height: 16px;"></span>
+                            </button>
+                            <span id="zoho-refresh-status" style="display: none; margin-left: 10px; color: #00a32a; font-weight: bold;"></span>
                         </p>
                     <?php endif; ?>
                 </div>
@@ -313,6 +317,63 @@ function zoho_dashboard_page() {
         </div>
         <?php endif; ?>
     </div>
+    
+    <script>
+    jQuery(document).ready(function($) {
+        var $refreshBtn = $('#zoho-refresh-token-btn');
+        var $expiryText = $('#zoho-token-expiry-text');
+        var $refreshStatus = $('#zoho-refresh-status');
+        
+        $refreshBtn.on('click', function(e) {
+            e.preventDefault();
+            
+            var $btn = $(this);
+            var $icon = $btn.find('.dashicons');
+            
+            // Disable button and show loading
+            $btn.prop('disabled', true);
+            $icon.addClass('spin');
+            $refreshStatus.hide();
+            
+            // Make AJAX call
+            $.ajax({
+                url: ajaxurl,
+                type: 'POST',
+                data: {
+                    action: 'zoho_refresh_token',
+                    nonce: '<?php echo wp_create_nonce('zoho_refresh_token_nonce'); ?>'
+                },
+                success: function(response) {
+                    if (response.success) {
+                        // Update expiry text
+                        var newTime = response.data.expires_in || '60 minutes';
+                        $expiryText.text('Access token will expire in ' + newTime + '.');
+                        $refreshStatus.text('Token refreshed!').css('color', '#00a32a').fadeIn(300);
+                        
+                        // Hide status after 3 seconds
+                        setTimeout(function() {
+                            $refreshStatus.fadeOut(300);
+                        }, 3000);
+                    } else {
+                        $refreshStatus.text('Error: ' + (response.data || 'Failed to refresh token')).css('color', '#d63638').fadeIn(300);
+                    }
+                },
+                error: function() {
+                    $refreshStatus.text('Error: Request failed').css('color', '#d63638').fadeIn(300);
+                },
+                complete: function() {
+                    $btn.prop('disabled', false);
+                    $icon.removeClass('spin');
+                }
+            });
+        });
+    });
+    
+    // Add CSS for spin animation
+    if (!$('style#zoho-refresh-spin').length) {
+        $('head').append('<style id="zoho-refresh-spin">.dashicons.spin { animation: zoho-spin 1s linear infinite; } @keyframes zoho-spin { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }</style>');
+    }
+    </script>
     <?php
 }
 
@@ -325,5 +386,52 @@ function zoho_auth_url() {
         .'&response_type=code'
         .'&access_type=offline'
         .'&redirect_uri='.urlencode(get_option('zoho_redirect_uri'));
+}
+
+/* ======================================================
+   AJAX HANDLER: Refresh Token
+====================================================== */
+add_action('wp_ajax_zoho_refresh_token', 'zoho_refresh_token_ajax_handler');
+function zoho_refresh_token_ajax_handler() {
+    check_ajax_referer('zoho_refresh_token_nonce', 'nonce');
+    
+    if (!current_user_can('manage_options')) {
+        wp_send_json_error('Unauthorized');
+        return;
+    }
+    
+    // Check if refresh token exists
+    $refresh_token = get_option('zoho_refresh_token');
+    if (empty($refresh_token)) {
+        wp_send_json_error('No refresh token found. Please reconnect to Zoho.');
+        return;
+    }
+    
+    // Refresh the token
+    $result = zoho_refresh_access_token();
+    
+    if ($result) {
+        // Get updated expiry time
+        $token_expires_at = get_option('zoho_token_expires_at');
+        $expires_in = '';
+        if ($token_expires_at) {
+            $time_left = $token_expires_at - time();
+            if ($time_left > 0) {
+                $minutes = round($time_left / 60);
+                $expires_in = $minutes . ' minutes';
+            } else {
+                $expires_in = '60 minutes'; // Default fallback
+            }
+        } else {
+            $expires_in = '60 minutes'; // Default fallback
+        }
+        
+        wp_send_json_success(array(
+            'message' => 'Token refreshed successfully',
+            'expires_in' => $expires_in
+        ));
+    } else {
+        wp_send_json_error('Failed to refresh token. Please check your credentials or reconnect to Zoho.');
+    }
 }
 
