@@ -237,9 +237,8 @@ add_action('admin_init', function () {
             if (isset($data['refresh_token'])) {
                 update_option('zoho_refresh_token', $data['refresh_token']);
             }
-            if (isset($data['expires_in'])) {
-                update_option('zoho_token_expires_at', time() + $data['expires_in']);
-            }
+            // Always set expiry time to 1 hour (3600 seconds) from now
+            update_option('zoho_token_expires_at', time() + 3600);
             wp_redirect(admin_url('admin.php?page=zoho-sync&connected=1'));
         } else {
             $error_msg = isset($data['error']) ? $data['error'] : 'Unknown error';

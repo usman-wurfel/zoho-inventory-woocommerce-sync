@@ -52,9 +52,8 @@ function zoho_refresh_access_token() {
         
         if (isset($data['access_token'])) {
             update_option('zoho_access_token', $data['access_token']);
-            if (isset($data['expires_in'])) {
-                update_option('zoho_token_expires_at', time() + $data['expires_in']);
-            }
+            // Always set expiry time to 1 hour (3600 seconds) from now
+            update_option('zoho_token_expires_at', time() + 3600);
             return true;
         }
     }
