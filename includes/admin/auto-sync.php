@@ -148,6 +148,49 @@ function zoho_sync_single_product($product_id) {
         $zoho_item_id = $zoho_item_id;
     }
     
+    // If item was updated and stock needs to be synced, create inventory adjustment
+    if ($action === 'updated' && !empty($zoho_item_id) && isset($item_data['initial_stock'])) {
+        // Get current stock from Zoho
+        $current_item = zoho_api_get('items/' . $zoho_item_id);
+        if (!is_wp_error($current_item) && isset($current_item['item']['stock_on_hand'])) {
+            $zoho_current_stock = intval($current_item['item']['stock_on_hand']);
+            $woo_stock = intval($item_data['initial_stock']);
+            
+            // Only create adjustment if stock is different
+            if ($zoho_current_stock != $woo_stock && $woo_stock >= 0) {
+                $stock_difference = $woo_stock - $zoho_current_stock;
+                
+                // Create inventory adjustment
+                $adjustment_data = array(
+                    'date' => current_time('Y-m-d'),
+                    'adjustment_type' => 'quantity',
+                    'reason' => 'Stock updated from WooCommerce',
+                    'line_items' => array(
+                        array(
+                            'item_id' => $zoho_item_id,
+                            'quantity_adjusted' => $stock_difference,
+                        ),
+                    ),
+                );
+                
+                $adjustment_response = zoho_api_post('inventoryadjustments', $adjustment_data);
+                
+                // Log the adjustment
+                if (!is_wp_error($adjustment_response) && (!isset($adjustment_response['code']) || $adjustment_response['code'] == 0)) {
+                    zoho_add_detailed_log(
+                        'item',
+                        'product',
+                        $product_id,
+                        'inventoryadjustments',
+                        isset($adjustment_response['inventoryadjustment']['adjustment_id']) ? $adjustment_response['inventoryadjustment']['adjustment_id'] : '',
+                        json_encode($adjustment_data),
+                        json_encode($adjustment_response)
+                    );
+                }
+            }
+        }
+    }
+    
     // Log the sync
     zoho_add_detailed_log(
         'item',
@@ -484,23 +527,26 @@ function zoho_delete_contact($zoho_contact_id) {
 /* ======================================================
    WOOCOMMERCE HOOKS - Products
 ====================================================== */
-// Product updated/saved
-add_action('woocommerce_update_product', 'zoho_auto_sync_product', 10, 1);
-add_action('woocommerce_new_product', 'zoho_auto_sync_product', 10, 1);
-function zoho_auto_sync_product($product_id) {
+// Product updated/saved - use shutdown hook to run after save completes
+add_action('woocommerce_update_product', 'zoho_schedule_product_sync', 10, 1);
+add_action('woocommerce_new_product', 'zoho_schedule_product_sync', 10, 1);
+add_action('woocommerce_product_quick_edit_save', 'zoho_schedule_product_sync', 10, 1);
+function zoho_schedule_product_sync($product_id) {
     // Skip if this is a variation or not a simple product
     $product = wc_get_product($product_id);
     if (!$product || $product->get_type() === 'variation') {
         return;
     }
     
-    // Defer sync to avoid blocking the save process
-    wp_schedule_single_event(time() + 2, 'zoho_sync_product_deferred', array($product_id));
-}
-
-add_action('zoho_sync_product_deferred', 'zoho_do_sync_product', 10, 1);
-function zoho_do_sync_product($product_id) {
-    zoho_sync_single_product($product_id);
+    // Store product ID to sync on shutdown
+    static $products_to_sync = array();
+    if (!in_array($product_id, $products_to_sync)) {
+        $products_to_sync[] = $product_id;
+        // Run on shutdown to ensure product is fully saved
+        add_action('shutdown', function() use ($product_id) {
+            zoho_sync_single_product($product_id);
+        }, 20);
+    }
 }
 
 // Product deleted
@@ -526,16 +572,19 @@ function zoho_auto_delete_product($post_id) {
    WOOCOMMERCE HOOKS - Orders
 ====================================================== */
 // Order created/updated
-add_action('woocommerce_new_order', 'zoho_auto_sync_order', 10, 1);
-add_action('woocommerce_update_order', 'zoho_auto_sync_order', 10, 1);
-function zoho_auto_sync_order($order_id) {
-    // Defer sync
-    wp_schedule_single_event(time() + 3, 'zoho_sync_order_deferred', array($order_id));
-}
-
-add_action('zoho_sync_order_deferred', 'zoho_do_sync_order', 10, 1);
-function zoho_do_sync_order($order_id) {
-    zoho_sync_single_order($order_id);
+add_action('woocommerce_new_order', 'zoho_schedule_order_sync', 10, 1);
+add_action('woocommerce_update_order', 'zoho_schedule_order_sync', 10, 1);
+add_action('woocommerce_checkout_order_processed', 'zoho_schedule_order_sync', 10, 1);
+function zoho_schedule_order_sync($order_id) {
+    // Store order ID to sync on shutdown
+    static $orders_to_sync = array();
+    if (!in_array($order_id, $orders_to_sync)) {
+        $orders_to_sync[] = $order_id;
+        // Run on shutdown to ensure order is fully saved
+        add_action('shutdown', function() use ($order_id) {
+            zoho_sync_single_order($order_id);
+        }, 20);
+    }
 }
 
 // Order deleted
@@ -561,22 +610,26 @@ function zoho_auto_delete_order($post_id) {
    WOOCOMMERCE HOOKS - Contacts/Customers
 ====================================================== */
 // Customer updated/created
-add_action('profile_update', 'zoho_auto_sync_contact', 10, 2);
-add_action('user_register', 'zoho_auto_sync_contact', 10, 1);
-function zoho_auto_sync_contact($user_id, $old_user_data = null) {
+add_action('profile_update', 'zoho_schedule_contact_sync', 10, 2);
+add_action('user_register', 'zoho_schedule_contact_sync', 10, 1);
+add_action('woocommerce_created_customer', 'zoho_schedule_contact_sync', 10, 1);
+add_action('woocommerce_update_customer', 'zoho_schedule_contact_sync', 10, 1);
+function zoho_schedule_contact_sync($user_id, $old_user_data = null) {
     // Check if user has customer role
     $user = new WP_User($user_id);
     if (!in_array('customer', $user->roles)) {
         return;
     }
     
-    // Defer sync
-    wp_schedule_single_event(time() + 2, 'zoho_sync_contact_deferred', array($user_id));
-}
-
-add_action('zoho_sync_contact_deferred', 'zoho_do_sync_contact', 10, 1);
-function zoho_do_sync_contact($user_id) {
-    zoho_sync_single_contact($user_id);
+    // Store user ID to sync on shutdown
+    static $users_to_sync = array();
+    if (!in_array($user_id, $users_to_sync)) {
+        $users_to_sync[] = $user_id;
+        // Run on shutdown to ensure user is fully saved
+        add_action('shutdown', function() use ($user_id) {
+            zoho_sync_single_contact($user_id);
+        }, 20);
+    }
 }
 
 // Customer deleted
