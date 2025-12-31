@@ -224,10 +224,10 @@ function zoho_dashboard_page() {
         }
     }
     
-    // Fetch organizations if connected but organization not selected, OR if user wants to change organization
+    // Fetch organizations if connected (always fetch to show Change Organization button if multiple orgs exist)
     $organizations = array();
     $need_org_selection = false;
-    if ($connected && (empty($organization_id) || $show_change_org_form)) {
+    if ($connected) {
         // zoho-api.php is already loaded by main plugin file
         if (function_exists('zoho_fetch_organizations')) {
             $org_data = zoho_fetch_organizations();
@@ -465,7 +465,6 @@ function zoho_dashboard_page() {
                     <div style="margin-bottom: 15px;">
                         <p style="margin: 5px 0; color: #666;">
                             <strong>Organization ID:</strong> <?php echo esc_html($organization_id); ?>
-                            <a href="<?php echo esc_url(admin_url('admin.php?page=zoho-sync&change_org=1')); ?>" class="button button-small" style="margin-left: 10px;">Change Organization</a>
                         </p>
                         <p style="margin: 5px 0; color: #666;">
                             Access token will expire in <?php echo esc_html($expires_in); ?>.
@@ -486,6 +485,11 @@ function zoho_dashboard_page() {
                     <a href="<?php echo esc_url(zoho_auth_url()); ?>" class="button button-secondary" style="margin-right: 10px;">
                         Refresh Token
                     </a>
+                    <?php if ($organization_id && !empty($organizations) && count($organizations) > 1): ?>
+                        <a href="<?php echo esc_url(admin_url('admin.php?page=zoho-sync&change_org=1')); ?>" class="button button-secondary" style="margin-right: 10px;">
+                            Change Organization
+                        </a>
+                    <?php endif; ?>
                     <a href="<?php echo esc_url(admin_url('admin.php?page=zoho-sync&disconnect=1&_wpnonce=' . wp_create_nonce('zoho_disconnect'))); ?>" class="button button-link-delete" onclick="return confirm('Are you sure you want to disconnect?');">
                         Disconnect
                     </a>
