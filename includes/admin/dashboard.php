@@ -216,11 +216,15 @@ function zoho_dashboard_page() {
     
     // Calculate token expiry time
     $expires_in = '60 minutes'; // Default
+    $is_token_expired = false;
     if ($connected && $token_expires_at > 0) {
         $time_left = $token_expires_at - time();
         if ($time_left > 0) {
             $minutes = round($time_left / 60);
             $expires_in = $minutes . ' minutes';
+        } else {
+            $is_token_expired = true;
+            $expires_in = 'Your token has been expired, click refresh';
         }
     }
     
@@ -466,14 +470,22 @@ function zoho_dashboard_page() {
                         <p style="margin: 5px 0; color: #666;">
                             <strong>Organization ID:</strong> <?php echo esc_html($organization_id); ?>
                         </p>
-                        <p style="margin: 5px 0; color: #666;">
-                            Access token will expire in <?php echo esc_html($expires_in); ?>.
+                        <p style="margin: 5px 0; color: <?php echo $is_token_expired ? '#d63638' : '#666'; ?>;">
+                            <?php if ($is_token_expired): ?>
+                                <?php echo esc_html($expires_in); ?>
+                            <?php else: ?>
+                                Access token will expire in <?php echo esc_html($expires_in); ?>.
+                            <?php endif; ?>
                         </p>
                     </div>
                 <?php else: ?>
                     <div style="margin-bottom: 15px;">
-                        <p style="margin: 5px 0; color: #666;">
-                            Access token will expire in <?php echo esc_html($expires_in); ?>.
+                        <p style="margin: 5px 0; color: <?php echo $is_token_expired ? '#d63638' : '#666'; ?>;">
+                            <?php if ($is_token_expired): ?>
+                                <?php echo esc_html($expires_in); ?>
+                            <?php else: ?>
+                                Access token will expire in <?php echo esc_html($expires_in); ?>.
+                            <?php endif; ?>
                         </p>
                     </div>
                 <?php endif; ?>
@@ -485,7 +497,7 @@ function zoho_dashboard_page() {
                     <a href="<?php echo esc_url(zoho_auth_url()); ?>" class="button button-secondary" style="margin-right: 10px;">
                         Refresh Token
                     </a>
-                    <?php if ($organization_id && !empty($organizations) && count($organizations) > 1): ?>
+                    <?php if ($organization_id && !empty($organizations) && count($organizations) > 1 && !$is_token_expired): ?>
                         <a href="<?php echo esc_url(admin_url('admin.php?page=zoho-sync&change_org=1')); ?>" class="button button-secondary" style="margin-right: 10px;">
                             Change Organization
                         </a>
