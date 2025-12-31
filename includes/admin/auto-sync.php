@@ -173,8 +173,11 @@ function zoho_sync_single_product($product_id) {
         $zoho_item_id = $zoho_item_id;
     }
     
-    // If item was updated and stock needs to be synced, create inventory adjustment
-    if ($action === 'updated' && !empty($zoho_item_id) && isset($item_data['initial_stock'])) {
+    // Only create inventory adjustment if stock was manually changed (not on every update)
+    // Check if this update was triggered specifically by a stock change
+    $stock_was_changed = get_transient('_zoho_stock_changed_' . $product_id);
+    
+    if ($action === 'updated' && !empty($zoho_item_id) && $stock_was_changed && isset($item_data['initial_stock']) && get_option('zoho_sync_stock', 'yes') == 'yes') {
         // Get current stock from Zoho
         $current_item = zoho_api_get('items/' . $zoho_item_id);
         if (!is_wp_error($current_item) && isset($current_item['item']['stock_on_hand'])) {
@@ -200,12 +203,13 @@ function zoho_sync_single_product($product_id) {
                 
                 $adjustment_response = zoho_api_post('inventoryadjustments', $adjustment_data);
                 
-                // Log the adjustment
+                // Log the adjustment - ensure product_id is integer
                 if (!is_wp_error($adjustment_response) && (!isset($adjustment_response['code']) || $adjustment_response['code'] == 0)) {
+                    $log_product_id = is_numeric($product_id) ? intval($product_id) : (is_a($product_id, 'WC_Product') ? $product_id->get_id() : 0);
                     zoho_add_detailed_log(
                         'item',
                         'product',
-                        $product_id,
+                        $log_product_id,
                         'inventoryadjustments',
                         isset($adjustment_response['inventoryadjustment']['adjustment_id']) ? $adjustment_response['inventoryadjustment']['adjustment_id'] : '',
                         json_encode($adjustment_data),
@@ -214,13 +218,18 @@ function zoho_sync_single_product($product_id) {
                 }
             }
         }
+        
+        // Clear the transient after processing
+        delete_transient('_zoho_stock_changed_' . $product_id);
     }
     
-    // Log the sync
+    // Log the sync - ensure product_id is integer, not object or array
+    $log_product_id = is_numeric($product_id) ? intval($product_id) : (is_a($product_id, 'WC_Product') ? $product_id->get_id() : 0);
+    
     zoho_add_detailed_log(
         'item',
         'product',
-        $product_id,
+        $log_product_id,
         'items-inventory',
         $zoho_item_id ?: '',
         json_encode($item_data),
@@ -562,6 +571,16 @@ function zoho_delete_contact($zoho_contact_id) {
 /* ======================================================
    WOOCOMMERCE HOOKS - Products
 ====================================================== */
+// Track stock changes specifically - only create adjustment when stock is manually changed
+add_action('woocommerce_product_set_stock', 'zoho_track_stock_change', 10, 1);
+function zoho_track_stock_change($product) {
+    if (is_a($product, 'WC_Product')) {
+        $product_id = $product->get_id();
+        // Set transient to mark that stock was manually changed for this product
+        set_transient('_zoho_stock_changed_' . $product_id, true, 30); // Expires in 30 seconds
+    }
+}
+
 // Product updated/saved - use shutdown hook to run after save completes
 add_action('woocommerce_update_product', 'zoho_schedule_product_sync', 10, 1);
 add_action('woocommerce_new_product', 'zoho_schedule_product_sync', 10, 1);
