@@ -518,7 +518,7 @@ function zoho_dashboard_page() {
                     <a href="<?php echo esc_url(zoho_auth_url()); ?>" class="button button-secondary" style="margin-right: 10px;">
                         Refresh Token
                     </a>
-                    <?php if ($organization_id && !empty($organizations) && count($organizations) > 1 && !$is_token_expired): ?>
+                    <?php if ($organization_id && !empty($organizations) && count($organizations) > 1): ?>
                         <a href="<?php echo esc_url(admin_url('admin.php?page=zoho-sync&change_org=1')); ?>" class="button button-secondary" style="margin-right: 10px;">
                             Change Organization
                         </a>
