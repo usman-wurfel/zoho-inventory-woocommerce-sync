@@ -79,11 +79,14 @@ function zoho_add_detailed_log($type, $woo_object, $woo_object_id, $zoho_object,
     // Get current organization_id
     $org_id = get_option('zoho_organization_id', '');
     
+    $current_timestamp = time();
+    $current_time = current_time('d-m-Y h:i A');
+    
     $new_log = array(
         'id' => uniqid('log_'),
         'type' => $type, // 'item', 'invoice', 'contact'
-        'time' => current_time('d-m-Y h:i A'),
-        'timestamp' => time(), // Unix timestamp for filtering
+        'time' => $current_time,
+        'timestamp' => $current_timestamp, // Unix timestamp for filtering
         'organization_id' => $org_id, // Save organization_id with log
         'woo_object' => $woo_object,
         'woo_object_id' => $woo_object_id,
@@ -92,6 +95,37 @@ function zoho_add_detailed_log($type, $woo_object, $woo_object_id, $zoho_object,
         'request' => is_string($request) ? $request : json_encode($request),
         'response' => is_string($response) ? $response : json_encode($response),
     );
+    
+    // Remove duplicate logs - same type, same time (within 5 seconds), same woo_object_id, same zoho_object_id
+    $logs = array_filter($logs, function($log) use ($type, $current_timestamp, $woo_object_id, $zoho_object_id) {
+        // Keep log if:
+        // 1. Different type
+        if (($log['type'] ?? '') !== $type) {
+            return true;
+        }
+        
+        // 2. Different woo_object_id
+        if (($log['woo_object_id'] ?? '') != $woo_object_id) {
+            return true;
+        }
+        
+        // 3. Different zoho_object_id
+        if (($log['zoho_object_id'] ?? '') != $zoho_object_id) {
+            return true;
+        }
+        
+        // 4. Timestamp difference more than 5 seconds (not a duplicate)
+        $log_timestamp = $log['timestamp'] ?? 0;
+        if (abs($log_timestamp - $current_timestamp) > 5) {
+            return true;
+        }
+        
+        // This is a duplicate - remove it
+        return false;
+    });
+    
+    // Re-index array after filtering
+    $logs = array_values($logs);
     
     $logs[] = $new_log;
     

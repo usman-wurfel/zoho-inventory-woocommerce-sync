@@ -9,24 +9,35 @@ if (!defined('ABSPATH')) exit;
    HELPER: Sync Single Product to Zoho
 ====================================================== */
 function zoho_sync_single_product($product_id) {
+    // Prevent duplicate syncs - check if already syncing this product
+    $sync_lock_key = '_zoho_sync_lock_product_' . $product_id;
+    if (get_transient($sync_lock_key)) {
+        return false; // Already syncing, skip duplicate call
+    }
+    set_transient($sync_lock_key, true, 20); // Lock for 20 seconds
+    
     // Check if Zoho is connected
     if (!get_option('zoho_access_token')) {
+        delete_transient($sync_lock_key);
         return false;
     }
     
     // Check if auto-sync is enabled
     if (get_option('zoho_auto_sync_products', 'yes') !== 'yes') {
+        delete_transient($sync_lock_key);
         return false;
     }
     
     // Get product
     $product = wc_get_product($product_id);
     if (!$product || $product->get_type() === 'variation') {
+        delete_transient($sync_lock_key);
         return false;
     }
     
     // Skip if product is trashed
     if ($product->get_status() === 'trash') {
+        delete_transient($sync_lock_key);
         return false;
     }
     
@@ -36,12 +47,14 @@ function zoho_sync_single_product($product_id) {
     
     // Only sync if product has no org_id (new product) or matches current org
     if (!empty($current_org_id) && !empty($product_org_id) && $product_org_id !== $current_org_id) {
+        delete_transient($sync_lock_key);
         return false; // Product belongs to different organization
     }
     
     // Check if product has SKU (required for Zoho)
     $sku = $product->get_sku();
     if (empty($sku)) {
+        delete_transient($sync_lock_key);
         return false;
     }
     
@@ -592,14 +605,26 @@ function zoho_schedule_product_sync($product_id) {
         return;
     }
     
-    // Store product ID to sync on shutdown
+    // Prevent duplicate scheduling - check transient first (works across all requests)
+    $schedule_lock_key = '_zoho_scheduled_product_' . $product_id;
+    if (get_transient($schedule_lock_key)) {
+        return; // Already scheduled, don't add another shutdown hook
+    }
+    set_transient($schedule_lock_key, true, 30); // Lock for 30 seconds
+    
+    // Store product ID to sync on shutdown (static array for current request)
     static $products_to_sync = array();
     if (!in_array($product_id, $products_to_sync)) {
         $products_to_sync[] = $product_id;
         // Run on shutdown to ensure product is fully saved
-        add_action('shutdown', function() use ($product_id) {
+        add_action('shutdown', function() use ($product_id, $schedule_lock_key) {
+            // Clear schedule lock before syncing
+            delete_transient($schedule_lock_key);
             zoho_sync_single_product($product_id);
         }, 20);
+    } else {
+        // Already in static array (same request), clear transient anyway
+        delete_transient($schedule_lock_key);
     }
 }
 
