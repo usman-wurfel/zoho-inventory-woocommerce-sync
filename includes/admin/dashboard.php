@@ -142,7 +142,19 @@ function zoho_dashboard_page() {
     $connected = get_option('zoho_access_token');
     $refresh_token = get_option('zoho_refresh_token');
     $token_expires_at = get_option('zoho_token_expires_at', 0);
+    $organization_id = get_option('zoho_organization_id');
     $default_redirect_uri = admin_url('admin.php?page=zoho-sync');
+    
+    // Handle organization selection
+    if (isset($_POST['zoho_select_organization']) && $connected) {
+        check_admin_referer('zoho_select_organization');
+        $selected_org_id = sanitize_text_field($_POST['organization_id']);
+        if (!empty($selected_org_id)) {
+            update_option('zoho_organization_id', $selected_org_id);
+            $organization_id = $selected_org_id;
+            echo '<div class="notice notice-success is-dismissible"><p>Organization selected successfully!</p></div>';
+        }
+    }
     
     // If token exists but expiry time is not set, set it to 1 hour from now
     if ($connected && !$token_expires_at) {
@@ -157,6 +169,46 @@ function zoho_dashboard_page() {
         if ($time_left > 0) {
             $minutes = round($time_left / 60);
             $expires_in = $minutes . ' minutes';
+        }
+    }
+    
+    // Fetch organizations if connected but organization not selected
+    $organizations = array();
+    $need_org_selection = false;
+    if ($connected && empty($organization_id)) {
+        require_once plugin_dir_path(__FILE__) . '../../zoho-api.php';
+        $org_data = zoho_fetch_organizations();
+        if (isset($org_data['organizations']) && is_array($org_data['organizations'])) {
+            $organizations = $org_data['organizations'];
+            // If only one organization, auto-select it
+            if (count($organizations) == 1) {
+                update_option('zoho_organization_id', $organizations[0]['organization_id']);
+                $organization_id = $organizations[0]['organization_id'];
+            } else if (count($organizations) > 1) {
+                $need_org_selection = true;
+            }
+        } else {
+            // Error fetching organizations - show message
+            $org_error = isset($org_data['message']) ? $org_data['message'] : 'Failed to fetch organizations';
+            if (isset($org_data['code']) && $org_data['code'] == 6024) {
+                echo '<div class="notice notice-error is-dismissible"><p><strong>Error:</strong> Multiple organizations found. Please select an organization below.</p></div>';
+                // Try to fetch again without organization_id requirement for the organizations endpoint
+                $token = get_option('zoho_access_token');
+                $response = wp_remote_get('https://www.zohoapis.com/inventory/v1/organizations', [
+                    'headers' => [
+                        'Authorization' => 'Zoho-oauthtoken ' . $token,
+                    ],
+                    'timeout' => 30
+                ]);
+                if (!is_wp_error($response)) {
+                    $body = wp_remote_retrieve_body($response);
+                    $org_data = json_decode($body, true);
+                    if (isset($org_data['organizations']) && is_array($org_data['organizations'])) {
+                        $organizations = $org_data['organizations'];
+                        $need_org_selection = true;
+                    }
+                }
+            }
         }
     }
 
@@ -239,11 +291,49 @@ function zoho_dashboard_page() {
             </div>
             
             <?php if ($connected): ?>
-                <div style="margin-bottom: 15px;">
-                    <p style="margin: 5px 0; color: #666;">
-                        Access token will expire in <?php echo esc_html($expires_in); ?>.
-                    </p>
-                </div>
+                <?php if ($need_org_selection && !empty($organizations)): ?>
+                    <!-- Organization Selection Form -->
+                    <div style="background: #fff3cd; border: 1px solid #ffc107; padding: 15px; margin-bottom: 15px; border-radius: 4px;">
+                        <h3 style="margin-top: 0; color: #856404;">Select Organization</h3>
+                        <p style="color: #856404; margin-bottom: 15px;">Your Zoho account has access to multiple organizations. Please select which organization to use:</p>
+                        <form method="post" action="">
+                            <?php wp_nonce_field('zoho_select_organization'); ?>
+                            <table class="form-table">
+                                <tr>
+                                    <th scope="row"><label for="organization_id">Organization</label></th>
+                                    <td>
+                                        <select name="organization_id" id="organization_id" class="regular-text" required>
+                                            <option value="">-- Select Organization --</option>
+                                            <?php foreach ($organizations as $org): ?>
+                                                <option value="<?php echo esc_attr($org['organization_id']); ?>">
+                                                    <?php echo esc_html($org['name']); ?> (<?php echo esc_html($org['organization_id']); ?>)
+                                                </option>
+                                            <?php endforeach; ?>
+                                        </select>
+                                    </td>
+                                </tr>
+                            </table>
+                            <p class="submit">
+                                <input type="submit" name="zoho_select_organization" class="button button-primary" value="Select Organization">
+                            </p>
+                        </form>
+                    </div>
+                <?php elseif ($organization_id): ?>
+                    <div style="margin-bottom: 15px;">
+                        <p style="margin: 5px 0; color: #666;">
+                            <strong>Organization ID:</strong> <?php echo esc_html($organization_id); ?>
+                        </p>
+                        <p style="margin: 5px 0; color: #666;">
+                            Access token will expire in <?php echo esc_html($expires_in); ?>.
+                        </p>
+                    </div>
+                <?php else: ?>
+                    <div style="margin-bottom: 15px;">
+                        <p style="margin: 5px 0; color: #666;">
+                            Access token will expire in <?php echo esc_html($expires_in); ?>.
+                        </p>
+                    </div>
+                <?php endif; ?>
                 
                 <div style="margin-top: 15px;">
                     <a href="<?php echo esc_url(zoho_auth_url()); ?>" class="button button-secondary" style="margin-right: 10px;">
