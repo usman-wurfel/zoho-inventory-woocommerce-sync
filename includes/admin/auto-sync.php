@@ -9,24 +9,35 @@ if (!defined('ABSPATH')) exit;
    HELPER: Sync Single Product to Zoho
 ====================================================== */
 function zoho_sync_single_product($product_id) {
+    // Prevent duplicate syncs within a short period
+    $sync_lock_key = '_zoho_sync_lock_product_' . $product_id;
+    if (get_transient($sync_lock_key)) {
+        return false; // Already syncing
+    }
+    set_transient($sync_lock_key, true, 5); // Lock for 5 seconds
+    
     // Check if Zoho is connected
     if (!get_option('zoho_access_token')) {
+        delete_transient($sync_lock_key);
         return false;
     }
     
     // Check if auto-sync is enabled
     if (get_option('zoho_auto_sync_products', 'yes') !== 'yes') {
+        delete_transient($sync_lock_key);
         return false;
     }
     
     // Get product
     $product = wc_get_product($product_id);
     if (!$product || $product->get_type() === 'variation') {
+        delete_transient($sync_lock_key);
         return false;
     }
     
     // Skip if product is trashed
     if ($product->get_status() === 'trash') {
+        delete_transient($sync_lock_key);
         return false;
     }
     
@@ -36,12 +47,14 @@ function zoho_sync_single_product($product_id) {
     
     // Only sync if product has no org_id (new product) or matches current org
     if (!empty($current_org_id) && !empty($product_org_id) && $product_org_id !== $current_org_id) {
+        delete_transient($sync_lock_key);
         return false; // Product belongs to different organization
     }
     
     // Check if product has SKU (required for Zoho)
     $sku = $product->get_sku();
     if (empty($sku)) {
+        delete_transient($sync_lock_key);
         return false;
     }
     
@@ -176,6 +189,7 @@ function zoho_sync_single_product($product_id) {
     // Only create inventory adjustment if stock was manually changed (not on every update)
     // Check if this update was triggered specifically by a stock change
     $stock_was_changed = get_transient('_zoho_stock_changed_' . $product_id);
+    $adjustment_response = null; // Initialize to track if adjustment was created
     
     if ($action === 'updated' && !empty($zoho_item_id) && $stock_was_changed && isset($item_data['initial_stock']) && get_option('zoho_sync_stock', 'yes') == 'yes') {
         // Get current stock from Zoho
@@ -203,19 +217,8 @@ function zoho_sync_single_product($product_id) {
                 
                 $adjustment_response = zoho_api_post('inventoryadjustments', $adjustment_data);
                 
-                // Log the adjustment - ensure product_id is integer
-                if (!is_wp_error($adjustment_response) && (!isset($adjustment_response['code']) || $adjustment_response['code'] == 0)) {
-                    $log_product_id = is_numeric($product_id) ? intval($product_id) : (is_a($product_id, 'WC_Product') ? $product_id->get_id() : 0);
-                    zoho_add_detailed_log(
-                        'item',
-                        'product',
-                        $log_product_id,
-                        'inventoryadjustments',
-                        isset($adjustment_response['inventoryadjustment']['adjustment_id']) ? $adjustment_response['inventoryadjustment']['adjustment_id'] : '',
-                        json_encode($adjustment_data),
-                        json_encode($adjustment_response)
-                    );
-                }
+                // Don't create separate log for adjustment - it will be included in main item sync log
+                // Adjustment is just a part of the stock update process
             }
         }
         
@@ -226,6 +229,12 @@ function zoho_sync_single_product($product_id) {
     // Log the sync - ensure product_id is integer, not object or array
     $log_product_id = is_numeric($product_id) ? intval($product_id) : (is_a($product_id, 'WC_Product') ? $product_id->get_id() : 0);
     
+    // Include adjustment info in response if adjustment was created
+    $log_response = $response;
+    if (isset($adjustment_response) && !is_wp_error($adjustment_response) && (!isset($adjustment_response['code']) || $adjustment_response['code'] == 0)) {
+        $log_response['inventory_adjustment'] = $adjustment_response;
+    }
+    
     zoho_add_detailed_log(
         'item',
         'product',
@@ -233,7 +242,7 @@ function zoho_sync_single_product($product_id) {
         'items-inventory',
         $zoho_item_id ?: '',
         json_encode($item_data),
-        json_encode($response)
+        json_encode($log_response)
     );
     
     return !isset($response['error']) && (!isset($response['code']) || $response['code'] == 0);
