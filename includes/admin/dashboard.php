@@ -150,7 +150,7 @@ function zoho_dashboard_page() {
     $organization_id = get_option('zoho_organization_id');
     $default_redirect_uri = admin_url('admin.php?page=zoho-sync');
     
-    // Handle organization selection
+    // Handle organization selection/change
     if (isset($_POST['zoho_select_organization']) && $connected) {
         check_admin_referer('zoho_select_organization');
         $selected_org_id = sanitize_text_field($_POST['organization_id']);
@@ -162,6 +162,9 @@ function zoho_dashboard_page() {
             exit;
         }
     }
+    
+    // Check if user wants to change organization
+    $show_change_org_form = isset($_GET['change_org']) && $_GET['change_org'] == '1';
     
     // If token exists but expiry time is not set, set it to 1 hour from now
     if ($connected && !$token_expires_at) {
@@ -179,21 +182,24 @@ function zoho_dashboard_page() {
         }
     }
     
-    // Fetch organizations if connected but organization not selected
+    // Fetch organizations if connected but organization not selected, OR if user wants to change organization
     $organizations = array();
     $need_org_selection = false;
-    if ($connected && empty($organization_id)) {
+    if ($connected && (empty($organization_id) || $show_change_org_form)) {
         // zoho-api.php is already loaded by main plugin file
         if (function_exists('zoho_fetch_organizations')) {
             $org_data = zoho_fetch_organizations();
             if (isset($org_data['organizations']) && is_array($org_data['organizations'])) {
                 $organizations = $org_data['organizations'];
-                // If only one organization, auto-select it
-                if (count($organizations) == 1) {
+                // If only one organization and not already selected, auto-select it
+                if (count($organizations) == 1 && empty($organization_id)) {
                     update_option('zoho_organization_id', $organizations[0]['organization_id']);
                     $organization_id = $organizations[0]['organization_id'];
                 } else if (count($organizations) > 1) {
-                    $need_org_selection = true;
+                    // Show selection form if no org selected, or if user wants to change
+                    if (empty($organization_id) || $show_change_org_form) {
+                        $need_org_selection = true;
+                    }
                 }
             } else {
                 // Error fetching organizations - show message
@@ -301,10 +307,14 @@ function zoho_dashboard_page() {
             
             <?php if ($connected): ?>
                 <?php if ($need_org_selection && !empty($organizations)): ?>
-                    <!-- Organization Selection Form -->
+                    <!-- Organization Selection/Change Form -->
                     <div style="background: #fff3cd; border: 1px solid #ffc107; padding: 15px; margin-bottom: 15px; border-radius: 4px;">
-                        <h3 style="margin-top: 0; color: #856404;">Select Organization</h3>
+                        <h3 style="margin-top: 0; color: #856404;"><?php echo $organization_id ? 'Change Organization' : 'Select Organization'; ?></h3>
                         <p style="color: #856404; margin-bottom: 15px;">Your Zoho account has access to multiple organizations. Please select which organization to use:</p>
+                        <?php if ($organization_id): ?>
+                            <p style="color: #856404; margin-bottom: 15px;"><strong>Current Organization ID:</strong> <?php echo esc_html($organization_id); ?></p>
+                            <p style="color: #dc3545; margin-bottom: 15px;"><strong>⚠️ Warning:</strong> Changing organization will use the new organization's data for all sync operations. Make sure you want to switch before proceeding.</p>
+                        <?php endif; ?>
                         <form method="post" action="">
                             <?php wp_nonce_field('zoho_select_organization'); ?>
                             <table class="form-table">
@@ -314,7 +324,7 @@ function zoho_dashboard_page() {
                                         <select name="organization_id" id="organization_id" class="regular-text" required>
                                             <option value="">-- Select Organization --</option>
                                             <?php foreach ($organizations as $org): ?>
-                                                <option value="<?php echo esc_attr($org['organization_id']); ?>">
+                                                <option value="<?php echo esc_attr($org['organization_id']); ?>" <?php selected($organization_id, $org['organization_id']); ?>>
                                                     <?php echo esc_html($org['name']); ?> (<?php echo esc_html($org['organization_id']); ?>)
                                                 </option>
                                             <?php endforeach; ?>
@@ -323,7 +333,10 @@ function zoho_dashboard_page() {
                                 </tr>
                             </table>
                             <p class="submit">
-                                <input type="submit" name="zoho_select_organization" class="button button-primary" value="Select Organization">
+                                <input type="submit" name="zoho_select_organization" class="button button-primary" value="<?php echo $organization_id ? 'Change Organization' : 'Select Organization'; ?>">
+                                <?php if ($organization_id): ?>
+                                    <a href="<?php echo esc_url(admin_url('admin.php?page=zoho-sync')); ?>" class="button button-secondary">Cancel</a>
+                                <?php endif; ?>
                             </p>
                         </form>
                     </div>
@@ -331,6 +344,7 @@ function zoho_dashboard_page() {
                     <div style="margin-bottom: 15px;">
                         <p style="margin: 5px 0; color: #666;">
                             <strong>Organization ID:</strong> <?php echo esc_html($organization_id); ?>
+                            <a href="<?php echo esc_url(admin_url('admin.php?page=zoho-sync&change_org=1')); ?>" class="button button-small" style="margin-left: 10px;">Change Organization</a>
                         </p>
                         <p style="margin: 5px 0; color: #666;">
                             Access token will expire in <?php echo esc_html($expires_in); ?>.
