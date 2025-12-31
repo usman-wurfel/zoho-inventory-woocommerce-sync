@@ -328,7 +328,7 @@ function zoho_sync_single_order($order_id) {
                     'display_name' => $display_name
                 ));
                 
-                // Update user meta with billing info
+                // Update user meta with billing info (save to both first_name/last_name and billing_* fields)
                 if (!empty($first_name)) {
                     update_user_meta($user_id, 'first_name', $first_name);
                     update_user_meta($user_id, 'billing_first_name', $first_name);
@@ -345,6 +345,43 @@ function zoho_sync_single_order($order_id) {
                 if (!empty($order->get_billing_company())) {
                     update_user_meta($user_id, 'billing_company', $order->get_billing_company());
                 }
+                
+                // Save billing address fields for proper contact sync
+                if (!empty($order->get_billing_address_1())) {
+                    update_user_meta($user_id, 'billing_address_1', $order->get_billing_address_1());
+                }
+                if (!empty($order->get_billing_address_2())) {
+                    update_user_meta($user_id, 'billing_address_2', $order->get_billing_address_2());
+                }
+                if (!empty($order->get_billing_city())) {
+                    update_user_meta($user_id, 'billing_city', $order->get_billing_city());
+                }
+                if (!empty($order->get_billing_state())) {
+                    update_user_meta($user_id, 'billing_state', $order->get_billing_state());
+                }
+                if (!empty($order->get_billing_postcode())) {
+                    update_user_meta($user_id, 'billing_postcode', $order->get_billing_postcode());
+                }
+                if (!empty($order->get_billing_country())) {
+                    update_user_meta($user_id, 'billing_country', $order->get_billing_country());
+                }
+                
+                // Update WC_Customer object to ensure billing data is properly saved
+                $customer = new WC_Customer($user_id);
+                if (!empty($first_name)) {
+                    $customer->set_billing_first_name($first_name);
+                }
+                if (!empty($last_name)) {
+                    $customer->set_billing_last_name($last_name);
+                }
+                $customer->set_billing_email($billing_email);
+                if (!empty($order->get_billing_phone())) {
+                    $customer->set_billing_phone($order->get_billing_phone());
+                }
+                if (!empty($order->get_billing_company())) {
+                    $customer->set_billing_company($order->get_billing_company());
+                }
+                $customer->save();
                 
                 // Link order to this user
                 $order->set_customer_id($user_id);
@@ -447,6 +484,42 @@ function zoho_sync_single_order($order_id) {
             $order->update_meta_data('_zoho_org_id', $org_id);
         }
         $order->save();
+        
+        // If order status is "completed", mark invoice as "sent" and record payment in Zoho (same as manual sync)
+        $order_status = $order->get_status();
+        if ($order_status === 'completed') {
+            // First, mark invoice as sent (changes status from draft to sent)
+            $status_response = zoho_api_post('invoices/' . $zoho_invoice_id . '/status/sent', array());
+            
+            // Then record payment to mark invoice as paid
+            $order_total = floatval($order->get_total());
+            if ($order_total > 0) {
+                // Get invoice to check current balance
+                $invoice_response = zoho_api_get('invoices/' . $zoho_invoice_id);
+                if (!is_wp_error($invoice_response) && isset($invoice_response['invoice'])) {
+                    $invoice_data_check = $invoice_response['invoice'];
+                    $invoice_balance = isset($invoice_data_check['balance']) ? floatval($invoice_data_check['balance']) : $order_total;
+                    
+                    // Record payment for the invoice
+                    $payment_data = array(
+                        'customer_id' => (string)$zoho_customer_id,
+                        'payment_mode' => 'other', // Default payment mode, can be customized
+                        'amount' => $invoice_balance,
+                        'date' => date('Y-m-d'), // Payment date (today)
+                        'invoices' => array(
+                            array(
+                                'invoice_id' => $zoho_invoice_id,
+                                'amount_applied' => $invoice_balance
+                            )
+                        )
+                    );
+                    
+                    // Record payment
+                    $payment_response = zoho_api_post('customerpayments', $payment_data);
+                    // Note: We don't fail the sync if payment recording fails, as invoice was created/updated successfully
+                }
+            }
+        }
     }
     
     // Log the sync

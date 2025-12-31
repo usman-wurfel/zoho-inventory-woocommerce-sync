@@ -236,20 +236,6 @@ function zoho_dashboard_page() {
     }
     
     // Calculate token expiry time
-    // If redirected from OAuth callback (success), force clear cache and refresh values
-    if (isset($_GET['zoho_status']) && $_GET['zoho_status'] == 'success') {
-        wp_cache_delete('zoho_token_expires_at', 'options');
-        wp_cache_delete('zoho_access_token', 'options');
-        wp_cache_delete('zoho_refresh_token', 'options');
-    }
-    
-    // Clear cache first to ensure we get fresh expiry time (especially after OAuth callback)
-    wp_cache_delete('zoho_token_expires_at', 'options');
-    wp_cache_delete('zoho_access_token', 'options');
-    // Re-fetch fresh values after cache clear
-    $token_expires_at = get_option('zoho_token_expires_at', 0);
-    $connected = get_option('zoho_access_token');
-    
     $expires_in = '60 minutes'; // Default
     $is_token_expired = false;
     if ($connected && $token_expires_at > 0) {
@@ -261,11 +247,6 @@ function zoho_dashboard_page() {
             $is_token_expired = true;
             $expires_in = 'Your token has been expired, click refresh';
         }
-    } elseif ($connected && $token_expires_at == 0) {
-        // If connected but no expiry time set, set it to 1 hour from now
-        $token_expires_at = time() + 3600;
-        update_option('zoho_token_expires_at', $token_expires_at);
-        $expires_in = '60 minutes';
     }
     
     // Fetch organizations if connected (always fetch to show Change Organization button if multiple orgs exist)
