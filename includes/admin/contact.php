@@ -673,13 +673,42 @@ function zoho_sync_contacts_ajax_handler() {
    Helper Function: Build Contact Data from Order (Guest)
 ====================================================== */
 function zoho_build_contact_data_from_order($order) {
-    $first_name = $order->get_billing_first_name();
-    $last_name = $order->get_billing_last_name();
-    $contact_name = trim($first_name . ' ' . $last_name);
+    $first_name = trim($order->get_billing_first_name());
+    $last_name = trim($order->get_billing_last_name());
     
-    // Fallback to email if no name
+    // Build contact name - prioritize first_name + last_name
+    $contact_name = '';
+    if (!empty($first_name) && !empty($last_name)) {
+        $contact_name = trim($first_name . ' ' . $last_name);
+    } elseif (!empty($first_name)) {
+        $contact_name = $first_name;
+    } elseif (!empty($last_name)) {
+        $contact_name = $last_name;
+    }
+    
+    // If still no name, try getting from billing name field directly
     if (empty($contact_name)) {
-        $contact_name = $order->get_billing_email();
+        $billing_name = trim($order->get_formatted_billing_full_name());
+        if (!empty($billing_name)) {
+            $contact_name = $billing_name;
+        } else {
+            // Try meta data directly
+            $billing_name_meta = $order->get_meta('_billing_first_name') . ' ' . $order->get_meta('_billing_last_name');
+            $billing_name_meta = trim($billing_name_meta);
+            if (!empty($billing_name_meta)) {
+                $contact_name = $billing_name_meta;
+            }
+        }
+    }
+    
+    // Fallback to company name or email if still no name
+    if (empty($contact_name)) {
+        $company = trim($order->get_billing_company());
+        if (!empty($company)) {
+            $contact_name = $company;
+        } else {
+            $contact_name = $order->get_billing_email();
+        }
     }
 
     $billing_email = $order->get_billing_email();

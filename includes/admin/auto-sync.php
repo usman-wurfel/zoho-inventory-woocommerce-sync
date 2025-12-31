@@ -414,14 +414,35 @@ function zoho_sync_single_order($order_id) {
                 // Create contact data directly from order to bypass any WC_Customer loading issues
                 if (function_exists('zoho_build_contact_data_from_order')) {
                     $contact_data_direct = zoho_build_contact_data_from_order($order);
-                    if (!empty($contact_data_direct['contact_name']) && !empty($contact_data_direct['email'])) {
+                    // Ensure contact_name is not email (must be actual name)
+                    if (isset($contact_data_direct['contact_name']) && isset($contact_data_direct['email'])) {
+                        // If contact_name is same as email, rebuild it properly
+                        if ($contact_data_direct['contact_name'] === $contact_data_direct['email']) {
+                            $first_name = trim($order->get_billing_first_name());
+                            $last_name = trim($order->get_billing_last_name());
+                            if (!empty($first_name) || !empty($last_name)) {
+                                $contact_data_direct['contact_name'] = trim($first_name . ' ' . $last_name);
+                            }
+                        }
+                    }
+                    if (!empty($contact_data_direct['contact_name']) && $contact_data_direct['contact_name'] !== $contact_data_direct['email'] && !empty($contact_data_direct['email'])) {
                         // Check if contact already exists by email
                         $existing_contact_id = get_user_meta($user_id, '_zoho_contact_id', true);
                         
+                        // Ensure contact_name is properly set from order billing name (not email)
+                        $order_first_name = trim($order->get_billing_first_name());
+                        $order_last_name = trim($order->get_billing_last_name());
+                        if (!empty($order_first_name) || !empty($order_last_name)) {
+                            $proper_name = trim($order_first_name . ' ' . $order_last_name);
+                            if (!empty($proper_name)) {
+                                $contact_data_direct['contact_name'] = $proper_name;
+                            }
+                        }
+                        
                         if ($existing_contact_id) {
-                            // Update existing contact
+                            // Update existing contact with proper name
                             $contact_response = zoho_api_put('contacts/' . $existing_contact_id, $contact_data_direct);
-                            if (isset($response['code']) && $response['code'] == 1002) {
+                            if (isset($contact_response['code']) && $contact_response['code'] == 1002) {
                                 delete_user_meta($user_id, '_zoho_contact_id');
                                 $existing_contact_id = '';
                             }
@@ -436,6 +457,11 @@ function zoho_sync_single_order($order_id) {
                                     $found_email = isset($found_contact['email']) ? strtolower(trim($found_contact['email'])) : '';
                                     if ($found_email === strtolower(trim($contact_data_direct['email']))) {
                                         $existing_contact_id = $found_contact['contact_id'];
+                                        // Force update with proper name from order
+                                        $contact_data_direct['contact_name'] = trim($order_first_name . ' ' . $order_last_name);
+                                        if (empty($contact_data_direct['contact_name'])) {
+                                            $contact_data_direct['contact_name'] = $order->get_formatted_billing_full_name();
+                                        }
                                         zoho_api_put('contacts/' . $existing_contact_id, $contact_data_direct);
                                         break;
                                     }
@@ -445,6 +471,14 @@ function zoho_sync_single_order($order_id) {
                         
                         // Create new contact if not found
                         if (empty($existing_contact_id)) {
+                            // Ensure name is set properly before creating
+                            $contact_data_direct['contact_name'] = trim($order_first_name . ' ' . $order_last_name);
+                            if (empty($contact_data_direct['contact_name'])) {
+                                $contact_data_direct['contact_name'] = $order->get_formatted_billing_full_name();
+                            }
+                            if (empty($contact_data_direct['contact_name']) || $contact_data_direct['contact_name'] === $contact_data_direct['email']) {
+                                $contact_data_direct['contact_name'] = trim($order_first_name . ' ' . $order_last_name);
+                            }
                             $contact_response = zoho_api_post('contacts', $contact_data_direct);
                             if (!is_wp_error($contact_response) && isset($contact_response['contact']['contact_id'])) {
                                 $existing_contact_id = $contact_response['contact']['contact_id'];
@@ -479,7 +513,32 @@ function zoho_sync_single_order($order_id) {
         // Otherwise, try to sync using order data (more reliable than WC_Customer object)
         if (function_exists('zoho_build_contact_data_from_order')) {
             $contact_data_from_order = zoho_build_contact_data_from_order($order);
-            if (!empty($contact_data_from_order['contact_name']) && !empty($contact_data_from_order['email'])) {
+            // Ensure contact_name is not email (must be actual name)
+            if (isset($contact_data_from_order['contact_name']) && isset($contact_data_from_order['email'])) {
+                // If contact_name is same as email, rebuild it properly
+                if ($contact_data_from_order['contact_name'] === $contact_data_from_order['email']) {
+                    $first_name = trim($order->get_billing_first_name());
+                    $last_name = trim($order->get_billing_last_name());
+                    if (!empty($first_name) || !empty($last_name)) {
+                        $contact_data_from_order['contact_name'] = trim($first_name . ' ' . $last_name);
+                    }
+                }
+            }
+            if (!empty($contact_data_from_order['contact_name']) && $contact_data_from_order['contact_name'] !== $contact_data_from_order['email'] && !empty($contact_data_from_order['email'])) {
+                // Force contact_name from order billing name (not email)
+                $order_first_name = trim($order->get_billing_first_name());
+                $order_last_name = trim($order->get_billing_last_name());
+                if (!empty($order_first_name) || !empty($order_last_name)) {
+                    $proper_name = trim($order_first_name . ' ' . $order_last_name);
+                    if (!empty($proper_name)) {
+                        $contact_data_from_order['contact_name'] = $proper_name;
+                    }
+                }
+                // Fallback to formatted billing name
+                if (empty($contact_data_from_order['contact_name']) || $contact_data_from_order['contact_name'] === $contact_data_from_order['email']) {
+                    $contact_data_from_order['contact_name'] = $order->get_formatted_billing_full_name();
+                }
+                
                 // Search by email first
                 $search_response = zoho_api_get('contacts?email=' . urlencode($contact_data_from_order['email']));
                 $found_contact_id = '';
@@ -488,7 +547,11 @@ function zoho_sync_single_order($order_id) {
                         $found_email = isset($found_contact['email']) ? strtolower(trim($found_contact['email'])) : '';
                         if ($found_email === strtolower(trim($contact_data_from_order['email']))) {
                             $found_contact_id = $found_contact['contact_id'];
-                            // Update existing contact with correct name from order
+                            // Force update with proper name from order
+                            $contact_data_from_order['contact_name'] = trim($order_first_name . ' ' . $order_last_name);
+                            if (empty($contact_data_from_order['contact_name'])) {
+                                $contact_data_from_order['contact_name'] = $order->get_formatted_billing_full_name();
+                            }
                             zoho_api_put('contacts/' . $found_contact_id, $contact_data_from_order);
                             break;
                         }
@@ -497,6 +560,15 @@ function zoho_sync_single_order($order_id) {
                 
                 // Create new contact if not found
                 if (empty($found_contact_id)) {
+                    // Ensure name is properly set before creating
+                    $contact_data_from_order['contact_name'] = trim($order_first_name . ' ' . $order_last_name);
+                    if (empty($contact_data_from_order['contact_name'])) {
+                        $contact_data_from_order['contact_name'] = $order->get_formatted_billing_full_name();
+                    }
+                    // Final check - don't use email as name
+                    if (empty($contact_data_from_order['contact_name']) || $contact_data_from_order['contact_name'] === $contact_data_from_order['email']) {
+                        $contact_data_from_order['contact_name'] = trim($order_first_name . ' ' . $order_last_name);
+                    }
                     $create_response = zoho_api_post('contacts', $contact_data_from_order);
                     if (!is_wp_error($create_response) && isset($create_response['contact']['contact_id'])) {
                         $found_contact_id = $create_response['contact']['contact_id'];
