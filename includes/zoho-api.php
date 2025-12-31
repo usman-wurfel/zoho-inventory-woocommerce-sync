@@ -241,6 +241,60 @@ function zoho_api_put($endpoint, $data, $retry_on_auth_error = true) {
     return $result;
 }
 
+function zoho_api_delete($endpoint, $retry_on_auth_error = true) {
+    $token = zoho_get_access_token();
+    $org_id = zoho_get_organization_id();
+    
+    if (empty($token)) {
+        // Try to refresh token first
+        if (zoho_refresh_access_token()) {
+            $token = get_option('zoho_access_token');
+        } else {
+            return ['error' => 'No access token found. Please connect to Zoho first.', 'code' => 57];
+        }
+    }
+    
+    $url = 'https://www.zohoapis.com/inventory/v1/' . $endpoint;
+    if (!empty($org_id) && strpos($endpoint, 'organization_id') === false) {
+        $url .= (strpos($endpoint, '?') !== false ? '&' : '?') . 'organization_id=' . $org_id;
+    }
+
+    $response = wp_remote_request($url, [
+        'method' => 'DELETE',
+        'headers' => [
+            'Authorization' => 'Zoho-oauthtoken ' . $token,
+            'Content-Type' => 'application/json'
+        ],
+        'timeout' => 30
+    ]);
+    
+    if (is_wp_error($response)) {
+        return $response;
+    }
+    
+    $body = wp_remote_retrieve_body($response);
+    $result = json_decode($body, true);
+    
+    if (json_last_error() !== JSON_ERROR_NONE) {
+        return ['error' => 'Failed to parse API response: ' . json_last_error_msg()];
+    }
+    
+    // Check for 6024 error - multiple organizations, need to select one
+    if (isset($result['code']) && $result['code'] == 6024) {
+        // Don't retry, just return the error
+        return $result;
+    }
+    
+    // If authorization error and retry allowed, refresh token and retry
+    if (zoho_is_auth_error($result) && $retry_on_auth_error) {
+        if (zoho_refresh_access_token()) {
+            return zoho_api_delete($endpoint, false);
+        }
+    }
+    
+    return $result;
+}
+
 /**
  * Fetch list of organizations from Zoho Inventory
  * Returns array of organizations or error

@@ -506,7 +506,35 @@ function zoho_delete_item($zoho_item_id) {
         return false;
     }
     
-    $response = zoho_api_put('items/' . $zoho_item_id . '/active', array('is_active' => false));
+    // First, try to get item details to check stock
+    $item_details = zoho_api_get('items/' . $zoho_item_id);
+    
+    // Get inventory adjustments for this item
+    $adjustments = zoho_api_get('inventoryadjustments?item_id=' . $zoho_item_id);
+    
+    // If there are stock entries/adjustments, delete them first
+    if (!is_wp_error($adjustments) && isset($adjustments['inventoryadjustments']) && is_array($adjustments['inventoryadjustments'])) {
+        foreach ($adjustments['inventoryadjustments'] as $adjustment) {
+            if (isset($adjustment['adjustment_id'])) {
+                // Delete each inventory adjustment
+                zoho_api_delete('inventoryadjustments/' . $adjustment['adjustment_id']);
+            }
+        }
+    }
+    
+    // Also check for stock transfers or other transactions
+    // For now, try to deactivate the item first (safer approach)
+    $deactivate_response = zoho_api_put('items/' . $zoho_item_id, array('is_active' => false));
+    
+    // Then try to delete the item
+    $response = zoho_api_delete('items/' . $zoho_item_id);
+    
+    // If delete fails but deactivate succeeded, log as deactivated instead
+    if ((isset($response['error']) || (isset($response['code']) && $response['code'] != 0)) && 
+        (!isset($deactivate_response['error']) && (!isset($deactivate_response['code']) || $deactivate_response['code'] == 0))) {
+        // Item was deactivated but not deleted (probably has dependencies)
+        $response = array_merge($response, array('deactivated' => true, 'message' => 'Item deactivated (cannot be deleted due to existing transactions)'));
+    }
     
     // Log the deletion attempt
     zoho_add_detailed_log(
