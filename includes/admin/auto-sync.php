@@ -506,9 +506,74 @@ function zoho_delete_item($zoho_item_id) {
         return false;
     }
     
-    // First, try to get item details to check stock
+    // First, get item details to check if it has opening stock
     $item_details = zoho_api_get('items/' . $zoho_item_id);
+    $has_opening_stock = false;
     
+    if (!is_wp_error($item_details) && isset($item_details['item'])) {
+        $item = $item_details['item'];
+        // Check if item has opening stock (initial_stock > 0 or stock_on_hand > 0)
+        $initial_stock = isset($item['initial_stock']) ? intval($item['initial_stock']) : 0;
+        $stock_on_hand = isset($item['stock_on_hand']) ? intval($item['stock_on_hand']) : 0;
+        
+        if ($initial_stock > 0 || $stock_on_hand > 0) {
+            $has_opening_stock = true;
+        }
+    }
+    
+    // If item has opening stock, just deactivate it (don't try to delete)
+    if ($has_opening_stock) {
+        // Use status field to deactivate (correct way for Zoho - is_active field doesn't work)
+        $deactivate_response = zoho_api_put('items/' . $zoho_item_id, array('status' => 'inactive'));
+        
+        // Verify deactivate was successful
+        $deactivate_success = false;
+        if (!is_wp_error($deactivate_response)) {
+            if (isset($deactivate_response['code']) && $deactivate_response['code'] == 0) {
+                if (isset($deactivate_response['item']['status']) && strtolower($deactivate_response['item']['status']) === 'inactive') {
+                    $deactivate_success = true;
+                }
+            }
+        }
+        
+        // Verify by fetching item again
+        if ($deactivate_success) {
+            sleep(1);
+            $verify_item = zoho_api_get('items/' . $zoho_item_id);
+            if (!is_wp_error($verify_item) && isset($verify_item['item']['status'])) {
+                if (strtolower($verify_item['item']['status']) !== 'inactive') {
+                    $deactivate_success = false;
+                }
+            }
+        }
+        
+        // Return deactivate response
+        $response = array(
+            'code' => $deactivate_success ? 0 : (isset($deactivate_response['code']) ? $deactivate_response['code'] : 1),
+            'message' => $deactivate_success ? 'Item deactivated successfully (has opening stock, cannot be deleted)' : (isset($deactivate_response['message']) ? $deactivate_response['message'] : 'Failed to deactivate item'),
+            'deactivated' => $deactivate_success,
+            'has_opening_stock' => true
+        );
+        
+        if (!$deactivate_success && isset($deactivate_response)) {
+            $response['deactivate_response'] = $deactivate_response;
+        }
+        
+        // Log and return
+        zoho_add_detailed_log(
+            'item',
+            'product',
+            0,
+            'items-inventory',
+            $zoho_item_id,
+            json_encode(array('action' => 'deactivate', 'item_id' => $zoho_item_id, 'reason' => 'has_opening_stock')),
+            json_encode($response)
+        );
+        
+        return $deactivate_success;
+    }
+    
+    // If no opening stock, try to delete normally
     // Get inventory adjustments for this item
     $adjustments = zoho_api_get('inventoryadjustments?item_id=' . $zoho_item_id);
     
@@ -522,73 +587,49 @@ function zoho_delete_item($zoho_item_id) {
         }
     }
     
-    // Also check for stock transfers or other transactions
-    // Try to deactivate the item first (safer approach) before deleting
-    $deactivate_response = zoho_api_put('items/' . $zoho_item_id, array('is_active' => false));
-    
-    // Verify if deactivate was actually successful - check response properly
-    $deactivate_success = false;
-    if (!is_wp_error($deactivate_response)) {
-        // Zoho API returns code 0 for success
-        if (isset($deactivate_response['code']) && $deactivate_response['code'] == 0) {
-            // Also verify item exists in response
-            if (isset($deactivate_response['item'])) {
-                $deactivate_success = true;
-            }
-        } elseif (!isset($deactivate_response['code']) && isset($deactivate_response['item'])) {
-            // Some responses don't have code but have item object
-            $deactivate_success = true;
-        }
-    }
-    
-    // If deactivate appeared successful, verify by fetching the item again to confirm
-    if ($deactivate_success) {
-        sleep(1); // Wait for API to process
-        $verify_item = zoho_api_get('items/' . $zoho_item_id);
-        if (!is_wp_error($verify_item) && isset($verify_item['item'])) {
-            // Check if item is actually inactive (check both status and is_active fields)
-            $item_status = isset($verify_item['item']['status']) ? strtolower($verify_item['item']['status']) : '';
-            $is_active = isset($verify_item['item']['is_active']) ? $verify_item['item']['is_active'] : true;
-            
-            if ($item_status === 'inactive' || $is_active === false) {
-                $deactivate_success = true; // Confirmed deactivated
-            } else {
-                // Item is still active - deactivate didn't actually work
-                $deactivate_success = false;
-            }
-        } else {
-            // Couldn't verify item - assume deactivate didn't work to be safe
-            $deactivate_success = false;
-        }
-    }
-    
-    // Then try to delete the item
+    // Try to delete the item
     $response = zoho_api_delete('items/' . $zoho_item_id);
     
     // Check if delete was successful
     $delete_success = !is_wp_error($response) && (!isset($response['error']) && (!isset($response['code']) || $response['code'] == 0));
     
-    // If delete fails, check what happened
-    if (!$delete_success) {
+    // If delete fails with opening stock error, try to deactivate instead
+    if (!$delete_success && isset($response['message']) && stripos($response['message'], 'opening stock') !== false) {
+        // Delete failed due to opening stock - deactivate instead using status field
+        $deactivate_response = zoho_api_put('items/' . $zoho_item_id, array('status' => 'inactive'));
+        
+        // Verify if deactivate was actually successful - check response properly
+        $deactivate_success = false;
+        if (!is_wp_error($deactivate_response)) {
+            // Zoho API returns code 0 for success
+            if (isset($deactivate_response['code']) && $deactivate_response['code'] == 0) {
+                // Check if status is actually inactive in response
+                if (isset($deactivate_response['item']['status']) && strtolower($deactivate_response['item']['status']) === 'inactive') {
+                    $deactivate_success = true;
+                }
+            }
+        }
+        
+        // Verify by fetching item again
         if ($deactivate_success) {
-            // Item was successfully deactivated and verified
-            $response = array(
-                'code' => isset($response['code']) ? $response['code'] : 2064,
-                'message' => 'Item deactivated successfully (cannot be deleted due to existing transactions)',
-                'deactivated' => true,
-                'delete_error' => isset($response['message']) ? $response['message'] : 'Delete failed',
-                'delete_code' => isset($response['code']) ? $response['code'] : 0
-            );
-        } else {
-            // Deactivate failed - don't claim it was deactivated
-            $response = array(
-                'code' => isset($response['code']) ? $response['code'] : 0,
-                'message' => isset($response['message']) ? $response['message'] : 'Failed to delete item',
-                'deactivated' => false,
-                'deactivate_attempted' => true,
-                'deactivate_response' => $deactivate_response,
-                'delete_error' => isset($response['message']) ? $response['message'] : 'Delete failed'
-            );
+            sleep(1);
+            $verify_item = zoho_api_get('items/' . $zoho_item_id);
+            if (!is_wp_error($verify_item) && isset($verify_item['item']['status'])) {
+                if (strtolower($verify_item['item']['status']) !== 'inactive') {
+                    $deactivate_success = false;
+                }
+            }
+        }
+        
+        $response = array(
+            'code' => $deactivate_success ? 0 : (isset($response['code']) ? $response['code'] : 1),
+            'message' => $deactivate_success ? 'Item deactivated successfully (has opening stock, cannot be deleted)' : (isset($response['message']) ? $response['message'] : 'Failed to deactivate item'),
+            'deactivated' => $deactivate_success,
+            'delete_error' => isset($response['message']) ? $response['message'] : 'Delete failed'
+        );
+        
+        if (!$deactivate_success && isset($deactivate_response)) {
+            $response['deactivate_response'] = $deactivate_response;
         }
     }
     
