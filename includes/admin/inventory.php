@@ -827,6 +827,11 @@ function zoho_sync_woo_to_zoho($offset, $total, $synced, $created, $updated) {
         // Save Zoho Item ID to product meta for tracking (if successful)
         if (!empty($zoho_object_id) && !isset($response['error']) && (!isset($response['code']) || $response['code'] == 0)) {
             update_post_meta($product_id, '_zoho_item_id', $zoho_object_id);
+            // Save organization_id with item
+            $org_id = get_option('zoho_organization_id', '');
+            if (!empty($org_id)) {
+                update_post_meta($product_id, '_zoho_org_id', $org_id);
+            }
         }
         
         zoho_add_detailed_log(

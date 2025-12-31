@@ -56,14 +56,35 @@ function zoho_add_sync_log($total,$synced,$synced_skus,$pending_skus,$created=0,
 /* ======================================================
    HELPER: Add Detailed Log Entry
 ====================================================== */
+/* ======================================================
+   HELPER: Filter logs by current organization_id
+====================================================== */
+function zoho_filter_logs_by_org($logs) {
+    $current_org_id = get_option('zoho_organization_id', '');
+    if (empty($current_org_id)) {
+        // If no organization selected, return all logs (backward compatibility)
+        return $logs;
+    }
+    
+    return array_filter($logs, function($log) use ($current_org_id) {
+        // If log doesn't have organization_id (old logs), include it for backward compatibility
+        // Otherwise, only include logs matching current organization
+        return !isset($log['organization_id']) || $log['organization_id'] === $current_org_id;
+    });
+}
+
 function zoho_add_detailed_log($type, $woo_object, $woo_object_id, $zoho_object, $zoho_object_id, $request, $response) {
     $logs = get_option('zoho_detailed_logs', []);
+    
+    // Get current organization_id
+    $org_id = get_option('zoho_organization_id', '');
     
     $new_log = array(
         'id' => uniqid('log_'),
         'type' => $type, // 'item', 'invoice', 'contact'
         'time' => current_time('d-m-Y h:i A'),
         'timestamp' => time(), // Unix timestamp for filtering
+        'organization_id' => $org_id, // Save organization_id with log
         'woo_object' => $woo_object,
         'woo_object_id' => $woo_object_id,
         'zoho_object' => $zoho_object,
@@ -451,6 +472,11 @@ function zoho_retry_sync_handler() {
                 $action = 'created';
                 if (isset($response['contact']['contact_id'])) {
                     update_user_meta($woo_id, '_zoho_contact_id', $response['contact']['contact_id']);
+                    // Save organization_id with contact
+                    $org_id = get_option('zoho_organization_id', '');
+                    if (!empty($org_id)) {
+                        update_user_meta($woo_id, '_zoho_org_id', $org_id);
+                    }
                 }
             }
             
@@ -461,10 +487,20 @@ function zoho_retry_sync_handler() {
             if (isset($response['contact']['contact_id'])) {
                 $zoho_contact_id = $response['contact']['contact_id'];
                 update_user_meta($woo_id, '_zoho_contact_id', $zoho_contact_id);
+                // Save organization_id with contact
+                $org_id = get_option('zoho_organization_id', '');
+                if (!empty($org_id)) {
+                    update_user_meta($woo_id, '_zoho_org_id', $org_id);
+                }
             } elseif (!empty($existing_contact_id)) {
                 // If update was successful, use the existing ID
                 $zoho_contact_id = $existing_contact_id;
                 update_user_meta($woo_id, '_zoho_contact_id', $zoho_contact_id);
+                // Save organization_id with contact
+                $org_id = get_option('zoho_organization_id', '');
+                if (!empty($org_id)) {
+                    update_user_meta($woo_id, '_zoho_org_id', $org_id);
+                }
             }
             zoho_add_detailed_log('contact', 'customer', $woo_id, 'contact', $zoho_contact_id, json_encode($contact_data), json_encode($response));
             
@@ -514,8 +550,9 @@ function zoho_retry_all_failed_handler() {
         return;
     }
     
-    // Get all failed logs of this type
+    // Get all failed logs of this type, filtered by organization
     $all_logs = get_option('zoho_detailed_logs', []);
+    $all_logs = zoho_filter_logs_by_org($all_logs);
     $failed_logs = array_filter($all_logs, function($log) use ($type) {
         return ($log['type'] ?? '') === $type && !zoho_is_log_successful($log);
     });
@@ -744,10 +781,20 @@ function zoho_retry_all_failed_handler() {
                 if (isset($response['contact']['contact_id'])) {
                     $zoho_contact_id = $response['contact']['contact_id'];
                     update_user_meta($woo_id, '_zoho_contact_id', $zoho_contact_id);
+                // Save organization_id with contact
+                $org_id = get_option('zoho_organization_id', '');
+                if (!empty($org_id)) {
+                    update_user_meta($woo_id, '_zoho_org_id', $org_id);
+                }
                 } elseif (!empty($existing_contact_id)) {
                     // If update was successful, use the existing ID
                     $zoho_contact_id = $existing_contact_id;
                     update_user_meta($woo_id, '_zoho_contact_id', $zoho_contact_id);
+                // Save organization_id with contact
+                $org_id = get_option('zoho_organization_id', '');
+                if (!empty($org_id)) {
+                    update_user_meta($woo_id, '_zoho_org_id', $org_id);
+                }
                 }
                 zoho_add_detailed_log('contact', 'customer', $woo_id, 'contact', $zoho_contact_id, json_encode($contact_data), json_encode($response));
                 
@@ -955,6 +1002,7 @@ function zoho_render_logs_tab($type, $tab_name, $woo_object_default, $zoho_objec
     // View single log detail
     if (isset($_GET['view_log'])) {
         $logs = get_option('zoho_detailed_logs', []);
+        $logs = zoho_filter_logs_by_org($logs);
         $log_id = sanitize_text_field($_GET['view_log']);
         
         foreach ($logs as $log) {
@@ -1009,8 +1057,9 @@ function zoho_render_logs_tab($type, $tab_name, $woo_object_default, $zoho_objec
         return;
     }
     
-    // Get all logs and filter by type
+    // Get all logs, filter by organization first, then by type
     $all_logs = get_option('zoho_detailed_logs', []);
+    $all_logs = zoho_filter_logs_by_org($all_logs);
     $filtered_logs = array_values(array_filter($all_logs, function($log) use ($type) {
         return ($log['type'] ?? '') === $type;
     }));

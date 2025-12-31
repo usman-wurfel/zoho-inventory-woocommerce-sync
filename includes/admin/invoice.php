@@ -362,6 +362,11 @@ function zoho_sync_orders_to_invoices($offset, $total, $synced, $created, $updat
                 // If found, save to meta and get item data
                 if ($zoho_item_id && isset($items_map[$zoho_item_id])) {
                     update_post_meta($product_id, '_zoho_item_id', $zoho_item_id);
+                    // Save organization_id with item
+                    $org_id = get_option('zoho_organization_id', '');
+                    if (!empty($org_id)) {
+                        update_post_meta($product_id, '_zoho_org_id', $org_id);
+                    }
                     $zoho_item = $items_map[$zoho_item_id];
                 } else {
                     // Not found in bulk maps - track as skipped
@@ -491,6 +496,11 @@ function zoho_sync_orders_to_invoices($offset, $total, $synced, $created, $updat
         if (isset($response['invoice']['invoice_id'])) {
             $zoho_invoice_id = $response['invoice']['invoice_id'];
             $order->update_meta_data('_zoho_invoice_id', $zoho_invoice_id);
+            // Save organization_id with invoice
+            $org_id = get_option('zoho_organization_id', '');
+            if (!empty($org_id)) {
+                $order->update_meta_data('_zoho_org_id', $org_id);
+            }
             $order->save();
             
             // If order status is "completed", mark invoice as "sent" and record payment in Zoho
@@ -949,6 +959,11 @@ function zoho_sync_invoices_to_orders($offset, $total, $synced, $created, $updat
             
             // Save Zoho invoice ID
             $order->update_meta_data('_zoho_invoice_id', $zoho_invoice_id);
+            // Save organization_id with invoice
+            $org_id = get_option('zoho_organization_id', '');
+            if (!empty($org_id)) {
+                $order->update_meta_data('_zoho_org_id', $org_id);
+            }
             $order->save();
             if (!empty($reference_number)) {
                 $order->update_meta_data('_zoho_reference_number', $reference_number);

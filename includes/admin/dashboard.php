@@ -10,9 +10,31 @@ if (!defined('ABSPATH')) exit;
 ====================================================== */
 function zoho_get_synced_invoices_count() {
     global $wpdb;
+    $current_org_id = get_option('zoho_organization_id', '');
     
     // Try WooCommerce function first (HPOS compatible)
     if (function_exists('wc_get_orders')) {
+        $meta_query = array(
+            array(
+                'key' => '_zoho_invoice_id',
+                'compare' => 'EXISTS'
+            ),
+            array(
+                'key' => '_zoho_invoice_id',
+                'value' => '',
+                'compare' => '!='
+            )
+        );
+        
+        // Add organization filter if set
+        if (!empty($current_org_id)) {
+            $meta_query[] = array(
+                'key' => '_zoho_org_id',
+                'value' => $current_org_id,
+                'compare' => '='
+            );
+        }
+        
         $orders = wc_get_orders(array(
             'limit' => 1,
             'return' => 'ids',
@@ -26,17 +48,7 @@ function zoho_get_synced_invoices_count() {
                 'limit' => -1,
                 'return' => 'ids',
                 'status' => 'any',
-                'meta_query' => array(
-                    array(
-                        'key' => '_zoho_invoice_id',
-                        'compare' => 'EXISTS'
-                    ),
-                    array(
-                        'key' => '_zoho_invoice_id',
-                        'value' => '',
-                        'compare' => '!='
-                    )
-                )
+                'meta_query' => $meta_query
             ));
             return count($all_orders);
         }
@@ -49,25 +61,55 @@ function zoho_get_synced_invoices_count() {
     }
     
     if ($hpos_enabled) {
-        return intval($wpdb->get_var("
-            SELECT COUNT(DISTINCT om.order_id) 
-            FROM {$wpdb->prefix}wc_orders_meta om
-            INNER JOIN {$wpdb->prefix}wc_orders o ON om.order_id = o.id
-            WHERE om.meta_key = '_zoho_invoice_id' 
-            AND om.meta_value != '' 
-            AND o.type = 'shop_order'
-            AND o.status NOT IN ('trash', 'auto-draft')
-        "));
+        if (!empty($current_org_id)) {
+            return intval($wpdb->get_var($wpdb->prepare("
+                SELECT COUNT(DISTINCT om1.order_id) 
+                FROM {$wpdb->prefix}wc_orders_meta om1
+                INNER JOIN {$wpdb->prefix}wc_orders o ON om1.order_id = o.id
+                INNER JOIN {$wpdb->prefix}wc_orders_meta om2 ON om1.order_id = om2.order_id
+                WHERE om1.meta_key = '_zoho_invoice_id' 
+                AND om1.meta_value != '' 
+                AND om2.meta_key = '_zoho_org_id'
+                AND om2.meta_value = %s
+                AND o.type = 'shop_order'
+                AND o.status NOT IN ('trash', 'auto-draft')
+            ", $current_org_id)));
+        } else {
+            return intval($wpdb->get_var("
+                SELECT COUNT(DISTINCT om.order_id) 
+                FROM {$wpdb->prefix}wc_orders_meta om
+                INNER JOIN {$wpdb->prefix}wc_orders o ON om.order_id = o.id
+                WHERE om.meta_key = '_zoho_invoice_id' 
+                AND om.meta_value != '' 
+                AND o.type = 'shop_order'
+                AND o.status NOT IN ('trash', 'auto-draft')
+            "));
+        }
     } else {
-        return intval($wpdb->get_var("
-            SELECT COUNT(DISTINCT pm.post_id) 
-            FROM {$wpdb->postmeta} pm
-            INNER JOIN {$wpdb->posts} p ON pm.post_id = p.ID
-            WHERE pm.meta_key = '_zoho_invoice_id' 
-            AND pm.meta_value != '' 
-            AND p.post_type = 'shop_order'
-            AND p.post_status NOT IN ('trash', 'auto-draft')
-        "));
+        if (!empty($current_org_id)) {
+            return intval($wpdb->get_var($wpdb->prepare("
+                SELECT COUNT(DISTINCT pm1.post_id) 
+                FROM {$wpdb->postmeta} pm1
+                INNER JOIN {$wpdb->posts} p ON pm1.post_id = p.ID
+                INNER JOIN {$wpdb->postmeta} pm2 ON pm1.post_id = pm2.post_id
+                WHERE pm1.meta_key = '_zoho_invoice_id' 
+                AND pm1.meta_value != '' 
+                AND pm2.meta_key = '_zoho_org_id'
+                AND pm2.meta_value = %s
+                AND p.post_type = 'shop_order'
+                AND p.post_status NOT IN ('trash', 'auto-draft')
+            ", $current_org_id)));
+        } else {
+            return intval($wpdb->get_var("
+                SELECT COUNT(DISTINCT pm.post_id) 
+                FROM {$wpdb->postmeta} pm
+                INNER JOIN {$wpdb->posts} p ON pm.post_id = p.ID
+                WHERE pm.meta_key = '_zoho_invoice_id' 
+                AND pm.meta_value != '' 
+                AND p.post_type = 'shop_order'
+                AND p.post_status NOT IN ('trash', 'auto-draft')
+            "));
+        }
     }
 }
 
@@ -228,48 +270,127 @@ function zoho_dashboard_page() {
     }
 
     // Get sync statistics from product/customer meta (unique Zoho IDs)
+    // Filter by current organization_id
     global $wpdb;
+    $current_org_id = get_option('zoho_organization_id', '');
     
-    // Count unique Zoho item IDs linked (distinct _zoho_item_id values)
-    $items_linked = $wpdb->get_var($wpdb->prepare("
-        SELECT COUNT(DISTINCT meta_value) 
-        FROM {$wpdb->postmeta} 
-        WHERE meta_key = %s 
-        AND meta_value != '' 
-        AND meta_value IS NOT NULL
-    ", '_zoho_item_id'));
+    // Build organization filter SQL
+    $org_filter_sql = '';
+    $org_filter_params = array();
+    if (!empty($current_org_id)) {
+        // For postmeta: Join with _zoho_org_id meta
+        $org_filter_sql_posts = " AND EXISTS (
+            SELECT 1 FROM {$wpdb->postmeta} pm2 
+            WHERE pm2.post_id = {$wpdb->postmeta}.post_id 
+            AND pm2.meta_key = '_zoho_org_id' 
+            AND pm2.meta_value = %s
+        )";
+        // For usermeta: Join with _zoho_org_id meta
+        $org_filter_sql_users = " AND EXISTS (
+            SELECT 1 FROM {$wpdb->usermeta} um2 
+            WHERE um2.user_id = um.user_id 
+            AND um2.meta_key = '_zoho_org_id' 
+            AND um2.meta_value = %s
+        )";
+        $org_filter_params[] = $current_org_id;
+    }
     
-    // Count WooCommerce products that have _zoho_item_id (products linked)
-    $products_linked = $wpdb->get_var($wpdb->prepare("
-        SELECT COUNT(DISTINCT post_id) 
-        FROM {$wpdb->postmeta} 
-        WHERE meta_key = %s 
-        AND meta_value != '' 
-        AND meta_value IS NOT NULL
-    ", '_zoho_item_id'));
+    // Count unique Zoho item IDs linked (distinct _zoho_item_id values) for current org
+    if (!empty($current_org_id)) {
+        $items_linked = $wpdb->get_var($wpdb->prepare("
+            SELECT COUNT(DISTINCT pm1.meta_value) 
+            FROM {$wpdb->postmeta} pm1
+            INNER JOIN {$wpdb->postmeta} pm2 ON pm1.post_id = pm2.post_id
+            WHERE pm1.meta_key = %s 
+            AND pm1.meta_value != '' 
+            AND pm1.meta_value IS NOT NULL
+            AND pm2.meta_key = '_zoho_org_id'
+            AND pm2.meta_value = %s
+        ", '_zoho_item_id', $current_org_id));
+    } else {
+        $items_linked = $wpdb->get_var($wpdb->prepare("
+            SELECT COUNT(DISTINCT meta_value) 
+            FROM {$wpdb->postmeta} 
+            WHERE meta_key = %s 
+            AND meta_value != '' 
+            AND meta_value IS NOT NULL
+        ", '_zoho_item_id'));
+    }
     
-    // Count unique Zoho contact IDs linked (distinct _zoho_contact_id values)
-    $contacts_linked = $wpdb->get_var($wpdb->prepare("
-        SELECT COUNT(DISTINCT meta_value) 
-        FROM {$wpdb->usermeta} 
-        WHERE meta_key = %s 
-        AND meta_value != '' 
-        AND meta_value IS NOT NULL
-    ", '_zoho_contact_id'));
+    // Count WooCommerce products that have _zoho_item_id (products linked) for current org
+    if (!empty($current_org_id)) {
+        $products_linked = $wpdb->get_var($wpdb->prepare("
+            SELECT COUNT(DISTINCT pm1.post_id) 
+            FROM {$wpdb->postmeta} pm1
+            INNER JOIN {$wpdb->postmeta} pm2 ON pm1.post_id = pm2.post_id
+            WHERE pm1.meta_key = %s 
+            AND pm1.meta_value != '' 
+            AND pm1.meta_value IS NOT NULL
+            AND pm2.meta_key = '_zoho_org_id'
+            AND pm2.meta_value = %s
+        ", '_zoho_item_id', $current_org_id));
+    } else {
+        $products_linked = $wpdb->get_var($wpdb->prepare("
+            SELECT COUNT(DISTINCT post_id) 
+            FROM {$wpdb->postmeta} 
+            WHERE meta_key = %s 
+            AND meta_value != '' 
+            AND meta_value IS NOT NULL
+        ", '_zoho_item_id'));
+    }
     
-    // Count WooCommerce customers that have _zoho_contact_id (customers linked)
+    // Count unique Zoho contact IDs linked (distinct _zoho_contact_id values) for current org
+    if (!empty($current_org_id)) {
+        $contacts_linked = $wpdb->get_var($wpdb->prepare("
+            SELECT COUNT(DISTINCT um1.meta_value) 
+            FROM {$wpdb->usermeta} um1
+            INNER JOIN {$wpdb->usermeta} um2 ON um1.user_id = um2.user_id
+            WHERE um1.meta_key = %s 
+            AND um1.meta_value != '' 
+            AND um1.meta_value IS NOT NULL
+            AND um2.meta_key = '_zoho_org_id'
+            AND um2.meta_value = %s
+        ", '_zoho_contact_id', $current_org_id));
+    } else {
+        $contacts_linked = $wpdb->get_var($wpdb->prepare("
+            SELECT COUNT(DISTINCT meta_value) 
+            FROM {$wpdb->usermeta} 
+            WHERE meta_key = %s 
+            AND meta_value != '' 
+            AND meta_value IS NOT NULL
+        ", '_zoho_contact_id'));
+    }
+    
+    // Count WooCommerce customers that have _zoho_contact_id (customers linked) for current org
     // Only count users with customer role
-    $customers_linked = $wpdb->get_var("
-        SELECT COUNT(DISTINCT um.user_id) 
-        FROM {$wpdb->usermeta} um
-        INNER JOIN {$wpdb->users} u ON um.user_id = u.ID
-        INNER JOIN {$wpdb->usermeta} role_meta ON um.user_id = role_meta.user_id 
-            AND role_meta.meta_key = '{$wpdb->prefix}capabilities'
-            AND role_meta.meta_value LIKE '%customer%'
-        WHERE um.meta_key = '_zoho_contact_id' 
-        AND um.meta_value != '' 
-        AND um.meta_value IS NOT NULL
-    ");
+    if (!empty($current_org_id)) {
+        $customers_linked = $wpdb->get_var($wpdb->prepare("
+            SELECT COUNT(DISTINCT um1.user_id) 
+            FROM {$wpdb->usermeta} um1
+            INNER JOIN {$wpdb->users} u ON um1.user_id = u.ID
+            INNER JOIN {$wpdb->usermeta} role_meta ON um1.user_id = role_meta.user_id 
+                AND role_meta.meta_key = '{$wpdb->prefix}capabilities'
+                AND role_meta.meta_value LIKE '%%customer%%'
+            INNER JOIN {$wpdb->usermeta} um2 ON um1.user_id = um2.user_id
+            WHERE um1.meta_key = '_zoho_contact_id' 
+            AND um1.meta_value != '' 
+            AND um1.meta_value IS NOT NULL
+            AND um2.meta_key = '_zoho_org_id'
+            AND um2.meta_value = %s
+        ", $current_org_id));
+    } else {
+        $customers_linked = $wpdb->get_var("
+            SELECT COUNT(DISTINCT um.user_id) 
+            FROM {$wpdb->usermeta} um
+            INNER JOIN {$wpdb->users} u ON um.user_id = u.ID
+            INNER JOIN {$wpdb->usermeta} role_meta ON um.user_id = role_meta.user_id 
+                AND role_meta.meta_key = '{$wpdb->prefix}capabilities'
+                AND role_meta.meta_value LIKE '%customer%'
+            WHERE um.meta_key = '_zoho_contact_id' 
+            AND um.meta_value != '' 
+            AND um.meta_value IS NOT NULL
+        ");
+    }
     
     // Count total WooCommerce customers (with customer role only)
     $total_customers = $wpdb->get_var("

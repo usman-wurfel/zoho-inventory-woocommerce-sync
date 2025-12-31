@@ -481,6 +481,16 @@ function zoho_sync_contacts_ajax_handler() {
                         $response = zoho_api_put('contacts/' . $existing_contact_id, $contact_data);
                         $action = 'updated';
                         update_user_meta($customer_data['user_id'], '_zoho_contact_id', $existing_contact_id);
+                    // Save organization_id with contact
+                    $org_id = get_option('zoho_organization_id', '');
+                    if (!empty($org_id)) {
+                        update_user_meta($customer_data['user_id'], '_zoho_org_id', $org_id);
+                    }
+                        // Save organization_id with contact
+                        $org_id = get_option('zoho_organization_id', '');
+                        if (!empty($org_id)) {
+                            update_user_meta($customer_data['user_id'], '_zoho_org_id', $org_id);
+                        }
                         break;
                     }
                 }
@@ -491,6 +501,11 @@ function zoho_sync_contacts_ajax_handler() {
                     $response = zoho_api_put('contacts/' . $existing_contact_id, $contact_data);
                     $action = 'updated';
                     update_user_meta($customer_data['user_id'], '_zoho_contact_id', $existing_contact_id);
+                    // Save organization_id with contact
+                    $org_id = get_option('zoho_organization_id', '');
+                    if (!empty($org_id)) {
+                        update_user_meta($customer_data['user_id'], '_zoho_org_id', $org_id);
+                    }
                 }
             }
         }
@@ -513,6 +528,16 @@ function zoho_sync_contacts_ajax_handler() {
                                 $response = zoho_api_put('contacts/' . $existing_contact_id, $contact_data);
                                 $action = 'updated';
                                 update_user_meta($customer_data['user_id'], '_zoho_contact_id', $existing_contact_id);
+                    // Save organization_id with contact
+                    $org_id = get_option('zoho_organization_id', '');
+                    if (!empty($org_id)) {
+                        update_user_meta($customer_data['user_id'], '_zoho_org_id', $org_id);
+                    }
+                        // Save organization_id with contact
+                        $org_id = get_option('zoho_organization_id', '');
+                        if (!empty($org_id)) {
+                            update_user_meta($customer_data['user_id'], '_zoho_org_id', $org_id);
+                        }
                                 break;
                             }
                         }
@@ -522,6 +547,16 @@ function zoho_sync_contacts_ajax_handler() {
                             $response = zoho_api_put('contacts/' . $existing_contact_id, $contact_data);
                             $action = 'updated';
                             update_user_meta($customer_data['user_id'], '_zoho_contact_id', $existing_contact_id);
+                    // Save organization_id with contact
+                    $org_id = get_option('zoho_organization_id', '');
+                    if (!empty($org_id)) {
+                        update_user_meta($customer_data['user_id'], '_zoho_org_id', $org_id);
+                    }
+                        // Save organization_id with contact
+                        $org_id = get_option('zoho_organization_id', '');
+                        if (!empty($org_id)) {
+                            update_user_meta($customer_data['user_id'], '_zoho_org_id', $org_id);
+                        }
                         }
                     }
                 }
@@ -548,6 +583,11 @@ function zoho_sync_contacts_ajax_handler() {
         
         if (!empty($zoho_contact_id)) {
             update_user_meta($customer_data['user_id'], '_zoho_contact_id', $zoho_contact_id);
+            // Save organization_id with contact
+            $org_id = get_option('zoho_organization_id', '');
+            if (!empty($org_id)) {
+                update_user_meta($customer_data['user_id'], '_zoho_org_id', $org_id);
+            }
         }
 
         // Log the attempt
@@ -1072,6 +1112,11 @@ function zoho_sync_contacts_to_customers($offset, $total, $synced, $created, $up
         
         // Link to Zoho
         update_user_meta($user_id, '_zoho_contact_id', $zoho_contact_id);
+        // Save organization_id with contact
+        $org_id = get_option('zoho_organization_id', '');
+        if (!empty($org_id)) {
+            update_user_meta($user_id, '_zoho_org_id', $org_id);
+        }
         
         // Update display_name for WooCommerce to show customer name properly
         // Use billing name first (WooCommerce standard), then fallback to first_name/last_name
