@@ -283,19 +283,63 @@ function zoho_sync_single_order($order_id) {
     
     // Get customer
     $customer_id = $order->get_customer_id();
-    if (!$customer_id) {
-        return false; // Guest orders not supported for auto-sync
-    }
+    $zoho_customer_id = '';
     
-    // Get Zoho contact ID for customer
-    $zoho_customer_id = get_user_meta($customer_id, '_zoho_contact_id', true);
-    if (empty($zoho_customer_id)) {
-        // Try to sync customer first
-        zoho_sync_single_contact($customer_id);
+    if ($customer_id) {
+        // Registered customer - get or sync contact
         $zoho_customer_id = get_user_meta($customer_id, '_zoho_contact_id', true);
         if (empty($zoho_customer_id)) {
-            return false; // Customer not found in Zoho
+            // Try to sync customer first
+            zoho_sync_single_contact($customer_id);
+            $zoho_customer_id = get_user_meta($customer_id, '_zoho_contact_id', true);
         }
+    } else {
+        // Guest order - create/get contact from order billing info
+        // Use existing function that handles contact creation from order
+        if (function_exists('zoho_get_or_create_contact')) {
+            $zoho_customer_id = zoho_get_or_create_contact($order);
+        } else {
+            // Fallback: manual contact creation
+            $billing_email = $order->get_billing_email();
+            if (empty($billing_email)) {
+                return false; // Cannot sync without email
+            }
+            
+            // Check if contact already exists by email
+            $search_response = zoho_api_get('contacts?email=' . urlencode($billing_email));
+            if (!is_wp_error($search_response) && isset($search_response['contacts']) && !empty($search_response['contacts'])) {
+                // Find exact email match
+                foreach ($search_response['contacts'] as $found_contact) {
+                    $found_email = isset($found_contact['email']) ? strtolower(trim($found_contact['email'])) : '';
+                    if ($found_email === strtolower(trim($billing_email))) {
+                        $zoho_customer_id = $found_contact['contact_id'];
+                        break;
+                    }
+                }
+            }
+            
+            // If contact not found, create new one from order data
+            if (empty($zoho_customer_id)) {
+                $contact_data = zoho_build_contact_data_from_order($order);
+                if (!empty($contact_data['contact_name'])) {
+                    $create_response = zoho_api_post('contacts', $contact_data);
+                    if (!is_wp_error($create_response) && isset($create_response['contact']['contact_id'])) {
+                        $zoho_customer_id = $create_response['contact']['contact_id'];
+                        // Save organization_id with order (we don't have user_id for guests)
+                        $org_id = get_option('zoho_organization_id', '');
+                        if (!empty($org_id)) {
+                            $order->update_meta_data('_guest_zoho_org_id', $org_id);
+                            $order->save();
+                        }
+                    }
+                }
+            }
+        }
+    }
+    
+    // If still no contact ID, cannot sync order
+    if (empty($zoho_customer_id)) {
+        return false; // Customer/Contact not found in Zoho
     }
     
     // Build invoice data (simplified version) - use same format as manual sync
