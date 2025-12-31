@@ -660,9 +660,24 @@ function zoho_delete_invoice($zoho_invoice_id) {
         return false;
     }
     
-    // Note: Zoho doesn't allow deleting invoices, only voiding/cancelling
-    // We'll mark it as cancelled
-    $response = zoho_api_post('invoices/' . $zoho_invoice_id . '/status/cancelled', array());
+    // Try to delete invoice using DELETE method first
+    $response = zoho_api_delete('invoices/' . $zoho_invoice_id);
+    
+    // If delete fails, try to cancel/void the invoice instead
+    if (isset($response['error']) || (isset($response['code']) && $response['code'] != 0)) {
+        // Delete failed - try to cancel the invoice instead
+        $cancel_response = zoho_api_post('invoices/' . $zoho_invoice_id . '/status/cancelled', array());
+        
+        // If cancel worked, use that response
+        if (!isset($cancel_response['error']) && (!isset($cancel_response['code']) || $cancel_response['code'] == 0)) {
+            $response = array(
+                'code' => 0,
+                'message' => 'Invoice cancelled (delete not allowed, cancelled instead)',
+                'cancelled' => true,
+                'delete_error' => isset($response['message']) ? $response['message'] : 'Delete not allowed'
+            );
+        }
+    }
     
     zoho_add_detailed_log(
         'invoice',
@@ -690,8 +705,8 @@ function zoho_delete_contact($zoho_contact_id) {
         return false;
     }
     
-    // Delete contact
-    $response = zoho_api_put('contacts/' . $zoho_contact_id . '/active', array('is_active' => false));
+    // Delete contact using DELETE method
+    $response = zoho_api_delete('contacts/' . $zoho_contact_id);
     
     zoho_add_detailed_log(
         'contact',
