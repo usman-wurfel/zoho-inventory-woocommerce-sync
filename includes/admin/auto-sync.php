@@ -523,17 +523,73 @@ function zoho_delete_item($zoho_item_id) {
     }
     
     // Also check for stock transfers or other transactions
-    // For now, try to deactivate the item first (safer approach)
+    // Try to deactivate the item first (safer approach) before deleting
     $deactivate_response = zoho_api_put('items/' . $zoho_item_id, array('is_active' => false));
+    
+    // Verify if deactivate was actually successful - check response properly
+    $deactivate_success = false;
+    if (!is_wp_error($deactivate_response)) {
+        // Zoho API returns code 0 for success
+        if (isset($deactivate_response['code']) && $deactivate_response['code'] == 0) {
+            // Also verify item exists in response
+            if (isset($deactivate_response['item'])) {
+                $deactivate_success = true;
+            }
+        } elseif (!isset($deactivate_response['code']) && isset($deactivate_response['item'])) {
+            // Some responses don't have code but have item object
+            $deactivate_success = true;
+        }
+    }
+    
+    // If deactivate appeared successful, verify by fetching the item again to confirm
+    if ($deactivate_success) {
+        sleep(1); // Wait for API to process
+        $verify_item = zoho_api_get('items/' . $zoho_item_id);
+        if (!is_wp_error($verify_item) && isset($verify_item['item'])) {
+            // Check if item is actually inactive (check both status and is_active fields)
+            $item_status = isset($verify_item['item']['status']) ? strtolower($verify_item['item']['status']) : '';
+            $is_active = isset($verify_item['item']['is_active']) ? $verify_item['item']['is_active'] : true;
+            
+            if ($item_status === 'inactive' || $is_active === false) {
+                $deactivate_success = true; // Confirmed deactivated
+            } else {
+                // Item is still active - deactivate didn't actually work
+                $deactivate_success = false;
+            }
+        } else {
+            // Couldn't verify item - assume deactivate didn't work to be safe
+            $deactivate_success = false;
+        }
+    }
     
     // Then try to delete the item
     $response = zoho_api_delete('items/' . $zoho_item_id);
     
-    // If delete fails but deactivate succeeded, log as deactivated instead
-    if ((isset($response['error']) || (isset($response['code']) && $response['code'] != 0)) && 
-        (!isset($deactivate_response['error']) && (!isset($deactivate_response['code']) || $deactivate_response['code'] == 0))) {
-        // Item was deactivated but not deleted (probably has dependencies)
-        $response = array_merge($response, array('deactivated' => true, 'message' => 'Item deactivated (cannot be deleted due to existing transactions)'));
+    // Check if delete was successful
+    $delete_success = !is_wp_error($response) && (!isset($response['error']) && (!isset($response['code']) || $response['code'] == 0));
+    
+    // If delete fails, check what happened
+    if (!$delete_success) {
+        if ($deactivate_success) {
+            // Item was successfully deactivated and verified
+            $response = array(
+                'code' => isset($response['code']) ? $response['code'] : 2064,
+                'message' => 'Item deactivated successfully (cannot be deleted due to existing transactions)',
+                'deactivated' => true,
+                'delete_error' => isset($response['message']) ? $response['message'] : 'Delete failed',
+                'delete_code' => isset($response['code']) ? $response['code'] : 0
+            );
+        } else {
+            // Deactivate failed - don't claim it was deactivated
+            $response = array(
+                'code' => isset($response['code']) ? $response['code'] : 0,
+                'message' => isset($response['message']) ? $response['message'] : 'Failed to delete item',
+                'deactivated' => false,
+                'deactivate_attempted' => true,
+                'deactivate_response' => $deactivate_response,
+                'delete_error' => isset($response['message']) ? $response['message'] : 'Delete failed'
+            );
+        }
     }
     
     // Log the deletion attempt
