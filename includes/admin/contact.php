@@ -681,13 +681,14 @@ function zoho_build_contact_data_from_order($order) {
     $last_name = '';
     
     // PRIORITY 1: Get from HPOS addresses table (most reliable)
+    $address_data = null;
     if ($wpdb->get_var("SHOW TABLES LIKE '{$addresses_table}'") === $addresses_table) {
         $address_data = $wpdb->get_row($wpdb->prepare(
             "SELECT first_name, last_name, address_1, address_2, city, state, postcode, country, email, phone FROM {$addresses_table} WHERE order_id = %d AND address_type = 'billing' LIMIT 1",
             $order_id
         ), ARRAY_A);
         
-        if ($address_data) {
+        if ($address_data && is_array($address_data)) {
             $first_name = trim($address_data['first_name'] ?? '');
             $last_name = trim($address_data['last_name'] ?? '');
         }
@@ -841,30 +842,75 @@ function zoho_build_contact_data_from_order($order) {
         }
     }
 
-    // Add shipping address if available
+    // Add shipping address if available (HPOS compatible)
     // Note: Zoho uses 'address' field, not 'street'
-    if (!empty($order->get_shipping_address_1()) || !empty($order->get_shipping_city())) {
+    $shipping_address_1 = '';
+    $shipping_address_2 = '';
+    $shipping_city = '';
+    $shipping_state = '';
+    $shipping_postcode = '';
+    $shipping_country = '';
+    
+    // PRIORITY 1: Get from HPOS addresses table
+    if ($wpdb->get_var("SHOW TABLES LIKE '{$addresses_table}'") === $addresses_table) {
+        $shipping_address_data = $wpdb->get_row($wpdb->prepare(
+            "SELECT address_1, address_2, city, state, postcode, country FROM {$addresses_table} WHERE order_id = %d AND address_type = 'shipping' LIMIT 1",
+            $order_id
+        ), ARRAY_A);
+        
+        if ($shipping_address_data) {
+            $shipping_address_1 = trim($shipping_address_data['address_1'] ?? '');
+            $shipping_address_2 = trim($shipping_address_data['address_2'] ?? '');
+            $shipping_city = trim($shipping_address_data['city'] ?? '');
+            $shipping_state = trim($shipping_address_data['state'] ?? '');
+            $shipping_postcode = trim($shipping_address_data['postcode'] ?? '');
+            $shipping_country = trim($shipping_address_data['country'] ?? '');
+        }
+    }
+    
+    // PRIORITY 2: If empty, try order methods
+    if (empty($shipping_address_1)) {
+        $shipping_address_1 = trim($order->get_shipping_address_1());
+    }
+    if (empty($shipping_address_2)) {
+        $shipping_address_2 = trim($order->get_shipping_address_2());
+    }
+    if (empty($shipping_city)) {
+        $shipping_city = trim($order->get_shipping_city());
+    }
+    if (empty($shipping_state)) {
+        $shipping_state = trim($order->get_shipping_state());
+    }
+    if (empty($shipping_postcode)) {
+        $shipping_postcode = trim($order->get_shipping_postcode());
+    }
+    if (empty($shipping_country)) {
+        $shipping_country = trim($order->get_shipping_country());
+    }
+    
+    // Add shipping address if any field is available
+    if (!empty($shipping_address_1) || !empty($shipping_address_2) || !empty($shipping_city) || !empty($shipping_state) || !empty($shipping_postcode) || !empty($shipping_country)) {
         $contact_data['shipping_address'] = array();
         
-        if (!empty($order->get_shipping_address_1())) {
-            $contact_data['shipping_address']['address'] = $order->get_shipping_address_1();
+        if (!empty($shipping_address_1)) {
+            $contact_data['shipping_address']['address'] = $shipping_address_1;
         }
-    if (!empty($order->get_shipping_address_2())) {
-        $contact_data['shipping_address']['street2'] = $order->get_shipping_address_2();
+        if (!empty($shipping_address_2)) {
+            $contact_data['shipping_address']['street2'] = $shipping_address_2;
+        }
+        if (!empty($shipping_city)) {
+            $contact_data['shipping_address']['city'] = $shipping_city;
+        }
+        if (!empty($shipping_state)) {
+            $contact_data['shipping_address']['state'] = $shipping_state;
+        }
+        if (!empty($shipping_postcode)) {
+            $contact_data['shipping_address']['zip'] = $shipping_postcode;
+        }
+        if (!empty($shipping_country)) {
+            $contact_data['shipping_address']['country'] = $shipping_country;
+        }
     }
-    if (!empty($order->get_shipping_city())) {
-        $contact_data['shipping_address']['city'] = $order->get_shipping_city();
-    }
-    if (!empty($order->get_shipping_state())) {
-        $contact_data['shipping_address']['state'] = $order->get_shipping_state();
-    }
-    if (!empty($order->get_shipping_postcode())) {
-        $contact_data['shipping_address']['zip'] = $order->get_shipping_postcode();
-    }
-    if (!empty($order->get_shipping_country())) {
-        $contact_data['shipping_address']['country'] = $order->get_shipping_country();
-    }
-}
 
     return $contact_data;
 }
