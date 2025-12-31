@@ -1,0 +1,590 @@
+<?php
+/**
+ * Auto Sync - Automatic sync when WooCommerce products/orders/contacts are updated
+ */
+
+if (!defined('ABSPATH')) exit;
+
+/* ======================================================
+   HELPER: Sync Single Product to Zoho
+====================================================== */
+function zoho_sync_single_product($product_id) {
+    // Check if Zoho is connected
+    if (!get_option('zoho_access_token')) {
+        return false;
+    }
+    
+    // Check if auto-sync is enabled
+    if (get_option('zoho_auto_sync_products', 'yes') !== 'yes') {
+        return false;
+    }
+    
+    // Get product
+    $product = wc_get_product($product_id);
+    if (!$product || $product->get_type() === 'variation') {
+        return false;
+    }
+    
+    // Skip if product is trashed
+    if ($product->get_status() === 'trash') {
+        return false;
+    }
+    
+    // Check if product belongs to current organization
+    $current_org_id = get_option('zoho_organization_id', '');
+    $product_org_id = get_post_meta($product_id, '_zoho_org_id', true);
+    
+    // Only sync if product has no org_id (new product) or matches current org
+    if (!empty($current_org_id) && !empty($product_org_id) && $product_org_id !== $current_org_id) {
+        return false; // Product belongs to different organization
+    }
+    
+    // Check if product has SKU (required for Zoho)
+    $sku = $product->get_sku();
+    if (empty($sku)) {
+        return false;
+    }
+    
+    // Get existing Zoho item ID
+    $zoho_item_id = get_post_meta($product_id, '_zoho_item_id', true);
+    
+    // Build item data
+    $is_service = $product->is_virtual() || $product->is_downloadable() || !$product->get_manage_stock();
+    $product_type = $is_service ? 'service' : 'goods';
+    
+    $item_data = array(
+        'name' => $product->get_name(),
+        'sku' => $sku,
+        'rate' => floatval($product->get_regular_price()) ?: 0,
+        'description' => wp_strip_all_tags($product->get_description()),
+        'product_type' => $product_type,
+    );
+    
+    $item_data['item_type'] = ($product_type === 'goods') ? 'inventory' : 'sales';
+    
+    if ($product_type === 'goods') {
+        $stock = $product->get_stock_quantity();
+        $stock_value = (is_numeric($stock) && $stock !== '') ? intval($stock) : 0;
+        $item_data['initial_stock'] = max(0, $stock_value);
+        $item_data['initial_stock_rate'] = floatval($product->get_regular_price()) ?: 0;
+        
+        $inventory_account_id = get_option('zoho_inventory_account_id', '');
+        if (!empty($inventory_account_id)) {
+            $item_data['inventory_account_id'] = intval($inventory_account_id);
+        }
+        
+        $inventory_valuation_method = get_option('zoho_inventory_valuation_method', '');
+        if (!empty($inventory_valuation_method)) {
+            $item_data['inventory_valuation_method'] = $inventory_valuation_method;
+        }
+    }
+    
+    $response = null;
+    $action = '';
+    
+    if ($zoho_item_id) {
+        // Try to update existing item
+        $update_data = $item_data;
+        unset($update_data['item_type']);
+        unset($update_data['product_type']);
+        unset($update_data['initial_stock']);
+        unset($update_data['initial_stock_rate']);
+        unset($update_data['inventory_account_id']);
+        unset($update_data['inventory_valuation_method']);
+        
+        $response = zoho_api_put('items/' . $zoho_item_id, $update_data);
+        
+        // If item doesn't exist in Zoho, clear ID and create new
+        if (isset($response['code']) && $response['code'] == 1002) {
+            delete_post_meta($product_id, '_zoho_item_id');
+            $zoho_item_id = '';
+        } else {
+            $action = 'updated';
+        }
+    }
+    
+    // If no existing ID or update failed, search by SKU
+    if (empty($zoho_item_id) && empty($action)) {
+        $search_response = zoho_api_get('items?sku=' . urlencode($sku));
+        if (!is_wp_error($search_response) && isset($search_response['items']) && !empty($search_response['items'])) {
+            $zoho_item_id = $search_response['items'][0]['item_id'];
+            // Update found item
+            $update_data = $item_data;
+            unset($update_data['item_type']);
+            unset($update_data['product_type']);
+            unset($update_data['initial_stock']);
+            unset($update_data['initial_stock_rate']);
+            unset($update_data['inventory_account_id']);
+            unset($update_data['inventory_valuation_method']);
+            $response = zoho_api_put('items/' . $zoho_item_id, $update_data);
+            $action = 'updated';
+        }
+    }
+    
+    // Create new item if still no ID
+    if (empty($zoho_item_id) && empty($action)) {
+        $response = zoho_api_post('items', $item_data);
+        $action = 'created';
+        
+        // Fallback if error with item_type/product_type
+        if (isset($response['code']) && $response['code'] == 2) {
+            $item_data_fallback = $item_data;
+            unset($item_data_fallback['item_type']);
+            unset($item_data_fallback['product_type']);
+            $response = zoho_api_post('items', $item_data_fallback);
+        }
+    }
+    
+    // Save Zoho Item ID if successful
+    if (isset($response['item']['item_id'])) {
+        $zoho_item_id = $response['item']['item_id'];
+        update_post_meta($product_id, '_zoho_item_id', $zoho_item_id);
+        $org_id = get_option('zoho_organization_id', '');
+        if (!empty($org_id)) {
+            update_post_meta($product_id, '_zoho_org_id', $org_id);
+        }
+    } elseif (!empty($zoho_item_id)) {
+        // Use existing ID for updates
+        $zoho_item_id = $zoho_item_id;
+    }
+    
+    // Log the sync
+    zoho_add_detailed_log(
+        'item',
+        'product',
+        $product_id,
+        'items-inventory',
+        $zoho_item_id ?: '',
+        json_encode($item_data),
+        json_encode($response)
+    );
+    
+    return !isset($response['error']) && (!isset($response['code']) || $response['code'] == 0);
+}
+
+/* ======================================================
+   HELPER: Sync Single Order to Zoho Invoice
+====================================================== */
+function zoho_sync_single_order($order_id) {
+    // Check if Zoho is connected
+    if (!get_option('zoho_access_token')) {
+        return false;
+    }
+    
+    // Check if auto-sync is enabled
+    if (get_option('zoho_auto_sync_invoices', 'yes') !== 'yes') {
+        return false;
+    }
+    
+    // Get order
+    $order = wc_get_order($order_id);
+    if (!$order) {
+        return false;
+    }
+    
+    // Check if order belongs to current organization
+    $current_org_id = get_option('zoho_organization_id', '');
+    $order_org_id = $order->get_meta('_zoho_org_id', true);
+    
+    // Only sync if order has no org_id (new order) or matches current org
+    if (!empty($current_org_id) && !empty($order_org_id) && $order_org_id !== $current_org_id) {
+        return false; // Order belongs to different organization
+    }
+    
+    // Get customer
+    $customer_id = $order->get_customer_id();
+    if (!$customer_id) {
+        return false; // Guest orders not supported for auto-sync
+    }
+    
+    // Get Zoho contact ID for customer
+    $zoho_customer_id = get_user_meta($customer_id, '_zoho_contact_id', true);
+    if (empty($zoho_customer_id)) {
+        // Try to sync customer first
+        zoho_sync_single_contact($customer_id);
+        $zoho_customer_id = get_user_meta($customer_id, '_zoho_contact_id', true);
+        if (empty($zoho_customer_id)) {
+            return false; // Customer not found in Zoho
+        }
+    }
+    
+    // Build invoice data (simplified version)
+    $invoice_date = $order->get_date_created()->date('Y-m-d');
+    $reference_number = $order->get_order_number();
+    
+    $line_items = array();
+    foreach ($order->get_items() as $item) {
+        $product_id = $item->get_product_id();
+        $zoho_item_id = get_post_meta($product_id, '_zoho_item_id', true);
+        
+        if (empty($zoho_item_id)) {
+            continue; // Skip items not in Zoho
+        }
+        
+        $quantity = $item->get_quantity();
+        $rate = $item->get_subtotal() / $quantity;
+        
+        $line_items[] = array(
+            'item_id' => $zoho_item_id,
+            'quantity' => $quantity,
+            'rate' => round($rate, 2),
+        );
+    }
+    
+    if (empty($line_items)) {
+        return false; // No valid line items
+    }
+    
+    $invoice_data = array(
+        'customer_id' => (string)$zoho_customer_id,
+        'date' => $invoice_date,
+        'reference_number' => $reference_number,
+        'line_items' => $line_items,
+    );
+    
+    $existing_invoice_id = $order->get_meta('_zoho_invoice_id', true);
+    
+    if ($existing_invoice_id) {
+        $invoice_data['reason'] = 'Invoice updated from WooCommerce';
+        $response = zoho_api_put('invoices/' . $existing_invoice_id, $invoice_data);
+        
+        if (isset($response['code']) && $response['code'] == 1002) {
+            // Invoice doesn't exist, clear ID and create new
+            $order->delete_meta_data('_zoho_invoice_id');
+            $order->save();
+            unset($invoice_data['reason']);
+            $response = zoho_api_post('invoices', $invoice_data);
+            $action = 'created';
+        } else {
+            $action = 'updated';
+        }
+    } else {
+        $response = zoho_api_post('invoices', $invoice_data);
+        $action = 'created';
+    }
+    
+    // Save invoice ID if successful
+    if (isset($response['invoice']['invoice_id'])) {
+        $zoho_invoice_id = $response['invoice']['invoice_id'];
+        $order->update_meta_data('_zoho_invoice_id', $zoho_invoice_id);
+        $org_id = get_option('zoho_organization_id', '');
+        if (!empty($org_id)) {
+            $order->update_meta_data('_zoho_org_id', $org_id);
+        }
+        $order->save();
+    }
+    
+    // Log the sync
+    zoho_add_detailed_log(
+        'invoice',
+        'order',
+        $order_id,
+        'invoice',
+        isset($response['invoice']['invoice_id']) ? $response['invoice']['invoice_id'] : '',
+        json_encode($invoice_data),
+        json_encode($response)
+    );
+    
+    return !isset($response['error']) && (!isset($response['code']) || $response['code'] == 0);
+}
+
+/* ======================================================
+   HELPER: Sync Single Contact to Zoho
+====================================================== */
+function zoho_sync_single_contact($user_id) {
+    // Check if Zoho is connected
+    if (!get_option('zoho_access_token')) {
+        return false;
+    }
+    
+    // Check if auto-sync is enabled
+    if (get_option('zoho_auto_sync_contacts', 'yes') !== 'yes') {
+        return false;
+    }
+    
+    // Check if user has customer role
+    $user = new WP_User($user_id);
+    if (!in_array('customer', $user->roles)) {
+        return false;
+    }
+    
+    // Check if contact belongs to current organization
+    $current_org_id = get_option('zoho_organization_id', '');
+    $contact_org_id = get_user_meta($user_id, '_zoho_org_id', true);
+    
+    // Only sync if contact has no org_id (new contact) or matches current org
+    if (!empty($current_org_id) && !empty($contact_org_id) && $contact_org_id !== $current_org_id) {
+        return false; // Contact belongs to different organization
+    }
+    
+    // Get customer data
+    $customer = new WC_Customer($user_id);
+    $customer->read_meta_data();
+    
+    // Build contact data (using function from contact.php)
+    if (function_exists('zoho_build_contact_data_from_customer')) {
+        $contact_data = zoho_build_contact_data_from_customer($customer);
+    } else {
+        return false; // Function not available
+    }
+    
+    if (empty($contact_data['contact_name'])) {
+        return false; // No contact name
+    }
+    
+    $existing_contact_id = get_user_meta($user_id, '_zoho_contact_id', true);
+    $response = null;
+    $action = '';
+    
+    if ($existing_contact_id) {
+        // Try to update
+        $response = zoho_api_put('contacts/' . $existing_contact_id, $contact_data);
+        
+        if (isset($response['code']) && $response['code'] == 1002) {
+            // Contact doesn't exist, clear ID
+            delete_user_meta($user_id, '_zoho_contact_id');
+            $existing_contact_id = '';
+        } else {
+            $action = 'updated';
+        }
+    }
+    
+    // Search by email if no existing ID
+    if (empty($existing_contact_id) && empty($action) && !empty($contact_data['email'])) {
+        $search_response = zoho_api_get('contacts?email=' . urlencode($contact_data['email']));
+        if (!is_wp_error($search_response) && isset($search_response['contacts']) && !empty($search_response['contacts'])) {
+            $existing_contact_id = $search_response['contacts'][0]['contact_id'];
+            $response = zoho_api_put('contacts/' . $existing_contact_id, $contact_data);
+            $action = 'updated';
+        }
+    }
+    
+    // Create new contact if still no ID
+    if (empty($existing_contact_id) && empty($action)) {
+        $response = zoho_api_post('contacts', $contact_data);
+        $action = 'created';
+    }
+    
+    // Save contact ID if successful
+    if (isset($response['contact']['contact_id'])) {
+        $zoho_contact_id = $response['contact']['contact_id'];
+        update_user_meta($user_id, '_zoho_contact_id', $zoho_contact_id);
+        $org_id = get_option('zoho_organization_id', '');
+        if (!empty($org_id)) {
+            update_user_meta($user_id, '_zoho_org_id', $org_id);
+        }
+    } elseif (!empty($existing_contact_id)) {
+        $zoho_contact_id = $existing_contact_id;
+    } else {
+        $zoho_contact_id = '';
+    }
+    
+    // Log the sync
+    zoho_add_detailed_log(
+        'contact',
+        'customer',
+        $user_id,
+        'contact',
+        $zoho_contact_id,
+        json_encode($contact_data),
+        json_encode($response)
+    );
+    
+    return !isset($response['error']) && (!isset($response['code']) || $response['code'] == 0);
+}
+
+/* ======================================================
+   HELPER: Delete Item from Zoho
+====================================================== */
+function zoho_delete_item($zoho_item_id) {
+    if (empty($zoho_item_id)) {
+        return false;
+    }
+    
+    // Check if auto-delete is enabled
+    if (get_option('zoho_auto_delete_items', 'yes') !== 'yes') {
+        return false;
+    }
+    
+    $response = zoho_api_put('items/' . $zoho_item_id . '/active', array('is_active' => false));
+    
+    // Log the deletion attempt
+    zoho_add_detailed_log(
+        'item',
+        'product',
+        0,
+        'items-inventory',
+        $zoho_item_id,
+        json_encode(array('action' => 'delete', 'item_id' => $zoho_item_id)),
+        json_encode($response)
+    );
+    
+    return !isset($response['error']) && (!isset($response['code']) || $response['code'] == 0);
+}
+
+/* ======================================================
+   HELPER: Delete Invoice from Zoho
+====================================================== */
+function zoho_delete_invoice($zoho_invoice_id) {
+    if (empty($zoho_invoice_id)) {
+        return false;
+    }
+    
+    // Check if auto-delete is enabled
+    if (get_option('zoho_auto_delete_invoices', 'yes') !== 'yes') {
+        return false;
+    }
+    
+    // Note: Zoho doesn't allow deleting invoices, only voiding/cancelling
+    // We'll mark it as cancelled
+    $response = zoho_api_post('invoices/' . $zoho_invoice_id . '/status/cancelled', array());
+    
+    zoho_add_detailed_log(
+        'invoice',
+        'order',
+        0,
+        'invoice',
+        $zoho_invoice_id,
+        json_encode(array('action' => 'delete', 'invoice_id' => $zoho_invoice_id)),
+        json_encode($response)
+    );
+    
+    return !isset($response['error']) && (!isset($response['code']) || $response['code'] == 0);
+}
+
+/* ======================================================
+   HELPER: Delete Contact from Zoho
+====================================================== */
+function zoho_delete_contact($zoho_contact_id) {
+    if (empty($zoho_contact_id)) {
+        return false;
+    }
+    
+    // Check if auto-delete is enabled
+    if (get_option('zoho_auto_delete_contacts', 'yes') !== 'yes') {
+        return false;
+    }
+    
+    // Delete contact
+    $response = zoho_api_put('contacts/' . $zoho_contact_id . '/active', array('is_active' => false));
+    
+    zoho_add_detailed_log(
+        'contact',
+        'customer',
+        0,
+        'contact',
+        $zoho_contact_id,
+        json_encode(array('action' => 'delete', 'contact_id' => $zoho_contact_id)),
+        json_encode($response)
+    );
+    
+    return !isset($response['error']) && (!isset($response['code']) || $response['code'] == 0);
+}
+
+/* ======================================================
+   WOOCOMMERCE HOOKS - Products
+====================================================== */
+// Product updated/saved
+add_action('woocommerce_update_product', 'zoho_auto_sync_product', 10, 1);
+add_action('woocommerce_new_product', 'zoho_auto_sync_product', 10, 1);
+function zoho_auto_sync_product($product_id) {
+    // Skip if this is a variation or not a simple product
+    $product = wc_get_product($product_id);
+    if (!$product || $product->get_type() === 'variation') {
+        return;
+    }
+    
+    // Defer sync to avoid blocking the save process
+    wp_schedule_single_event(time() + 2, 'zoho_sync_product_deferred', array($product_id));
+}
+
+add_action('zoho_sync_product_deferred', 'zoho_do_sync_product', 10, 1);
+function zoho_do_sync_product($product_id) {
+    zoho_sync_single_product($product_id);
+}
+
+// Product deleted
+add_action('before_delete_post', 'zoho_auto_delete_product', 10, 1);
+function zoho_auto_delete_product($post_id) {
+    $post_type = get_post_type($post_id);
+    if ($post_type !== 'product') {
+        return;
+    }
+    
+    $product = wc_get_product($post_id);
+    if (!$product || $product->get_type() === 'variation') {
+        return;
+    }
+    
+    $zoho_item_id = get_post_meta($post_id, '_zoho_item_id', true);
+    if (!empty($zoho_item_id)) {
+        zoho_delete_item($zoho_item_id);
+    }
+}
+
+/* ======================================================
+   WOOCOMMERCE HOOKS - Orders
+====================================================== */
+// Order created/updated
+add_action('woocommerce_new_order', 'zoho_auto_sync_order', 10, 1);
+add_action('woocommerce_update_order', 'zoho_auto_sync_order', 10, 1);
+function zoho_auto_sync_order($order_id) {
+    // Defer sync
+    wp_schedule_single_event(time() + 3, 'zoho_sync_order_deferred', array($order_id));
+}
+
+add_action('zoho_sync_order_deferred', 'zoho_do_sync_order', 10, 1);
+function zoho_do_sync_order($order_id) {
+    zoho_sync_single_order($order_id);
+}
+
+// Order deleted
+add_action('before_delete_post', 'zoho_auto_delete_order', 10, 1);
+function zoho_auto_delete_order($post_id) {
+    $post_type = get_post_type($post_id);
+    if ($post_type !== 'shop_order') {
+        return;
+    }
+    
+    $order = wc_get_order($post_id);
+    if (!$order) {
+        return;
+    }
+    
+    $zoho_invoice_id = $order->get_meta('_zoho_invoice_id', true);
+    if (!empty($zoho_invoice_id)) {
+        zoho_delete_invoice($zoho_invoice_id);
+    }
+}
+
+/* ======================================================
+   WOOCOMMERCE HOOKS - Contacts/Customers
+====================================================== */
+// Customer updated/created
+add_action('profile_update', 'zoho_auto_sync_contact', 10, 2);
+add_action('user_register', 'zoho_auto_sync_contact', 10, 1);
+function zoho_auto_sync_contact($user_id, $old_user_data = null) {
+    // Check if user has customer role
+    $user = new WP_User($user_id);
+    if (!in_array('customer', $user->roles)) {
+        return;
+    }
+    
+    // Defer sync
+    wp_schedule_single_event(time() + 2, 'zoho_sync_contact_deferred', array($user_id));
+}
+
+add_action('zoho_sync_contact_deferred', 'zoho_do_sync_contact', 10, 1);
+function zoho_do_sync_contact($user_id) {
+    zoho_sync_single_contact($user_id);
+}
+
+// Customer deleted
+add_action('delete_user', 'zoho_auto_delete_contact', 10, 1);
+function zoho_auto_delete_contact($user_id) {
+    $zoho_contact_id = get_user_meta($user_id, '_zoho_contact_id', true);
+    if (!empty($zoho_contact_id)) {
+        zoho_delete_contact($zoho_contact_id);
+    }
+}
+
