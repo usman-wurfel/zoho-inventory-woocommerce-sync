@@ -370,9 +370,11 @@ function zoho_sync_single_order($order_id) {
                 $customer = new WC_Customer($user_id);
                 if (!empty($first_name)) {
                     $customer->set_billing_first_name($first_name);
+                    $customer->set_first_name($first_name);
                 }
                 if (!empty($last_name)) {
                     $customer->set_billing_last_name($last_name);
+                    $customer->set_last_name($last_name);
                 }
                 $customer->set_billing_email($billing_email);
                 if (!empty($order->get_billing_phone())) {
@@ -381,6 +383,25 @@ function zoho_sync_single_order($order_id) {
                 if (!empty($order->get_billing_company())) {
                     $customer->set_billing_company($order->get_billing_company());
                 }
+                // Save billing address to customer object
+                if (!empty($order->get_billing_address_1())) {
+                    $customer->set_billing_address_1($order->get_billing_address_1());
+                }
+                if (!empty($order->get_billing_address_2())) {
+                    $customer->set_billing_address_2($order->get_billing_address_2());
+                }
+                if (!empty($order->get_billing_city())) {
+                    $customer->set_billing_city($order->get_billing_city());
+                }
+                if (!empty($order->get_billing_state())) {
+                    $customer->set_billing_state($order->get_billing_state());
+                }
+                if (!empty($order->get_billing_postcode())) {
+                    $customer->set_billing_postcode($order->get_billing_postcode());
+                }
+                if (!empty($order->get_billing_country())) {
+                    $customer->set_billing_country($order->get_billing_country());
+                }
                 $customer->save();
                 
                 // Link order to this user
@@ -388,6 +409,58 @@ function zoho_sync_single_order($order_id) {
                 $order->save();
                 
                 $customer_id = $user_id;
+                
+                // Force sync contact immediately with order billing data to ensure name is correct
+                // Create contact data directly from order to bypass any WC_Customer loading issues
+                if (function_exists('zoho_build_contact_data_from_order')) {
+                    $contact_data_direct = zoho_build_contact_data_from_order($order);
+                    if (!empty($contact_data_direct['contact_name']) && !empty($contact_data_direct['email'])) {
+                        // Check if contact already exists by email
+                        $existing_contact_id = get_user_meta($user_id, '_zoho_contact_id', true);
+                        
+                        if ($existing_contact_id) {
+                            // Update existing contact
+                            $contact_response = zoho_api_put('contacts/' . $existing_contact_id, $contact_data_direct);
+                            if (isset($response['code']) && $response['code'] == 1002) {
+                                delete_user_meta($user_id, '_zoho_contact_id');
+                                $existing_contact_id = '';
+                            }
+                        }
+                        
+                        // If no existing contact, search by email
+                        if (empty($existing_contact_id)) {
+                            $search_response = zoho_api_get('contacts?email=' . urlencode($contact_data_direct['email']));
+                            if (!is_wp_error($search_response) && isset($search_response['contacts']) && !empty($search_response['contacts'])) {
+                                // Find exact email match
+                                foreach ($search_response['contacts'] as $found_contact) {
+                                    $found_email = isset($found_contact['email']) ? strtolower(trim($found_contact['email'])) : '';
+                                    if ($found_email === strtolower(trim($contact_data_direct['email']))) {
+                                        $existing_contact_id = $found_contact['contact_id'];
+                                        zoho_api_put('contacts/' . $existing_contact_id, $contact_data_direct);
+                                        break;
+                                    }
+                                }
+                            }
+                        }
+                        
+                        // Create new contact if not found
+                        if (empty($existing_contact_id)) {
+                            $contact_response = zoho_api_post('contacts', $contact_data_direct);
+                            if (!is_wp_error($contact_response) && isset($contact_response['contact']['contact_id'])) {
+                                $existing_contact_id = $contact_response['contact']['contact_id'];
+                            }
+                        }
+                        
+                        // Save contact ID
+                        if (!empty($existing_contact_id)) {
+                            update_user_meta($user_id, '_zoho_contact_id', $existing_contact_id);
+                            $org_id = get_option('zoho_organization_id', '');
+                            if (!empty($org_id)) {
+                                update_user_meta($user_id, '_zoho_org_id', $org_id);
+                            }
+                        }
+                    }
+                }
             } else {
                 return false; // Failed to create user
             }
@@ -402,9 +475,52 @@ function zoho_sync_single_order($order_id) {
     // Now get or sync contact for this customer
     $zoho_customer_id = get_user_meta($customer_id, '_zoho_contact_id', true);
     if (empty($zoho_customer_id)) {
-        // Try to sync customer first
-        zoho_sync_single_contact($customer_id);
-        $zoho_customer_id = get_user_meta($customer_id, '_zoho_contact_id', true);
+        // If we just created user from guest order, contact should already be synced above
+        // Otherwise, try to sync using order data (more reliable than WC_Customer object)
+        if (function_exists('zoho_build_contact_data_from_order')) {
+            $contact_data_from_order = zoho_build_contact_data_from_order($order);
+            if (!empty($contact_data_from_order['contact_name']) && !empty($contact_data_from_order['email'])) {
+                // Search by email first
+                $search_response = zoho_api_get('contacts?email=' . urlencode($contact_data_from_order['email']));
+                $found_contact_id = '';
+                if (!is_wp_error($search_response) && isset($search_response['contacts']) && !empty($search_response['contacts'])) {
+                    foreach ($search_response['contacts'] as $found_contact) {
+                        $found_email = isset($found_contact['email']) ? strtolower(trim($found_contact['email'])) : '';
+                        if ($found_email === strtolower(trim($contact_data_from_order['email']))) {
+                            $found_contact_id = $found_contact['contact_id'];
+                            // Update existing contact with correct name from order
+                            zoho_api_put('contacts/' . $found_contact_id, $contact_data_from_order);
+                            break;
+                        }
+                    }
+                }
+                
+                // Create new contact if not found
+                if (empty($found_contact_id)) {
+                    $create_response = zoho_api_post('contacts', $contact_data_from_order);
+                    if (!is_wp_error($create_response) && isset($create_response['contact']['contact_id'])) {
+                        $found_contact_id = $create_response['contact']['contact_id'];
+                    }
+                }
+                
+                // Save contact ID
+                if (!empty($found_contact_id)) {
+                    update_user_meta($customer_id, '_zoho_contact_id', $found_contact_id);
+                    $org_id = get_option('zoho_organization_id', '');
+                    if (!empty($org_id)) {
+                        update_user_meta($customer_id, '_zoho_org_id', $org_id);
+                    }
+                    $zoho_customer_id = $found_contact_id;
+                }
+            }
+        }
+        
+        // Fallback: try standard sync method if still no contact ID
+        if (empty($zoho_customer_id)) {
+            zoho_sync_single_contact($customer_id);
+            $zoho_customer_id = get_user_meta($customer_id, '_zoho_contact_id', true);
+        }
+        
         if (empty($zoho_customer_id)) {
             return false; // Customer not found in Zoho
         }
