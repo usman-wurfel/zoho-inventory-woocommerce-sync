@@ -1027,7 +1027,24 @@ function zoho_render_logs_tab($type, $tab_name, $woo_object_default, $zoho_objec
                 echo '<tr><th>Woo Object</th><td>'.esc_html($log['woo_object'] ?? $woo_object_default).'</td></tr>';
                 echo '<tr><th>Woo Object Id</th><td>'.esc_html($log['woo_object_id'] ?? '-').'</td></tr>';
                 echo '<tr><th>Zoho Inventory Object</th><td>'.esc_html($log['zoho_object'] ?? $zoho_object_default).'</td></tr>';
-                echo '<tr><th>Zoho Inventory Object Id</th><td>'.esc_html($log['zoho_object_id'] ?? '-').'</td></tr>';
+                
+                // Make Zoho Object ID clickable
+                $zoho_object_id = $log['zoho_object_id'] ?? '';
+                $zoho_id_display = esc_html($zoho_object_id);
+                if (!empty($zoho_object_id)) {
+                    $log_type = $log['type'] ?? '';
+                    if ($log_type == 'item') {
+                        $zoho_id_display = '<a href="https://inventory.zoho.com/app#/inventory/items/'.esc_attr($zoho_object_id).'" target="_blank">'.esc_html($zoho_object_id).' <span class="dashicons dashicons-external" style="font-size: 14px; text-decoration: none;"></span></a>';
+                    } elseif ($log_type == 'contact') {
+                        $zoho_id_display = '<a href="https://inventory.zoho.com/app#/inventory/contacts/'.esc_attr($zoho_object_id).'" target="_blank">'.esc_html($zoho_object_id).' <span class="dashicons dashicons-external" style="font-size: 14px; text-decoration: none;"></span></a>';
+                    } elseif ($log_type == 'invoice') {
+                        $zoho_id_display = '<a href="https://inventory.zoho.com/app#/inventory/invoices/'.esc_attr($zoho_object_id).'" target="_blank">'.esc_html($zoho_object_id).' <span class="dashicons dashicons-external" style="font-size: 14px; text-decoration: none;"></span></a>';
+                    }
+                }
+                if (empty($zoho_object_id)) {
+                    $zoho_id_display = '-';
+                }
+                echo '<tr><th>Zoho Inventory Object Id</th><td>'.$zoho_id_display.'</td></tr>';
                 
                 // Show error message prominently for failed logs
                 if (!$is_success) {
@@ -1142,7 +1159,21 @@ function zoho_render_logs_tab($type, $tab_name, $woo_object_default, $zoho_objec
             }
             echo '</td>';
             echo '<td>'.esc_html($log['woo_object_id'] ?? '-').'</td>';
-            echo '<td>'.esc_html($log['zoho_object_id'] ?? '-').'</td>';
+            
+            // Make Zoho Object ID clickable based on type
+            $zoho_object_id = $log['zoho_object_id'] ?? '';
+            $zoho_id_link = esc_html($zoho_object_id);
+            if (!empty($zoho_object_id)) {
+                if ($type == 'item') {
+                    $zoho_id_link = '<a href="https://inventory.zoho.com/app#/inventory/items/'.esc_attr($zoho_object_id).'" target="_blank">'.esc_html($zoho_object_id).'</a>';
+                } elseif ($type == 'contact') {
+                    $zoho_id_link = '<a href="https://inventory.zoho.com/app#/inventory/contacts/'.esc_attr($zoho_object_id).'" target="_blank">'.esc_html($zoho_object_id).'</a>';
+                } elseif ($type == 'invoice') {
+                    $zoho_id_link = '<a href="https://inventory.zoho.com/app#/inventory/invoices/'.esc_attr($zoho_object_id).'" target="_blank">'.esc_html($zoho_object_id).'</a>';
+                }
+            }
+            echo '<td>'.$zoho_id_link.'</td>';
+            
             echo '<td style="color: #d63638;">'.esc_html($error_msg).'</td>';
             echo '<td>'.esc_html($log['time'] ?? '-').'</td>';
             echo '</tr>';
@@ -1161,11 +1192,22 @@ function zoho_render_logs_tab($type, $tab_name, $woo_object_default, $zoho_objec
         
         foreach ($page_logs as $log) {
             $is_success = zoho_is_log_successful($log);
-            $zoho_link = $log['zoho_object_id'] ?? '-';
-            if ($type == 'item' && !empty($log['zoho_object_id'])) {
-                $zoho_link = '<a href="https://inventory.zoho.com/app#/inventory/items/'.esc_attr($log['zoho_object_id']).'" target="_blank">'.esc_html($log['zoho_object_id']).'</a>';
-            } else {
-                $zoho_link = esc_html($log['zoho_object_id'] ?? '-');
+            $zoho_object_id = $log['zoho_object_id'] ?? '';
+            $zoho_link = esc_html($zoho_object_id);
+            
+            // Make Zoho Object ID clickable based on type
+            if (!empty($zoho_object_id)) {
+                if ($type == 'item') {
+                    $zoho_link = '<a href="https://inventory.zoho.com/app#/inventory/items/'.esc_attr($zoho_object_id).'" target="_blank">'.esc_html($zoho_object_id).'</a>';
+                } elseif ($type == 'contact') {
+                    $zoho_link = '<a href="https://inventory.zoho.com/app#/inventory/contacts/'.esc_attr($zoho_object_id).'" target="_blank">'.esc_html($zoho_object_id).'</a>';
+                } elseif ($type == 'invoice') {
+                    $zoho_link = '<a href="https://inventory.zoho.com/app#/inventory/invoices/'.esc_attr($zoho_object_id).'" target="_blank">'.esc_html($zoho_object_id).'</a>';
+                }
+            }
+            
+            if (empty($zoho_object_id)) {
+                $zoho_link = '-';
             }
             
             $row_style = $is_success ? '' : 'background: #fff5f5;';
