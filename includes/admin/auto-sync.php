@@ -48,26 +48,46 @@ function zoho_sync_single_product($product_id) {
     // Get existing Zoho item ID
     $zoho_item_id = get_post_meta($product_id, '_zoho_item_id', true);
     
-    // Build item data
+    // Build item data - respect field mapping toggle settings (same as manual sync)
     $is_service = $product->is_virtual() || $product->is_downloadable() || !$product->get_manage_stock();
     $product_type = $is_service ? 'service' : 'goods';
     
-    $item_data = array(
-        'name' => $product->get_name(),
-        'sku' => $sku,
-        'rate' => floatval($product->get_regular_price()) ?: 0,
-        'description' => wp_strip_all_tags($product->get_description()),
-        'product_type' => $product_type,
-    );
+    $item_data = array();
     
+    // Only add fields if their sync toggle is enabled (same logic as manual sync)
+    if (get_option('zoho_sync_name', 'yes') == 'yes') {
+        $item_data['name'] = $product->get_name();
+    }
+    
+    // SKU is always required, so always include it
+    $item_data['sku'] = $sku;
+    
+    if (get_option('zoho_sync_price', 'yes') == 'yes') {
+        $item_data['rate'] = floatval($product->get_regular_price()) ?: 0;
+    }
+    
+    if (get_option('zoho_sync_description', 'yes') == 'yes') {
+        $item_data['description'] = wp_strip_all_tags($product->get_description());
+    }
+    
+    // product_type and item_type are always needed for proper item creation
+    $item_data['product_type'] = $product_type;
     $item_data['item_type'] = ($product_type === 'goods') ? 'inventory' : 'sales';
     
     if ($product_type === 'goods') {
-        $stock = $product->get_stock_quantity();
-        $stock_value = (is_numeric($stock) && $stock !== '') ? intval($stock) : 0;
-        $item_data['initial_stock'] = max(0, $stock_value);
-        $item_data['initial_stock_rate'] = floatval($product->get_regular_price()) ?: 0;
+        // Stock sync - only if enabled
+        if (get_option('zoho_sync_stock', 'yes') == 'yes') {
+            $stock = $product->get_stock_quantity();
+            $stock_value = (is_numeric($stock) && $stock !== '') ? intval($stock) : 0;
+            $item_data['initial_stock'] = max(0, $stock_value);
+            
+            // initial_stock_rate should match rate if price sync is enabled
+            if (get_option('zoho_sync_price', 'yes') == 'yes') {
+                $item_data['initial_stock_rate'] = floatval($product->get_regular_price()) ?: 0;
+            }
+        }
         
+        // Inventory account and valuation method are always included if available
         $inventory_account_id = get_option('zoho_inventory_account_id', '');
         if (!empty($inventory_account_id)) {
             $item_data['inventory_account_id'] = intval($inventory_account_id);
@@ -123,6 +143,11 @@ function zoho_sync_single_product($product_id) {
     
     // Create new item if still no ID
     if (empty($zoho_item_id) && empty($action)) {
+        // For new items, ensure name is included (required by Zoho API)
+        if (!isset($item_data['name']) || empty($item_data['name'])) {
+            $item_data['name'] = $product->get_name();
+        }
+        
         $response = zoho_api_post('items', $item_data);
         $action = 'created';
         

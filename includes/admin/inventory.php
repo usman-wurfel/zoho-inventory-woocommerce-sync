@@ -743,28 +743,43 @@ function zoho_sync_woo_to_zoho($offset, $total, $synced, $created, $updated) {
         $is_service = $product->is_virtual() || $product->is_downloadable() || !$product->get_manage_stock();
         $product_type = $is_service ? 'service' : 'goods';
         
-        // Use original product name
-        $item_name = $product->get_name();
+        // Build item data - respect field mapping toggle settings
+        $item_data = array();
         
-        $item_data = array(
-            'name' => $item_name,
-            'sku' => $sku,
-            'rate' => floatval($product->get_regular_price()) ?: 0,
-            'description' => wp_strip_all_tags($product->get_description()),
-            'product_type' => $product_type,
-        );
+        // Only add fields if their sync toggle is enabled
+        if (get_option('zoho_sync_name', 'yes') == 'yes') {
+            $item_data['name'] = $product->get_name();
+        }
         
-        // Set item_type based on product_type
-        // For goods (with stock), use 'inventory'. For services, use 'sales'
+        // SKU is always required, so always include it
+        $item_data['sku'] = $sku;
+        
+        if (get_option('zoho_sync_price', 'yes') == 'yes') {
+            $item_data['rate'] = floatval($product->get_regular_price()) ?: 0;
+        }
+        
+        if (get_option('zoho_sync_description', 'yes') == 'yes') {
+            $item_data['description'] = wp_strip_all_tags($product->get_description());
+        }
+        
+        // product_type and item_type are always needed for proper item creation
+        $item_data['product_type'] = $product_type;
         $item_data['item_type'] = ($product_type === 'goods') ? 'inventory' : 'sales';
         
         // Add stock and inventory settings for goods items (null/empty/"-" = 0)
         if ($product_type === 'goods') {
-            $stock = $product->get_stock_quantity();
-            // Handle null, empty, "-", non-numeric, or negative as 0
-            $stock_value = (is_numeric($stock) && $stock !== '') ? intval($stock) : 0;
-            $item_data['initial_stock'] = max(0, $stock_value); // Never negative
-            $item_data['initial_stock_rate'] = floatval($product->get_regular_price()) ?: 0;
+            // Stock sync - only if enabled
+            if (get_option('zoho_sync_stock', 'yes') == 'yes') {
+                $stock = $product->get_stock_quantity();
+                // Handle null, empty, "-", non-numeric, or negative as 0
+                $stock_value = (is_numeric($stock) && $stock !== '') ? intval($stock) : 0;
+                $item_data['initial_stock'] = max(0, $stock_value); // Never negative
+                
+                // initial_stock_rate should match rate if price sync is enabled
+                if (get_option('zoho_sync_price', 'yes') == 'yes') {
+                    $item_data['initial_stock_rate'] = floatval($product->get_regular_price()) ?: 0;
+                }
+            }
             
             // Add Inventory Account ID (Asset Inventory account) - must be long integer
             $inventory_account_id = get_option('zoho_inventory_account_id', '');
@@ -799,7 +814,11 @@ function zoho_sync_woo_to_zoho($offset, $total, $synced, $created, $updated) {
             $response = zoho_api_put('items/' . $zoho_item_id, $update_data);
             $action = 'updated';
         } else {
-            // Create new item with original name
+            // Create new item - ensure name is included (required by Zoho API)
+            if (!isset($item_data['name']) || empty($item_data['name'])) {
+                $item_data['name'] = $product->get_name();
+            }
+            
             $response = zoho_api_post('items', $item_data);
             $action = 'created';
             
