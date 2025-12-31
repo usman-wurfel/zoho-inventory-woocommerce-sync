@@ -673,44 +673,55 @@ function zoho_sync_contacts_ajax_handler() {
    Helper Function: Build Contact Data from Order (Guest)
 ====================================================== */
 function zoho_build_contact_data_from_order($order) {
-    // Get billing name fields - try order methods first, then HPOS table directly
-    $first_name = trim($order->get_billing_first_name());
-    $last_name = trim($order->get_billing_last_name());
+    // Get billing name fields - FIRST try HPOS table directly, then order methods
+    global $wpdb;
+    $order_id = $order->get_id();
+    $addresses_table = $wpdb->prefix . 'wc_order_addresses';
+    $first_name = '';
+    $last_name = '';
     
-    // If empty, try getting from HPOS addresses table directly
-    if (empty($first_name) || empty($last_name)) {
-        global $wpdb;
-        $order_id = $order->get_id();
-        $addresses_table = $wpdb->prefix . 'wc_order_addresses';
+    // PRIORITY 1: Get from HPOS addresses table (most reliable)
+    if ($wpdb->get_var("SHOW TABLES LIKE '{$addresses_table}'") === $addresses_table) {
+        $address_data = $wpdb->get_row($wpdb->prepare(
+            "SELECT first_name, last_name, address_1, address_2, city, state, postcode, country, email, phone FROM {$addresses_table} WHERE order_id = %d AND address_type = 'billing' LIMIT 1",
+            $order_id
+        ), ARRAY_A);
         
-        // Check if HPOS table exists and query it
-        if ($wpdb->get_var("SHOW TABLES LIKE '{$addresses_table}'") === $addresses_table) {
-            $address_data = $wpdb->get_row($wpdb->prepare(
-                "SELECT first_name, last_name, address_1, address_2, city, state, postcode, country, email, phone FROM {$addresses_table} WHERE order_id = %d AND address_type = 'billing' LIMIT 1",
-                $order_id
-            ), ARRAY_A);
-            
-            if ($address_data) {
-                if (empty($first_name) && !empty($address_data['first_name'])) {
-                    $first_name = trim($address_data['first_name']);
-                }
-                if (empty($last_name) && !empty($address_data['last_name'])) {
-                    $last_name = trim($address_data['last_name']);
-                }
-            }
+        if ($address_data) {
+            $first_name = trim($address_data['first_name'] ?? '');
+            $last_name = trim($address_data['last_name'] ?? '');
         }
+    }
+    
+    // PRIORITY 2: If empty, try order methods
+    if (empty($first_name)) {
+        $first_name = trim($order->get_billing_first_name());
+    }
+    if (empty($last_name)) {
+        $last_name = trim($order->get_billing_last_name());
     }
     
     // Build contact name
     $contact_name = trim($first_name . ' ' . $last_name);
     
-    // Fallback to email if no name
+    // Fallback to email ONLY if absolutely no name
     if (empty($contact_name) || $contact_name === ' ') {
         $contact_name = $order->get_billing_email();
     }
 
-    $billing_email = $order->get_billing_email();
-    $billing_phone = $order->get_billing_phone();
+    // Get email and phone - try HPOS table first if available
+    $billing_email = '';
+    $billing_phone = '';
+    if (isset($address_data)) {
+        $billing_email = trim($address_data['email'] ?? '');
+        $billing_phone = trim($address_data['phone'] ?? '');
+    }
+    if (empty($billing_email)) {
+        $billing_email = $order->get_billing_email();
+    }
+    if (empty($billing_phone)) {
+        $billing_phone = $order->get_billing_phone();
+    }
     
     $contact_data = array(
         'contact_name' => $contact_name,
@@ -767,50 +778,46 @@ function zoho_build_contact_data_from_order($order) {
         $contact_data['company_name'] = $order->get_billing_company();
     }
 
-    // Add billing address if available (HPOS compatible)
+    // Add billing address if available (use HPOS table data if available)
     // Note: Zoho uses 'address' field, not 'street'
-    $billing_address_1 = $order->get_billing_address_1();
-    $billing_address_2 = $order->get_billing_address_2();
-    $billing_city = $order->get_billing_city();
-    $billing_state = $order->get_billing_state();
-    $billing_postcode = $order->get_billing_postcode();
-    $billing_country = $order->get_billing_country();
+    $billing_address_1 = '';
+    $billing_address_2 = '';
+    $billing_city = '';
+    $billing_state = '';
+    $billing_postcode = '';
+    $billing_country = '';
     
-    // If address fields are empty, try getting from HPOS addresses table
-    if (empty($billing_address_1) || empty($billing_city)) {
-        global $wpdb;
-        $order_id = $order->get_id();
-        $addresses_table = $wpdb->prefix . 'wc_order_addresses';
-        
-        if ($wpdb->get_var("SHOW TABLES LIKE '{$addresses_table}'") === $addresses_table) {
-            $address_data = $wpdb->get_row($wpdb->prepare(
-                "SELECT address_1, address_2, city, state, postcode, country FROM {$addresses_table} WHERE order_id = %d AND address_type = 'billing' LIMIT 1",
-                $order_id
-            ), ARRAY_A);
-            
-            if ($address_data) {
-                if (empty($billing_address_1) && !empty($address_data['address_1'])) {
-                    $billing_address_1 = trim($address_data['address_1']);
-                }
-                if (empty($billing_address_2) && !empty($address_data['address_2'])) {
-                    $billing_address_2 = trim($address_data['address_2']);
-                }
-                if (empty($billing_city) && !empty($address_data['city'])) {
-                    $billing_city = trim($address_data['city']);
-                }
-                if (empty($billing_state) && !empty($address_data['state'])) {
-                    $billing_state = trim($address_data['state']);
-                }
-                if (empty($billing_postcode) && !empty($address_data['postcode'])) {
-                    $billing_postcode = trim($address_data['postcode']);
-                }
-                if (empty($billing_country) && !empty($address_data['country'])) {
-                    $billing_country = trim($address_data['country']);
-                }
-            }
-        }
+    // Use data from HPOS table if already fetched
+    if (isset($address_data)) {
+        $billing_address_1 = trim($address_data['address_1'] ?? '');
+        $billing_address_2 = trim($address_data['address_2'] ?? '');
+        $billing_city = trim($address_data['city'] ?? '');
+        $billing_state = trim($address_data['state'] ?? '');
+        $billing_postcode = trim($address_data['postcode'] ?? '');
+        $billing_country = trim($address_data['country'] ?? '');
     }
     
+    // If empty, try order methods
+    if (empty($billing_address_1)) {
+        $billing_address_1 = trim($order->get_billing_address_1());
+    }
+    if (empty($billing_address_2)) {
+        $billing_address_2 = trim($order->get_billing_address_2());
+    }
+    if (empty($billing_city)) {
+        $billing_city = trim($order->get_billing_city());
+    }
+    if (empty($billing_state)) {
+        $billing_state = trim($order->get_billing_state());
+    }
+    if (empty($billing_postcode)) {
+        $billing_postcode = trim($order->get_billing_postcode());
+    }
+    if (empty($billing_country)) {
+        $billing_country = trim($order->get_billing_country());
+    }
+    
+    // Add billing address if any field is available
     if (!empty($billing_address_1) || !empty($billing_address_2) || !empty($billing_city) || !empty($billing_state) || !empty($billing_postcode) || !empty($billing_country)) {
         $contact_data['billing_address'] = array();
         
