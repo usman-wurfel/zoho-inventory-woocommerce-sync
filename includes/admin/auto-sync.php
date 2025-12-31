@@ -251,9 +251,19 @@ function zoho_sync_single_order($order_id) {
         }
     }
     
-    // Build invoice data (simplified version)
+    // Build invoice data (simplified version) - use same format as manual sync
     $invoice_date = $order->get_date_created()->date('Y-m-d');
-    $reference_number = $order->get_order_number();
+    
+    // Get reference number format from settings (same as manual sync)
+    $reference_number_type = get_option('zoho_invoice_reference_number_type', 'custom_value');
+    $reference_number_value = get_option('zoho_invoice_reference_number_value', 'woo-order-{shop_order_order_id}');
+    
+    // Format reference number same as manual sync
+    if ($reference_number_type === 'custom_value' && !empty($reference_number_value)) {
+        $reference_number = str_replace('{shop_order_order_id}', $order_id, $reference_number_value);
+    } else {
+        $reference_number = $order->get_order_number();
+    }
     
     $line_items = array();
     foreach ($order->get_items() as $item) {
