@@ -138,6 +138,11 @@ function zoho_dashboard_page() {
         $error = sanitize_text_field($_GET['error']);
         echo '<div class="notice notice-error is-dismissible"><p><strong>Error:</strong> '.esc_html($error).'</p></div>';
     }
+    
+    // Show organization selection success message
+    if (isset($_GET['org_selected']) && $_GET['org_selected'] == '1') {
+        echo '<div class="notice notice-success is-dismissible"><p>Organization selected successfully!</p></div>';
+    }
 
     $connected = get_option('zoho_access_token');
     $refresh_token = get_option('zoho_refresh_token');
@@ -152,7 +157,9 @@ function zoho_dashboard_page() {
         if (!empty($selected_org_id)) {
             update_option('zoho_organization_id', $selected_org_id);
             $organization_id = $selected_org_id;
-            echo '<div class="notice notice-success is-dismissible"><p>Organization selected successfully!</p></div>';
+            // Message will be shown via GET parameter
+            wp_redirect(admin_url('admin.php?page=zoho-sync&org_selected=1'));
+            exit;
         }
     }
     
@@ -176,36 +183,38 @@ function zoho_dashboard_page() {
     $organizations = array();
     $need_org_selection = false;
     if ($connected && empty($organization_id)) {
-        require_once plugin_dir_path(__FILE__) . '../../zoho-api.php';
-        $org_data = zoho_fetch_organizations();
-        if (isset($org_data['organizations']) && is_array($org_data['organizations'])) {
-            $organizations = $org_data['organizations'];
-            // If only one organization, auto-select it
-            if (count($organizations) == 1) {
-                update_option('zoho_organization_id', $organizations[0]['organization_id']);
-                $organization_id = $organizations[0]['organization_id'];
-            } else if (count($organizations) > 1) {
-                $need_org_selection = true;
-            }
-        } else {
-            // Error fetching organizations - show message
-            $org_error = isset($org_data['message']) ? $org_data['message'] : 'Failed to fetch organizations';
-            if (isset($org_data['code']) && $org_data['code'] == 6024) {
-                echo '<div class="notice notice-error is-dismissible"><p><strong>Error:</strong> Multiple organizations found. Please select an organization below.</p></div>';
-                // Try to fetch again without organization_id requirement for the organizations endpoint
-                $token = get_option('zoho_access_token');
-                $response = wp_remote_get('https://www.zohoapis.com/inventory/v1/organizations', [
-                    'headers' => [
-                        'Authorization' => 'Zoho-oauthtoken ' . $token,
-                    ],
-                    'timeout' => 30
-                ]);
-                if (!is_wp_error($response)) {
-                    $body = wp_remote_retrieve_body($response);
-                    $org_data = json_decode($body, true);
-                    if (isset($org_data['organizations']) && is_array($org_data['organizations'])) {
-                        $organizations = $org_data['organizations'];
-                        $need_org_selection = true;
+        // zoho-api.php is already loaded by main plugin file
+        if (function_exists('zoho_fetch_organizations')) {
+            $org_data = zoho_fetch_organizations();
+            if (isset($org_data['organizations']) && is_array($org_data['organizations'])) {
+                $organizations = $org_data['organizations'];
+                // If only one organization, auto-select it
+                if (count($organizations) == 1) {
+                    update_option('zoho_organization_id', $organizations[0]['organization_id']);
+                    $organization_id = $organizations[0]['organization_id'];
+                } else if (count($organizations) > 1) {
+                    $need_org_selection = true;
+                }
+            } else {
+                // Error fetching organizations - show message
+                $org_error = isset($org_data['message']) ? $org_data['message'] : 'Failed to fetch organizations';
+                if (isset($org_data['code']) && $org_data['code'] == 6024) {
+                    echo '<div class="notice notice-error is-dismissible"><p><strong>Error:</strong> Multiple organizations found. Please select an organization below.</p></div>';
+                    // Try to fetch again without organization_id requirement for the organizations endpoint
+                    $token = get_option('zoho_access_token');
+                    $response = wp_remote_get('https://www.zohoapis.com/inventory/v1/organizations', [
+                        'headers' => [
+                            'Authorization' => 'Zoho-oauthtoken ' . $token,
+                        ],
+                        'timeout' => 30
+                    ]);
+                    if (!is_wp_error($response)) {
+                        $body = wp_remote_retrieve_body($response);
+                        $org_data = json_decode($body, true);
+                        if (isset($org_data['organizations']) && is_array($org_data['organizations'])) {
+                            $organizations = $org_data['organizations'];
+                            $need_org_selection = true;
+                        }
                     }
                 }
             }
