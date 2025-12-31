@@ -9,12 +9,12 @@ if (!defined('ABSPATH')) exit;
    HELPER: Sync Single Product to Zoho
 ====================================================== */
 function zoho_sync_single_product($product_id) {
-    // Prevent duplicate syncs within a short period
+    // Prevent duplicate syncs within a short period - use longer lock time
     $sync_lock_key = '_zoho_sync_lock_product_' . $product_id;
     if (get_transient($sync_lock_key)) {
-        return false; // Already syncing
+        return false; // Already syncing, skip duplicate call
     }
-    set_transient($sync_lock_key, true, 5); // Lock for 5 seconds
+    set_transient($sync_lock_key, true, 15); // Lock for 15 seconds to prevent duplicates
     
     // Check if Zoho is connected
     if (!get_option('zoho_access_token')) {
@@ -601,14 +601,26 @@ function zoho_schedule_product_sync($product_id) {
         return;
     }
     
+    // Prevent duplicate scheduling - check if already scheduled
+    $schedule_lock_key = '_zoho_scheduled_product_' . $product_id;
+    if (get_transient($schedule_lock_key)) {
+        return; // Already scheduled
+    }
+    set_transient($schedule_lock_key, true, 10); // Lock for 10 seconds
+    
     // Store product ID to sync on shutdown
     static $products_to_sync = array();
     if (!in_array($product_id, $products_to_sync)) {
         $products_to_sync[] = $product_id;
         // Run on shutdown to ensure product is fully saved
         add_action('shutdown', function() use ($product_id) {
+            // Clear schedule lock before syncing
+            delete_transient('_zoho_scheduled_product_' . $product_id);
             zoho_sync_single_product($product_id);
         }, 20);
+    } else {
+        // Already in queue, clear the schedule lock
+        delete_transient($schedule_lock_key);
     }
 }
 
