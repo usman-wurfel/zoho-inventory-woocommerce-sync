@@ -589,11 +589,36 @@ function zoho_sync_single_order($order_id) {
                             if (empty($contact_data_from_order['contact_name'])) {
                                 $contact_data_from_order['contact_name'] = $order->get_formatted_billing_full_name();
                             }
+                            
+                            // FORCE complete addresses and names from order directly
+                            if (!empty($order_first_name)) $contact_data_from_order['first_name'] = $order_first_name;
+                            if (!empty($order_last_name)) $contact_data_from_order['last_name'] = $order_last_name;
+                            
+                            // FORCE complete billing address
+                            $bill_addr = array();
+                            if (!empty(trim($order->get_billing_address_1()))) $bill_addr['address'] = trim($order->get_billing_address_1());
+                            if (!empty(trim($order->get_billing_address_2()))) $bill_addr['street2'] = trim($order->get_billing_address_2());
+                            if (!empty(trim($order->get_billing_city()))) $bill_addr['city'] = trim($order->get_billing_city());
+                            if (!empty(trim($order->get_billing_state()))) $bill_addr['state'] = trim($order->get_billing_state());
+                            if (!empty(trim($order->get_billing_postcode()))) $bill_addr['zip'] = trim($order->get_billing_postcode());
+                            if (!empty(trim($order->get_billing_country()))) $bill_addr['country'] = trim($order->get_billing_country());
+                            if (!empty($bill_addr)) $contact_data_from_order['billing_address'] = $bill_addr;
+                            
+                            // FORCE complete shipping address
+                            $ship_addr = array();
+                            if (!empty(trim($order->get_shipping_address_1()))) $ship_addr['address'] = trim($order->get_shipping_address_1());
+                            if (!empty(trim($order->get_shipping_address_2()))) $ship_addr['street2'] = trim($order->get_shipping_address_2());
+                            if (!empty(trim($order->get_shipping_city()))) $ship_addr['city'] = trim($order->get_shipping_city());
+                            if (!empty(trim($order->get_shipping_state()))) $ship_addr['state'] = trim($order->get_shipping_state());
+                            if (!empty(trim($order->get_shipping_postcode()))) $ship_addr['zip'] = trim($order->get_shipping_postcode());
+                            if (!empty(trim($order->get_shipping_country()))) $ship_addr['country'] = trim($order->get_shipping_country());
+                            if (!empty($ship_addr)) $contact_data_from_order['shipping_address'] = $ship_addr;
+                            
                             error_log('=== LOCATION 4: EXISTING CUSTOMER ORDER - UPDATE CONTACT (Found by Email) ===');
                             error_log('Order ID: ' . $order->get_id() . ' | Customer ID: ' . $customer_id . ' | Contact ID: ' . $found_contact_id);
                             error_log('Request: ' . json_encode($contact_data_from_order, JSON_PRETTY_PRINT));
-                            zoho_api_put('contacts/' . $found_contact_id, $contact_data_from_order);
-                            error_log('Response: ' . json_encode($create_response, JSON_PRETTY_PRINT));
+                            $update_response = zoho_api_put('contacts/' . $found_contact_id, $contact_data_from_order);
+                            error_log('Response: ' . json_encode($update_response, JSON_PRETTY_PRINT));
                             break;
                         }
                     }
@@ -610,6 +635,44 @@ function zoho_sync_single_order($order_id) {
                     if (empty($contact_data_from_order['contact_name']) || $contact_data_from_order['contact_name'] === $contact_data_from_order['email']) {
                         $contact_data_from_order['contact_name'] = trim($order_first_name . ' ' . $order_last_name);
                     }
+                    
+                    // FORCE complete addresses and names from order directly before API call
+                    // Force first_name and last_name
+                    if (!empty($order_first_name)) $contact_data_from_order['first_name'] = $order_first_name;
+                    if (!empty($order_last_name)) $contact_data_from_order['last_name'] = $order_last_name;
+                    
+                    // FORCE complete billing address - ALL fields from order
+                    $bill_addr = array();
+                    $bill_addr1 = trim($order->get_billing_address_1());
+                    $bill_addr2 = trim($order->get_billing_address_2());
+                    $bill_city = trim($order->get_billing_city());
+                    $bill_state = trim($order->get_billing_state());
+                    $bill_postcode = trim($order->get_billing_postcode());
+                    $bill_country = trim($order->get_billing_country());
+                    if (!empty($bill_addr1)) $bill_addr['address'] = $bill_addr1;
+                    if (!empty($bill_addr2)) $bill_addr['street2'] = $bill_addr2;
+                    if (!empty($bill_city)) $bill_addr['city'] = $bill_city;
+                    if (!empty($bill_state)) $bill_addr['state'] = $bill_state;
+                    if (!empty($bill_postcode)) $bill_addr['zip'] = $bill_postcode;
+                    if (!empty($bill_country)) $bill_addr['country'] = $bill_country;
+                    if (!empty($bill_addr)) $contact_data_from_order['billing_address'] = $bill_addr;
+                    
+                    // FORCE complete shipping address - ALL fields from order
+                    $ship_addr = array();
+                    $ship_addr1 = trim($order->get_shipping_address_1());
+                    $ship_addr2 = trim($order->get_shipping_address_2());
+                    $ship_city = trim($order->get_shipping_city());
+                    $ship_state = trim($order->get_shipping_state());
+                    $ship_postcode = trim($order->get_shipping_postcode());
+                    $ship_country = trim($order->get_shipping_country());
+                    if (!empty($ship_addr1)) $ship_addr['address'] = $ship_addr1;
+                    if (!empty($ship_addr2)) $ship_addr['street2'] = $ship_addr2;
+                    if (!empty($ship_city)) $ship_addr['city'] = $ship_city;
+                    if (!empty($ship_state)) $ship_addr['state'] = $ship_state;
+                    if (!empty($ship_postcode)) $ship_addr['zip'] = $ship_postcode;
+                    if (!empty($ship_country)) $ship_addr['country'] = $ship_country;
+                    if (!empty($ship_addr)) $contact_data_from_order['shipping_address'] = $ship_addr;
+                    
                     error_log('=== LOCATION 5: EXISTING CUSTOMER ORDER - CREATE CONTACT (New Contact) ===');
                     error_log('Order ID: ' . $order->get_id() . ' | Customer ID: ' . $customer_id);
                     error_log('Request: ' . json_encode($contact_data_from_order, JSON_PRETTY_PRINT));
