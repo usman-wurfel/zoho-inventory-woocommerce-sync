@@ -465,11 +465,7 @@ function zoho_sync_single_order($order_id) {
                         
                         if ($existing_contact_id) {
                             // Update existing contact with proper name
-                            error_log('=== LOCATION 1: GUEST ORDER - UPDATE CONTACT (Existing ID) ===');
-                            error_log('Order ID: ' . $order->get_id() . ' | User ID: ' . $user_id . ' | Contact ID: ' . $existing_contact_id);
-                            error_log('Request: ' . json_encode($contact_data_direct, JSON_PRETTY_PRINT));
                             $contact_response = zoho_api_put('contacts/' . $existing_contact_id, $contact_data_direct);
-                            error_log('Response: ' . json_encode($contact_response, JSON_PRETTY_PRINT));
                             if (isset($contact_response['code']) && $contact_response['code'] == 1002) {
                                 delete_user_meta($user_id, '_zoho_contact_id');
                                 $existing_contact_id = '';
@@ -490,11 +486,7 @@ function zoho_sync_single_order($order_id) {
                                         if (empty($contact_data_direct['contact_name'])) {
                                             $contact_data_direct['contact_name'] = $order->get_formatted_billing_full_name();
                                         }
-                                        error_log('=== LOCATION 2: GUEST ORDER - UPDATE CONTACT (Found by Email) ===');
-                                        error_log('Order ID: ' . $order->get_id() . ' | User ID: ' . $user_id . ' | Contact ID: ' . $existing_contact_id);
-                                        error_log('Request: ' . json_encode($contact_data_direct, JSON_PRETTY_PRINT));
                                         zoho_api_put('contacts/' . $existing_contact_id, $contact_data_direct);
-                                        error_log('Response: ' . json_encode($contact_response, JSON_PRETTY_PRINT));
                                         break;
                                     }
                                 }
@@ -511,14 +503,9 @@ function zoho_sync_single_order($order_id) {
                             if (empty($contact_data_direct['contact_name']) || $contact_data_direct['contact_name'] === $contact_data_direct['email']) {
                                 $contact_data_direct['contact_name'] = trim($order_first_name . ' ' . $order_last_name);
                             }
-                            error_log('=== LOCATION 3: GUEST ORDER - CREATE CONTACT (New Contact) ===');
-                            error_log('Order ID: ' . $order->get_id() . ' | User ID: ' . $user_id);
-                            error_log('Request: ' . json_encode($contact_data_direct, JSON_PRETTY_PRINT));
                             $contact_response = zoho_api_post('contacts', $contact_data_direct);
-                            error_log('Response: ' . json_encode($contact_response, JSON_PRETTY_PRINT));
                             if (!is_wp_error($contact_response) && isset($contact_response['contact']['contact_id'])) {
                                 $existing_contact_id = $contact_response['contact']['contact_id'];
-                                zoho_add_detailed_log('contact', 'customer', $user_id, 'contact', $existing_contact_id, json_encode($contact_data_direct), json_encode($contact_response));
                             }
                         }
                         
@@ -584,92 +571,12 @@ function zoho_sync_single_order($order_id) {
                         $found_email = isset($found_contact['email']) ? strtolower(trim($found_contact['email'])) : '';
                         if ($found_email === strtolower(trim($contact_data_from_order['email']))) {
                             $found_contact_id = $found_contact['contact_id'];
-                            // DIRECTLY FETCH FROM HPOS TABLE USING RAW SQL - ORDER ID BASED
-                            global $wpdb;
-                            $order_id = $order->get_id();
-                            $addresses_table = $wpdb->prefix . 'wc_order_addresses';
-                            
-                            // Fetch billing address directly from HPOS table - RAW SQL QUERY
-                            $billing_query = $wpdb->prepare(
-                                "SELECT first_name, last_name, address_1, address_2, city, state, postcode, country, email, phone 
-                                 FROM {$addresses_table} 
-                                 WHERE order_id = %d AND address_type = 'billing' 
-                                 LIMIT 1",
-                                $order_id
-                            );
-                            error_log('LOCATION 4 - Billing Query: ' . $billing_query);
-                            $billing_data = $wpdb->get_row($billing_query, ARRAY_A);
-                            
-                            // Fetch shipping address directly from HPOS table - RAW SQL QUERY
-                            $shipping_query = $wpdb->prepare(
-                                "SELECT address_1, address_2, city, state, postcode, country 
-                                 FROM {$addresses_table} 
-                                 WHERE order_id = %d AND address_type = 'shipping' 
-                                 LIMIT 1",
-                                $order_id
-                            );
-                            error_log('LOCATION 4 - Shipping Query: ' . $shipping_query);
-                            $shipping_data = $wpdb->get_row($shipping_query, ARRAY_A);
-                            
-                            // Debug: Check raw SQL result
-                            error_log('LOCATION 4 - Raw Billing Result (before processing): ' . print_r($billing_data, true));
-                            error_log('LOCATION 4 - Raw Shipping Result (before processing): ' . print_r($shipping_data, true));
-                            
-                            // Use HPOS table data
-                            $hp_first_name = !empty($billing_data['first_name']) ? trim($billing_data['first_name']) : trim($order->get_billing_first_name());
-                            $hp_last_name = !empty($billing_data['last_name']) ? trim($billing_data['last_name']) : trim($order->get_billing_last_name());
-                            
-                            // Set contact name from HPOS table
-                            $contact_data_from_order['contact_name'] = trim($hp_first_name . ' ' . $hp_last_name);
+                            // Force update with proper name from order
+                            $contact_data_from_order['contact_name'] = trim($order_first_name . ' ' . $order_last_name);
                             if (empty($contact_data_from_order['contact_name'])) {
                                 $contact_data_from_order['contact_name'] = $order->get_formatted_billing_full_name();
                             }
-                            
-                            // Set first_name and last_name from HPOS
-                            if (!empty($hp_first_name)) $contact_data_from_order['first_name'] = $hp_first_name;
-                            if (!empty($hp_last_name)) $contact_data_from_order['last_name'] = $hp_last_name;
-                            
-                            // Build billing address - Try HPOS first, fallback to order object if empty
-                            $bill_addr = array();
-                            $addr1 = (!empty($billing_data['address_1']) && trim($billing_data['address_1']) !== '') ? trim($billing_data['address_1']) : trim($order->get_billing_address_1());
-                            $addr2 = (!empty($billing_data['address_2']) && trim($billing_data['address_2']) !== '') ? trim($billing_data['address_2']) : trim($order->get_billing_address_2());
-                            $city = (!empty($billing_data['city']) && trim($billing_data['city']) !== '') ? trim($billing_data['city']) : trim($order->get_billing_city());
-                            $state = (!empty($billing_data['state']) && trim($billing_data['state']) !== '') ? trim($billing_data['state']) : trim($order->get_billing_state());
-                            $postcode = (!empty($billing_data['postcode']) && trim($billing_data['postcode']) !== '') ? trim($billing_data['postcode']) : trim($order->get_billing_postcode());
-                            $country = (!empty($billing_data['country']) && trim($billing_data['country']) !== '') ? trim($billing_data['country']) : trim($order->get_billing_country());
-                            
-                            if (!empty($addr1)) $bill_addr['address'] = $addr1;
-                            if (!empty($addr2)) $bill_addr['street2'] = $addr2;
-                            if (!empty($city)) $bill_addr['city'] = $city;
-                            if (!empty($state)) $bill_addr['state'] = $state;
-                            if (!empty($postcode)) $bill_addr['zip'] = $postcode;
-                            if (!empty($country)) $bill_addr['country'] = $country;
-                            if (!empty($bill_addr)) $contact_data_from_order['billing_address'] = $bill_addr;
-                            
-                            // Build shipping address - Try HPOS first, fallback to order object if empty
-                            $ship_addr = array();
-                            $s_addr1 = (!empty($shipping_data['address_1']) && trim($shipping_data['address_1']) !== '') ? trim($shipping_data['address_1']) : trim($order->get_shipping_address_1());
-                            $s_addr2 = (!empty($shipping_data['address_2']) && trim($shipping_data['address_2']) !== '') ? trim($shipping_data['address_2']) : trim($order->get_shipping_address_2());
-                            $s_city = (!empty($shipping_data['city']) && trim($shipping_data['city']) !== '') ? trim($shipping_data['city']) : trim($order->get_shipping_city());
-                            $s_state = (!empty($shipping_data['state']) && trim($shipping_data['state']) !== '') ? trim($shipping_data['state']) : trim($order->get_shipping_state());
-                            $s_postcode = (!empty($shipping_data['postcode']) && trim($shipping_data['postcode']) !== '') ? trim($shipping_data['postcode']) : trim($order->get_shipping_postcode());
-                            $s_country = (!empty($shipping_data['country']) && trim($shipping_data['country']) !== '') ? trim($shipping_data['country']) : trim($order->get_shipping_country());
-                            
-                            if (!empty($s_addr1)) $ship_addr['address'] = $s_addr1;
-                            if (!empty($s_addr2)) $ship_addr['street2'] = $s_addr2;
-                            if (!empty($s_city)) $ship_addr['city'] = $s_city;
-                            if (!empty($s_state)) $ship_addr['state'] = $s_state;
-                            if (!empty($s_postcode)) $ship_addr['zip'] = $s_postcode;
-                            if (!empty($s_country)) $ship_addr['country'] = $s_country;
-                            if (!empty($ship_addr)) $contact_data_from_order['shipping_address'] = $ship_addr;
-                            
-                            error_log('=== LOCATION 4: EXISTING CUSTOMER ORDER - UPDATE CONTACT (Found by Email) ===');
-                            error_log('Order ID: ' . $order->get_id() . ' | Customer ID: ' . $customer_id . ' | Contact ID: ' . $found_contact_id);
-                            error_log('HPOS Billing Data: ' . json_encode($billing_data, JSON_PRETTY_PRINT));
-                            error_log('HPOS Shipping Data: ' . json_encode($shipping_data, JSON_PRETTY_PRINT));
-                            error_log('Final Request: ' . json_encode($contact_data_from_order, JSON_PRETTY_PRINT));
-                            $update_response = zoho_api_put('contacts/' . $found_contact_id, $contact_data_from_order);
-                            error_log('Response: ' . json_encode($update_response, JSON_PRETTY_PRINT));
+                            zoho_api_put('contacts/' . $found_contact_id, $contact_data_from_order);
                             break;
                         }
                     }
@@ -682,38 +589,29 @@ function zoho_sync_single_order($order_id) {
                     $order_id = $order->get_id();
                     $addresses_table = $wpdb->prefix . 'wc_order_addresses';
                     
-                    // Fetch billing address directly from HPOS table - RAW SQL QUERY
-                    $billing_query = $wpdb->prepare(
+                    // Fetch billing address directly from HPOS table
+                    $billing_data = $wpdb->get_row($wpdb->prepare(
                         "SELECT first_name, last_name, address_1, address_2, city, state, postcode, country, email, phone 
                          FROM {$addresses_table} 
                          WHERE order_id = %d AND address_type = 'billing' 
                          LIMIT 1",
                         $order_id
-                    );
-                    error_log('LOCATION 5 - Billing Query: ' . $billing_query);
-                    $billing_data = $wpdb->get_row($billing_query, ARRAY_A);
+                    ), ARRAY_A);
                     
-                    // Fetch shipping address directly from HPOS table - RAW SQL QUERY
-                    $shipping_query = $wpdb->prepare(
+                    // Fetch shipping address directly from HPOS table
+                    $shipping_data = $wpdb->get_row($wpdb->prepare(
                         "SELECT address_1, address_2, city, state, postcode, country 
                          FROM {$addresses_table} 
                          WHERE order_id = %d AND address_type = 'shipping' 
                          LIMIT 1",
                         $order_id
-                    );
-                    error_log('LOCATION 5 - Shipping Query: ' . $shipping_query);
-                    $shipping_data = $wpdb->get_row($shipping_query, ARRAY_A);
+                    ), ARRAY_A);
                     
-                    // Debug: Check raw SQL result
-                    error_log('LOCATION 5 - Raw Billing Result (before processing): ' . print_r($billing_data, true));
-                    error_log('LOCATION 5 - Raw Shipping Result (before processing): ' . print_r($shipping_data, true));
+                    // Get names from HPOS, fallback to order object
+                    $hp_first_name = (!empty($billing_data['first_name']) && trim($billing_data['first_name']) !== '') ? trim($billing_data['first_name']) : trim($order->get_billing_first_name());
+                    $hp_last_name = (!empty($billing_data['last_name']) && trim($billing_data['last_name']) !== '') ? trim($billing_data['last_name']) : trim($order->get_billing_last_name());
                     
-                    // Use HPOS table data if available, otherwise fallback to order methods
-                    $hp_first_name = !empty($billing_data['first_name']) ? trim($billing_data['first_name']) : trim($order->get_billing_first_name());
-                    $hp_last_name = !empty($billing_data['last_name']) ? trim($billing_data['last_name']) : trim($order->get_billing_last_name());
-                    $hp_email = !empty($billing_data['email']) ? trim($billing_data['email']) : trim($order->get_billing_email());
-                    
-                    // Set contact name from HPOS table data
+                    // Set contact name - MUST include last_name
                     $contact_data_from_order['contact_name'] = trim($hp_first_name . ' ' . $hp_last_name);
                     if (empty($contact_data_from_order['contact_name'])) {
                         $contact_data_from_order['contact_name'] = $order->get_formatted_billing_full_name();
@@ -722,54 +620,18 @@ function zoho_sync_single_order($order_id) {
                         $contact_data_from_order['contact_name'] = trim($hp_first_name . ' ' . $hp_last_name);
                     }
                     
-                    // Set first_name and last_name from HPOS
+                    // ALWAYS set first_name and last_name separately
                     if (!empty($hp_first_name)) $contact_data_from_order['first_name'] = $hp_first_name;
                     if (!empty($hp_last_name)) $contact_data_from_order['last_name'] = $hp_last_name;
                     
-                    // Build billing address - Try HPOS first, fallback to order object if empty
+                    // Build billing address - HPOS first, fallback to order object if empty
                     $bill_addr = array();
-                    // Get from HPOS table if not empty
-                    $addr1 = '';
-                    if (!empty($billing_data['address_1']) && trim($billing_data['address_1']) !== '') {
-                        $addr1 = trim($billing_data['address_1']);
-                    } else {
-                        $addr1 = trim($order->get_billing_address_1());
-                    }
-                    
-                    $addr2 = '';
-                    if (!empty($billing_data['address_2']) && trim($billing_data['address_2']) !== '') {
-                        $addr2 = trim($billing_data['address_2']);
-                    } else {
-                        $addr2 = trim($order->get_billing_address_2());
-                    }
-                    
-                    $city = '';
-                    if (!empty($billing_data['city']) && trim($billing_data['city']) !== '') {
-                        $city = trim($billing_data['city']);
-                    } else {
-                        $city = trim($order->get_billing_city());
-                    }
-                    
-                    $state = '';
-                    if (!empty($billing_data['state']) && trim($billing_data['state']) !== '') {
-                        $state = trim($billing_data['state']);
-                    } else {
-                        $state = trim($order->get_billing_state());
-                    }
-                    
-                    $postcode = '';
-                    if (!empty($billing_data['postcode']) && trim($billing_data['postcode']) !== '') {
-                        $postcode = trim($billing_data['postcode']);
-                    } else {
-                        $postcode = trim($order->get_billing_postcode());
-                    }
-                    
-                    $country = '';
-                    if (!empty($billing_data['country']) && trim($billing_data['country']) !== '') {
-                        $country = trim($billing_data['country']);
-                    } else {
-                        $country = trim($order->get_billing_country());
-                    }
+                    $addr1 = (!empty($billing_data['address_1']) && trim($billing_data['address_1']) !== '' && $billing_data['address_1'] !== null) ? trim($billing_data['address_1']) : trim($order->get_billing_address_1());
+                    $addr2 = (!empty($billing_data['address_2']) && trim($billing_data['address_2']) !== '' && $billing_data['address_2'] !== null) ? trim($billing_data['address_2']) : trim($order->get_billing_address_2());
+                    $city = (!empty($billing_data['city']) && trim($billing_data['city']) !== '' && $billing_data['city'] !== null) ? trim($billing_data['city']) : trim($order->get_billing_city());
+                    $state = (!empty($billing_data['state']) && trim($billing_data['state']) !== '' && $billing_data['state'] !== null) ? trim($billing_data['state']) : trim($order->get_billing_state());
+                    $postcode = (!empty($billing_data['postcode']) && trim($billing_data['postcode']) !== '' && $billing_data['postcode'] !== null) ? trim($billing_data['postcode']) : trim($order->get_billing_postcode());
+                    $country = (!empty($billing_data['country']) && trim($billing_data['country']) !== '' && $billing_data['country'] !== null) ? trim($billing_data['country']) : trim($order->get_billing_country());
                     
                     if (!empty($addr1)) $bill_addr['address'] = $addr1;
                     if (!empty($addr2)) $bill_addr['street2'] = $addr2;
@@ -779,49 +641,14 @@ function zoho_sync_single_order($order_id) {
                     if (!empty($country)) $bill_addr['country'] = $country;
                     if (!empty($bill_addr)) $contact_data_from_order['billing_address'] = $bill_addr;
                     
-                    // Build shipping address - Try HPOS first, fallback to order object if empty
+                    // Build shipping address - HPOS first, fallback to order object if empty
                     $ship_addr = array();
-                    $s_addr1 = '';
-                    if (!empty($shipping_data['address_1']) && trim($shipping_data['address_1']) !== '') {
-                        $s_addr1 = trim($shipping_data['address_1']);
-                    } else {
-                        $s_addr1 = trim($order->get_shipping_address_1());
-                    }
-                    
-                    $s_addr2 = '';
-                    if (!empty($shipping_data['address_2']) && trim($shipping_data['address_2']) !== '') {
-                        $s_addr2 = trim($shipping_data['address_2']);
-                    } else {
-                        $s_addr2 = trim($order->get_shipping_address_2());
-                    }
-                    
-                    $s_city = '';
-                    if (!empty($shipping_data['city']) && trim($shipping_data['city']) !== '') {
-                        $s_city = trim($shipping_data['city']);
-                    } else {
-                        $s_city = trim($order->get_shipping_city());
-                    }
-                    
-                    $s_state = '';
-                    if (!empty($shipping_data['state']) && trim($shipping_data['state']) !== '') {
-                        $s_state = trim($shipping_data['state']);
-                    } else {
-                        $s_state = trim($order->get_shipping_state());
-                    }
-                    
-                    $s_postcode = '';
-                    if (!empty($shipping_data['postcode']) && trim($shipping_data['postcode']) !== '') {
-                        $s_postcode = trim($shipping_data['postcode']);
-                    } else {
-                        $s_postcode = trim($order->get_shipping_postcode());
-                    }
-                    
-                    $s_country = '';
-                    if (!empty($shipping_data['country']) && trim($shipping_data['country']) !== '') {
-                        $s_country = trim($shipping_data['country']);
-                    } else {
-                        $s_country = trim($order->get_shipping_country());
-                    }
+                    $s_addr1 = (!empty($shipping_data['address_1']) && trim($shipping_data['address_1']) !== '' && $shipping_data['address_1'] !== null) ? trim($shipping_data['address_1']) : trim($order->get_shipping_address_1());
+                    $s_addr2 = (!empty($shipping_data['address_2']) && trim($shipping_data['address_2']) !== '' && $shipping_data['address_2'] !== null) ? trim($shipping_data['address_2']) : trim($order->get_shipping_address_2());
+                    $s_city = (!empty($shipping_data['city']) && trim($shipping_data['city']) !== '' && $shipping_data['city'] !== null) ? trim($shipping_data['city']) : trim($order->get_shipping_city());
+                    $s_state = (!empty($shipping_data['state']) && trim($shipping_data['state']) !== '' && $shipping_data['state'] !== null) ? trim($shipping_data['state']) : trim($order->get_shipping_state());
+                    $s_postcode = (!empty($shipping_data['postcode']) && trim($shipping_data['postcode']) !== '' && $shipping_data['postcode'] !== null) ? trim($shipping_data['postcode']) : trim($order->get_shipping_postcode());
+                    $s_country = (!empty($shipping_data['country']) && trim($shipping_data['country']) !== '' && $shipping_data['country'] !== null) ? trim($shipping_data['country']) : trim($order->get_shipping_country());
                     
                     if (!empty($s_addr1)) $ship_addr['address'] = $s_addr1;
                     if (!empty($s_addr2)) $ship_addr['street2'] = $s_addr2;
@@ -833,14 +660,13 @@ function zoho_sync_single_order($order_id) {
                     
                     error_log('=== LOCATION 5: EXISTING CUSTOMER ORDER - CREATE CONTACT (New Contact) ===');
                     error_log('Order ID: ' . $order->get_id() . ' | Customer ID: ' . $customer_id);
-                    error_log('HPOS Billing Data: ' . json_encode($billing_data, JSON_PRETTY_PRINT));
-                    error_log('HPOS Shipping Data: ' . json_encode($shipping_data, JSON_PRETTY_PRINT));
+                    error_log('HPOS Billing: ' . json_encode($billing_data));
+                    error_log('HPOS Shipping: ' . json_encode($shipping_data));
                     error_log('Final Request: ' . json_encode($contact_data_from_order, JSON_PRETTY_PRINT));
                     $create_response = zoho_api_post('contacts', $contact_data_from_order);
                     error_log('Response: ' . json_encode($create_response, JSON_PRETTY_PRINT));
                     if (!is_wp_error($create_response) && isset($create_response['contact']['contact_id'])) {
                         $found_contact_id = $create_response['contact']['contact_id'];
-                        zoho_add_detailed_log('contact', 'customer', $customer_id, 'contact', $found_contact_id, json_encode($contact_data_from_order), json_encode($create_response));
                     }
                 }
                 
@@ -1043,11 +869,7 @@ function zoho_sync_single_contact($user_id) {
     
     if ($existing_contact_id) {
         // Try to update
-        error_log('=== LOCATION 6: USER SYNC - UPDATE CONTACT (Existing ID) ===');
-        error_log('User ID: ' . $user_id . ' | Contact ID: ' . $existing_contact_id);
-        error_log('Request: ' . json_encode($contact_data, JSON_PRETTY_PRINT));
         $response = zoho_api_put('contacts/' . $existing_contact_id, $contact_data);
-        error_log('Response: ' . json_encode($response, JSON_PRETTY_PRINT));
         
         if (isset($response['code']) && $response['code'] == 1002) {
             // Contact doesn't exist, clear ID
@@ -1063,22 +885,14 @@ function zoho_sync_single_contact($user_id) {
         $search_response = zoho_api_get('contacts?email=' . urlencode($contact_data['email']));
         if (!is_wp_error($search_response) && isset($search_response['contacts']) && !empty($search_response['contacts'])) {
             $existing_contact_id = $search_response['contacts'][0]['contact_id'];
-            error_log('=== LOCATION 7: USER SYNC - UPDATE CONTACT (Found by Email) ===');
-            error_log('User ID: ' . $user_id . ' | Contact ID: ' . $existing_contact_id);
-            error_log('Request: ' . json_encode($contact_data, JSON_PRETTY_PRINT));
             $response = zoho_api_put('contacts/' . $existing_contact_id, $contact_data);
-            error_log('Response: ' . json_encode($response, JSON_PRETTY_PRINT));
             $action = 'updated';
         }
     }
     
     // Create new contact if still no ID
     if (empty($existing_contact_id) && empty($action)) {
-        error_log('=== LOCATION 8: USER SYNC - CREATE CONTACT (New Contact) ===');
-        error_log('User ID: ' . $user_id);
-        error_log('Request: ' . json_encode($contact_data, JSON_PRETTY_PRINT));
         $response = zoho_api_post('contacts', $contact_data);
-        error_log('Response: ' . json_encode($response, JSON_PRETTY_PRINT));
         $action = 'created';
     }
     
@@ -1408,22 +1222,22 @@ function zoho_auto_delete_product($post_id) {
    WOOCOMMERCE HOOKS - Orders
 ====================================================== */
 // Order created/updated
-// Only sync on checkout completion (order placed), not on order creation
-// REMOVED: woocommerce_new_order - triggers too early before checkout completes
-// add_action('woocommerce_new_order', 'zoho_schedule_order_sync', 10, 1);
+// IMPORTANT: Only sync when order is actually PLACED, not just created
+// woocommerce_new_order fires too early (before checkout completes)
+// REMOVED: add_action('woocommerce_new_order', 'zoho_schedule_order_sync', 10, 1);
 add_action('woocommerce_update_order', 'zoho_schedule_order_sync', 10, 1);
 add_action('woocommerce_checkout_order_processed', 'zoho_schedule_order_sync', 10, 1);
 function zoho_schedule_order_sync($order_id) {
-    // Skip if order status is draft or auto-draft (not yet placed)
+    // Skip if order is draft/pending/not yet placed
     $order = wc_get_order($order_id);
     if (!$order) {
         return;
     }
     
-    // Only sync if order is actually placed (not just created)
     $status = $order->get_status();
-    if (in_array($status, array('draft', 'auto-draft', 'trash'))) {
-        return;
+    // Only sync if order is actually placed (not draft/auto-draft/pending payment)
+    if (in_array($status, array('draft', 'auto-draft', 'trash', 'pending'))) {
+        return; // Skip - order not yet placed
     }
     // Store order ID to sync on shutdown
     static $orders_to_sync = array();
