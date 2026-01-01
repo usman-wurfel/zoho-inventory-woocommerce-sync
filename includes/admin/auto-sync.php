@@ -1166,9 +1166,29 @@ function zoho_delete_contact($zoho_contact_id) {
         return false;
     }
     
-    // Delete contact using DELETE method
+    // Try to delete contact using DELETE method
     $response = zoho_api_delete('contacts/' . $zoho_contact_id);
     
+    // Check if delete failed because contact is associated with transactions/documents (code 3000)
+    if (isset($response['code']) && $response['code'] == 3000) {
+        // Contact cannot be deleted - deactivate instead
+        $deactivate_response = zoho_api_put('contacts/' . $zoho_contact_id, array('status' => 'inactive'));
+        
+        zoho_add_detailed_log(
+            'contact',
+            'customer',
+            0,
+            'contact',
+            $zoho_contact_id,
+            json_encode(array('action' => 'delete_failed_deactivate', 'contact_id' => $zoho_contact_id, 'delete_response' => $response)),
+            json_encode($deactivate_response)
+        );
+        
+        // Return true if deactivation was successful
+        return !isset($deactivate_response['error']) && (!isset($deactivate_response['code']) || $deactivate_response['code'] == 0);
+    }
+    
+    // Log delete attempt
     zoho_add_detailed_log(
         'contact',
         'customer',
