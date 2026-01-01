@@ -61,8 +61,13 @@ function zoho_refresh_access_token() {
     return false;
 }
 
-function zoho_is_auth_error($data) {
-    // Check for various authorization error indicators
+function zoho_is_auth_error($data, $http_status_code = null) {
+    // Check HTTP status code 401 (Unauthorized)
+    if ($http_status_code == 401) {
+        return true;
+    }
+    
+    // Check for various authorization error indicators in response body
     if (isset($data['code']) && $data['code'] == 57) return true;
     if (isset($data['code']) && $data['code'] == 6041) return true; // Invalid token
     if (isset($data['code']) && $data['code'] == 6051) return true; // Token expired
@@ -73,6 +78,7 @@ function zoho_is_auth_error($data) {
     if (strpos($message, 'invalid oauth token') !== false) return true;
     if (strpos($message, 'token expired') !== false) return true;
     if (strpos($message, 'oauth token is invalid') !== false) return true;
+    if (strpos($message, 'unauthorized') !== false) return true;
     
     return false;
 }
@@ -108,6 +114,9 @@ function zoho_api_get($endpoint, $retry_on_auth_error = true) {
         return $response;
     }
     
+    // Get HTTP status code
+    $http_code = wp_remote_retrieve_response_code($response);
+    
     $body = wp_remote_retrieve_body($response);
     $data = json_decode($body, true);
     
@@ -122,9 +131,10 @@ function zoho_api_get($endpoint, $retry_on_auth_error = true) {
         return $data;
     }
     
-    // If authorization error and retry allowed, refresh token and retry
-    if (zoho_is_auth_error($data) && $retry_on_auth_error) {
+    // If authorization error (401 or auth-related) and retry allowed, refresh token and retry
+    if (zoho_is_auth_error($data, $http_code) && $retry_on_auth_error) {
         if (zoho_refresh_access_token()) {
+            // Retry the same API call with new token
             return zoho_api_get($endpoint, false);
         }
     }
@@ -163,6 +173,9 @@ function zoho_api_post($endpoint, $data, $retry_on_auth_error = true) {
         return $response;
     }
     
+    // Get HTTP status code
+    $http_code = wp_remote_retrieve_response_code($response);
+    
     $body = wp_remote_retrieve_body($response);
     $result = json_decode($body, true);
     
@@ -176,9 +189,10 @@ function zoho_api_post($endpoint, $data, $retry_on_auth_error = true) {
         return $result;
     }
     
-    // If authorization error and retry allowed, refresh token and retry
-    if (zoho_is_auth_error($result) && $retry_on_auth_error) {
+    // If authorization error (401 or auth-related) and retry allowed, refresh token and retry
+    if (zoho_is_auth_error($result, $http_code) && $retry_on_auth_error) {
         if (zoho_refresh_access_token()) {
+            // Retry the same API call with new token
             return zoho_api_post($endpoint, $data, false);
         }
     }
@@ -218,6 +232,9 @@ function zoho_api_put($endpoint, $data, $retry_on_auth_error = true) {
         return $response;
     }
     
+    // Get HTTP status code
+    $http_code = wp_remote_retrieve_response_code($response);
+    
     $body = wp_remote_retrieve_body($response);
     $result = json_decode($body, true);
     
@@ -231,9 +248,10 @@ function zoho_api_put($endpoint, $data, $retry_on_auth_error = true) {
         return $result;
     }
     
-    // If authorization error and retry allowed, refresh token and retry
-    if (zoho_is_auth_error($result) && $retry_on_auth_error) {
+    // If authorization error (401 or auth-related) and retry allowed, refresh token and retry
+    if (zoho_is_auth_error($result, $http_code) && $retry_on_auth_error) {
         if (zoho_refresh_access_token()) {
+            // Retry the same API call with new token
             return zoho_api_put($endpoint, $data, false);
         }
     }
@@ -272,6 +290,9 @@ function zoho_api_delete($endpoint, $retry_on_auth_error = true) {
         return $response;
     }
     
+    // Get HTTP status code
+    $http_code = wp_remote_retrieve_response_code($response);
+    
     $body = wp_remote_retrieve_body($response);
     $result = json_decode($body, true);
     
@@ -285,9 +306,10 @@ function zoho_api_delete($endpoint, $retry_on_auth_error = true) {
         return $result;
     }
     
-    // If authorization error and retry allowed, refresh token and retry
-    if (zoho_is_auth_error($result) && $retry_on_auth_error) {
+    // If authorization error (401 or auth-related) and retry allowed, refresh token and retry
+    if (zoho_is_auth_error($result, $http_code) && $retry_on_auth_error) {
         if (zoho_refresh_access_token()) {
+            // Retry the same API call with new token
             return zoho_api_delete($endpoint, false);
         }
     }

@@ -245,7 +245,8 @@ function zoho_dashboard_page() {
             $expires_in = $minutes . ' minutes';
         } else {
             $is_token_expired = true;
-            $expires_in = 'Your token has been expired, click refresh';
+            // Token expired - but auto-refresh will handle it on next API call
+            $expires_in = 'Token expired (will auto-refresh on next API call)';
         }
     }
     
@@ -491,21 +492,33 @@ function zoho_dashboard_page() {
                         <p style="margin: 5px 0; color: #666;">
                             <strong>Organization ID:</strong> <?php echo esc_html($organization_id); ?>
                         </p>
-                        <p style="margin: 5px 0; color: <?php echo $is_token_expired ? '#d63638' : '#666'; ?>;">
+                        <p style="margin: 5px 0; color: <?php echo $is_token_expired ? '#ff9800' : '#666'; ?>;">
                             <?php if ($is_token_expired): ?>
-                                <?php echo esc_html($expires_in); ?>
+                                <strong>⚠️ Token Status:</strong> <?php echo esc_html($expires_in); ?>
+                                <span style="font-size: 12px; display: block; margin-top: 3px; color: #666;">
+                                    Token will automatically refresh when needed. Manual refresh is optional.
+                                </span>
                             <?php else: ?>
-                                Access token will expire in <?php echo esc_html($expires_in); ?>.
+                                <strong>Token Status:</strong> Active - Expires in <?php echo esc_html($expires_in); ?>
+                                <span style="font-size: 12px; display: block; margin-top: 3px; color: #666;">
+                                    Token will automatically refresh when expired.
+                                </span>
                             <?php endif; ?>
                         </p>
                     </div>
                 <?php else: ?>
                     <div style="margin-bottom: 15px;">
-                        <p style="margin: 5px 0; color: <?php echo $is_token_expired ? '#d63638' : '#666'; ?>;">
+                        <p style="margin: 5px 0; color: <?php echo $is_token_expired ? '#ff9800' : '#666'; ?>;">
                             <?php if ($is_token_expired): ?>
-                                <?php echo esc_html($expires_in); ?>
+                                <strong>⚠️ Token Status:</strong> <?php echo esc_html($expires_in); ?>
+                                <span style="font-size: 12px; display: block; margin-top: 3px; color: #666;">
+                                    Token will automatically refresh when needed. Manual refresh is optional.
+                                </span>
                             <?php else: ?>
-                                Access token will expire in <?php echo esc_html($expires_in); ?>.
+                                <strong>Token Status:</strong> Active - Expires in <?php echo esc_html($expires_in); ?>
+                                <span style="font-size: 12px; display: block; margin-top: 3px; color: #666;">
+                                    Token will automatically refresh when expired.
+                                </span>
                             <?php endif; ?>
                         </p>
                     </div>
@@ -515,9 +528,11 @@ function zoho_dashboard_page() {
                     <a href="<?php echo esc_url(zoho_auth_url()); ?>" class="button button-secondary" style="margin-right: 10px;">
                         Reauthorize
                     </a>
-                    <a href="<?php echo esc_url(zoho_auth_url()); ?>" class="button button-secondary" style="margin-right: 10px;">
-                        Refresh Token
-                    </a>
+                    <?php if ($is_token_expired): ?>
+                        <a href="<?php echo esc_url(zoho_auth_url()); ?>" class="button button-secondary" style="margin-right: 10px;" title="Manually refresh token (auto-refresh will handle it automatically)">
+                            🔄 Refresh Token
+                        </a>
+                    <?php endif; ?>
                     <?php if ($organization_id && !empty($organizations) && count($organizations) > 1): ?>
                         <a href="<?php echo esc_url(admin_url('admin.php?page=zoho-sync&change_org=1')); ?>" class="button button-secondary" style="margin-right: 10px;">
                             Change Organization
