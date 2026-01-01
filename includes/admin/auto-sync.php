@@ -1320,19 +1320,53 @@ function zoho_schedule_order_sync($order_id) {
 }
 
 // Order deleted - Support both traditional and HPOS orders
-// HPOS hook (WooCommerce 8.0+)
+// HPOS hook - fires AFTER order is permanently deleted (when emptying trash)
+add_action('woocommerce_delete_order', 'zoho_auto_delete_order', 10, 1);
+// HPOS hook - fires BEFORE order is deleted (backup)
 add_action('woocommerce_before_delete_order', 'zoho_auto_delete_order', 10, 1);
 // Traditional post-based hook (fallback for older WooCommerce)
 add_action('before_delete_post', 'zoho_auto_delete_order_traditional', 10, 1);
+// Also hook into trash deletion for traditional orders
+add_action('wp_trash_post', 'zoho_auto_delete_order_trash_check', 10, 1);
 
 function zoho_auto_delete_order($order) {
-    // HPOS hook passes order object directly
-    if (!is_a($order, 'WC_Order')) {
+    // HPOS hook passes order object directly (or order ID in some cases)
+    // Handle both order object and order ID
+    $order_id = null;
+    $zoho_invoice_id = null;
+    
+    if (is_numeric($order)) {
+        $order_id = $order;
+        // Try to get order object if still available
+        $order_obj = wc_get_order($order_id);
+        if ($order_obj) {
+            $zoho_invoice_id = $order_obj->get_meta('_zoho_invoice_id', true);
+        } else {
+            // Order object not available - try to get from transient (stored when went to trash)
+            $zoho_invoice_id = get_transient('zoho_invoice_to_delete_' . $order_id);
+            // Delete transient after use
+            if ($zoho_invoice_id) {
+                delete_transient('zoho_invoice_to_delete_' . $order_id);
+            }
+        }
+    } elseif (is_a($order, 'WC_Order')) {
+        $order_id = $order->get_id();
+        $zoho_invoice_id = $order->get_meta('_zoho_invoice_id', true);
+    } else {
         return;
     }
     
-    $order_id = $order->get_id();
-    $zoho_invoice_id = $order->get_meta('_zoho_invoice_id', true);
+    if (empty($order_id)) {
+        return;
+    }
+    
+    // If still no invoice ID, try transient
+    if (empty($zoho_invoice_id)) {
+        $zoho_invoice_id = get_transient('zoho_invoice_to_delete_' . $order_id);
+        if ($zoho_invoice_id) {
+            delete_transient('zoho_invoice_to_delete_' . $order_id);
+        }
+    }
     
     if (!empty($zoho_invoice_id)) {
         zoho_delete_invoice($zoho_invoice_id);
@@ -1344,7 +1378,7 @@ function zoho_auto_delete_order($order) {
             $order_id,
             'invoice',
             '',
-            json_encode(array('action' => 'delete_order_no_invoice', 'order_id' => $order_id)),
+            json_encode(array('action' => 'delete_order_no_invoice', 'order_id' => $order_id, 'hook' => current_filter())),
             json_encode(array('message' => 'Order deleted but no Zoho invoice ID found'))
         );
     }
@@ -1374,9 +1408,28 @@ function zoho_auto_delete_order_traditional($post_id) {
             $post_id,
             'invoice',
             '',
-            json_encode(array('action' => 'delete_order_no_invoice', 'order_id' => $post_id)),
+            json_encode(array('action' => 'delete_order_no_invoice', 'order_id' => $post_id, 'hook' => 'before_delete_post')),
             json_encode(array('message' => 'Order deleted but no Zoho invoice ID found'))
         );
+    }
+}
+
+// Check when order goes to trash - store invoice ID for later deletion
+function zoho_auto_delete_order_trash_check($post_id) {
+    $post_type = get_post_type($post_id);
+    if ($post_type !== 'shop_order') {
+        return;
+    }
+    
+    // Store invoice ID in transient when order goes to trash
+    // This way we can delete it when trash is emptied
+    $order = wc_get_order($post_id);
+    if ($order) {
+        $zoho_invoice_id = $order->get_meta('_zoho_invoice_id', true);
+        if (!empty($zoho_invoice_id)) {
+            // Store for 24 hours - enough time to empty trash
+            set_transient('zoho_invoice_to_delete_' . $post_id, $zoho_invoice_id, 24 * HOUR_IN_SECONDS);
+        }
     }
 }
 
