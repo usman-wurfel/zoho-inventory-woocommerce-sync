@@ -677,12 +677,32 @@ function zoho_build_contact_data_from_order($order) {
     global $wpdb;
     $order_id = $order->get_id();
     $addresses_table = $wpdb->prefix . 'wc_order_addresses';
-    // Get first_name and last_name - use order methods directly (same as manual syncing)
-    // Order methods work with both HPOS and non-HPOS systems
-    $first_name = trim($order->get_billing_first_name());
-    $last_name = trim($order->get_billing_last_name());
+    $first_name = '';
+    $last_name = '';
     
-    // Build contact name from both first and last name
+    // PRIORITY 1: Get from HPOS addresses table (most reliable)
+    $address_data = null;
+    if ($wpdb->get_var("SHOW TABLES LIKE '{$addresses_table}'") === $addresses_table) {
+        $address_data = $wpdb->get_row($wpdb->prepare(
+            "SELECT first_name, last_name, address_1, address_2, city, state, postcode, country, email, phone FROM {$addresses_table} WHERE order_id = %d AND address_type = 'billing' LIMIT 1",
+            $order_id
+        ), ARRAY_A);
+        
+        if ($address_data && is_array($address_data)) {
+            $first_name = trim($address_data['first_name'] ?? '');
+            $last_name = trim($address_data['last_name'] ?? '');
+        }
+    }
+    
+    // PRIORITY 2: If empty, try order methods
+    if (empty($first_name)) {
+        $first_name = trim($order->get_billing_first_name());
+    }
+    if (empty($last_name)) {
+        $last_name = trim($order->get_billing_last_name());
+    }
+    
+    // Build contact name
     $contact_name = trim($first_name . ' ' . $last_name);
     
     // Fallback to email ONLY if absolutely no name
@@ -690,17 +710,18 @@ function zoho_build_contact_data_from_order($order) {
         $contact_name = $order->get_billing_email();
     }
 
-    // Get email and phone - use order methods directly (same as manual syncing)
-    $billing_email = $order->get_billing_email();
-    $billing_phone = $order->get_billing_phone();
-    
-    // Get HPOS table data only for address fields if needed
-    $address_data = null;
-    if ($wpdb->get_var("SHOW TABLES LIKE '{$addresses_table}'") === $addresses_table) {
-        $address_data = $wpdb->get_row($wpdb->prepare(
-            "SELECT address_1, address_2, city, state, postcode, country FROM {$addresses_table} WHERE order_id = %d AND address_type = 'billing' LIMIT 1",
-            $order_id
-        ), ARRAY_A);
+    // Get email and phone - try HPOS table first if available
+    $billing_email = '';
+    $billing_phone = '';
+    if (isset($address_data)) {
+        $billing_email = trim($address_data['email'] ?? '');
+        $billing_phone = trim($address_data['phone'] ?? '');
+    }
+    if (empty($billing_email)) {
+        $billing_email = $order->get_billing_email();
+    }
+    if (empty($billing_phone)) {
+        $billing_phone = $order->get_billing_phone();
     }
     
     $contact_data = array(
