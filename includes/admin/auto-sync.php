@@ -281,10 +281,40 @@ function zoho_sync_single_order($order_id) {
     
     error_log('=== ZOHO ORDER SYNC START ===');
     error_log('Order ID: ' . $order_id . ' | Status: ' . $status);
-    $order = wc_get_order($order_id);
-    if (!$order) {
-        return false;
+    
+    // VALIDATION: Check if billing address has complete data (city and postcode REQUIRED)
+    $billing_city = trim($order->get_billing_city());
+    $billing_postcode = trim($order->get_billing_postcode());
+    
+    // Check HPOS table first (more reliable)
+    global $wpdb;
+    $order_id_val = $order->get_id();
+    $addresses_table = $wpdb->prefix . 'wc_order_addresses';
+    if ($wpdb->get_var("SHOW TABLES LIKE '{$addresses_table}'") === $addresses_table) {
+        $billing_hpos = $wpdb->get_row($wpdb->prepare(
+            "SELECT city, postcode FROM {$addresses_table} WHERE order_id = %d AND address_type = 'billing' LIMIT 1",
+            $order_id_val
+        ), ARRAY_A);
+        
+        if ($billing_hpos) {
+            if (!empty($billing_hpos['city']) && trim($billing_hpos['city']) !== '' && $billing_hpos['city'] !== null) {
+                $billing_city = trim($billing_hpos['city']);
+            }
+            if (!empty($billing_hpos['postcode']) && trim($billing_hpos['postcode']) !== '' && $billing_hpos['postcode'] !== null) {
+                $billing_postcode = trim($billing_hpos['postcode']);
+            }
+        }
     }
+    
+    // CRITICAL CHECK: Only sync if BOTH billing city AND postcode are present
+    if (empty($billing_city) || empty($billing_postcode)) {
+        error_log('=== ORDER SYNC SKIPPED: Missing billing city or postcode ===');
+        error_log('Billing City: ' . ($billing_city ?: 'EMPTY') . ' | Billing Postcode: ' . ($billing_postcode ?: 'EMPTY'));
+        error_log('Contact and Invoice will NOT be created without complete address');
+        return false; // Don't create contact or invoice without complete address
+    }
+    
+    error_log('Address validation PASSED - Billing City: ' . $billing_city . ' | Postcode: ' . $billing_postcode);
     
     // Check if order belongs to current organization
     $current_org_id = get_option('zoho_organization_id', '');
