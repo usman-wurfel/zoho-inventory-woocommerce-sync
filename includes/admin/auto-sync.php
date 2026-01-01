@@ -272,6 +272,20 @@ function zoho_sync_single_order($order_id) {
         return false;
     }
     
+    // Skip only draft/auto-draft orders (not yet saved)
+    // Allow pending, processing, completed, etc.
+    $status = $order->get_status();
+    if (in_array($status, array('draft', 'auto-draft', 'trash'))) {
+        return false; // Skip draft orders
+    }
+    
+    error_log('=== ZOHO ORDER SYNC START ===');
+    error_log('Order ID: ' . $order_id . ' | Status: ' . $status);
+    $order = wc_get_order($order_id);
+    if (!$order) {
+        return false;
+    }
+    
     // Check if order belongs to current organization
     $current_org_id = get_option('zoho_organization_id', '');
     $order_org_id = $order->get_meta('_zoho_org_id', true);
@@ -1222,29 +1236,42 @@ function zoho_auto_delete_product($post_id) {
    WOOCOMMERCE HOOKS - Orders
 ====================================================== */
 // Order created/updated
-// IMPORTANT: Only sync when order is actually PLACED, not just created
-// woocommerce_new_order fires too early (before checkout completes)
-// REMOVED: add_action('woocommerce_new_order', 'zoho_schedule_order_sync', 10, 1);
+// IMPORTANT: Sync when order is processed (checkout completes)
+// woocommerce_new_order fires too early (before checkout completes) - SKIP IT
+// Use only woocommerce_checkout_order_processed which fires AFTER order is placed
+// add_action('woocommerce_new_order', 'zoho_schedule_order_sync', 10, 1); // REMOVED - too early
 add_action('woocommerce_update_order', 'zoho_schedule_order_sync', 10, 1);
 add_action('woocommerce_checkout_order_processed', 'zoho_schedule_order_sync', 10, 1);
 function zoho_schedule_order_sync($order_id) {
-    // Skip if order is draft/pending/not yet placed
+    error_log('=== zoho_schedule_order_sync CALLED ===');
+    error_log('Order ID: ' . $order_id);
+    error_log('Current Hook: ' . current_filter());
+    
+    // Skip only if order is draft/auto-draft (not yet saved)
+    // Allow 'pending' status - that's normal for new orders
     $order = wc_get_order($order_id);
     if (!$order) {
+        error_log('Order not found, skipping');
         return;
     }
     
     $status = $order->get_status();
-    // Only sync if order is actually placed (not draft/auto-draft/pending payment)
-    if (in_array($status, array('draft', 'auto-draft', 'trash', 'pending'))) {
-        return; // Skip - order not yet placed
+    error_log('Order Status: ' . $status);
+    
+    // Only skip draft/auto-draft - pending is OK (new order pending payment)
+    if (in_array($status, array('draft', 'auto-draft', 'trash'))) {
+        error_log('Order status is draft/auto-draft/trash, skipping');
+        return; // Skip - order not yet saved
     }
+    
+    error_log('Order will be synced on shutdown');
     // Store order ID to sync on shutdown
     static $orders_to_sync = array();
     if (!in_array($order_id, $orders_to_sync)) {
         $orders_to_sync[] = $order_id;
         // Run on shutdown to ensure order is fully saved
         add_action('shutdown', function() use ($order_id) {
+            error_log('=== SHUTDOWN: Calling zoho_sync_single_order for Order ID: ' . $order_id . ' ===');
             zoho_sync_single_order($order_id);
         }, 20);
     }
