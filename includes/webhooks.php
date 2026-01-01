@@ -70,38 +70,91 @@ function zoho_handle_webhook($request) {
         return new WP_REST_Response(array('message' => 'Webhooks disabled'), 200);
     }
     
-    // Determine webhook type from payload
-    $event_type = isset($body['event_type']) ? $body['event_type'] : '';
-    $object_type = isset($body['object_type']) ? $body['object_type'] : ''; // items, contacts, invoices
-    $action = isset($body['action']) ? $body['action'] : ''; // create, update, delete
-    $object_id = isset($body['object_id']) ? $body['object_id'] : '';
-    $object_data = isset($body['data']) ? $body['data'] : array();
+    // Zoho Inventory webhook format - can send data in different formats
+    $object_type = '';
+    $action = '';
+    $object_id = '';
+    $object_data = array();
+    
+    // Format 1: Standard format with object_type and action
+    if (isset($body['object_type'])) {
+        $object_type = $body['object_type'];
+        $action = isset($body['action']) ? $body['action'] : '';
+        $object_id = isset($body['object_id']) ? $body['object_id'] : '';
+        $object_data = isset($body['data']) ? $body['data'] : array();
+    } 
+    // Format 2: Direct item object in body (Zoho Inventory sends this way)
+    elseif (isset($body['item'])) {
+        $object_type = 'items';
+        $object_data = $body['item'];
+        $object_id = isset($object_data['item_id']) ? $object_data['item_id'] : '';
+        // Determine action from event_type or default to 'update'
+        if (isset($body['event_type'])) {
+            $event_type = strtolower($body['event_type']);
+            if (strpos($event_type, 'created') !== false || strpos($event_type, 'create') !== false) {
+                $action = 'create';
+            } elseif (strpos($event_type, 'deleted') !== false || strpos($event_type, 'delete') !== false) {
+                $action = 'delete';
+            } else {
+                $action = 'update';
+            }
+        } else {
+            $action = 'update'; // Default to update if event_type not provided
+        }
+    }
+    // Format 3: Direct contact object
+    elseif (isset($body['contact'])) {
+        $object_type = 'contacts';
+        $object_data = $body['contact'];
+        $object_id = isset($object_data['contact_id']) ? $object_data['contact_id'] : '';
+        $action = isset($body['event_type']) ? strtolower(str_replace('contact.', '', $body['event_type'])) : 'update';
+    }
+    // Format 4: Direct invoice object
+    elseif (isset($body['invoice'])) {
+        $object_type = 'invoices';
+        $object_data = $body['invoice'];
+        $object_id = isset($object_data['invoice_id']) ? $object_data['invoice_id'] : '';
+        $action = isset($body['event_type']) ? strtolower(str_replace('invoice.', '', $body['event_type'])) : 'update';
+    }
     
     // Handle based on object type and action
-    switch ($object_type) {
-        case 'items':
-            zoho_handle_item_webhook($action, $object_id, $object_data);
-            break;
-            
-        case 'contacts':
-            zoho_handle_contact_webhook($action, $object_id, $object_data);
-            break;
-            
-        case 'invoices':
-            zoho_handle_invoice_webhook($action, $object_id, $object_data);
-            break;
-            
-        default:
-            // Unknown object type - log it
-            zoho_add_detailed_log(
-                'webhook',
-                'webhook',
-                0,
-                'webhook',
-                '',
-                json_encode(array('unknown_type' => $object_type, 'body' => $body)),
-                json_encode(array('status' => 'unknown_type'))
-            );
+    if (!empty($object_type)) {
+        switch ($object_type) {
+            case 'items':
+                zoho_handle_item_webhook($action, $object_id, $object_data);
+                break;
+                
+            case 'contacts':
+                zoho_handle_contact_webhook($action, $object_id, $object_data);
+                break;
+                
+            case 'invoices':
+                zoho_handle_invoice_webhook($action, $object_id, $object_data);
+                break;
+                
+            default:
+                // Unknown object type - log it
+                zoho_add_detailed_log(
+                    'webhook',
+                    'webhook',
+                    0,
+                    'webhook',
+                    '',
+                    json_encode(array('unknown_type' => $object_type, 'body' => $body)),
+                    json_encode(array('status' => 'unknown_type'))
+                );
+        }
+    } else {
+        // Could not determine object type - log full body
+        zoho_add_detailed_log(
+            'webhook',
+            'webhook',
+            0,
+            'webhook',
+            '',
+            json_encode(array('unparseable_body' => $body)),
+            json_encode(array('status' => 'unparseable', 'message' => 'Could not determine object type from webhook payload'))
+        );
     }
     
     return new WP_REST_Response(array('message' => 'Webhook processed'), 200);
@@ -114,6 +167,16 @@ function zoho_handle_item_webhook($action, $item_id, $item_data) {
     // Check if sync from Zoho to WooCommerce is enabled
     if (get_option('zoho_sync_zoho_to_woo_items', 'no') !== 'yes') {
         return;
+    }
+    
+    // Normalize action - handle variations
+    $action = strtolower($action);
+    if (empty($action) || in_array($action, array('update', 'updated', 'modified', 'edit'))) {
+        $action = 'update';
+    } elseif (in_array($action, array('create', 'created', 'new'))) {
+        $action = 'create';
+    } elseif (in_array($action, array('delete', 'deleted', 'remove', 'removed'))) {
+        $action = 'delete';
     }
     
     switch ($action) {
@@ -293,21 +356,40 @@ function zoho_update_woo_product_from_zoho_item($product, $zoho_item_data) {
     $zoho_stock_field = get_option('zoho_zoho_stock_field', 'stock_on_hand');
     $zoho_description_field = get_option('zoho_zoho_description_field', 'description');
     
+    // Update name (check both 'name' and 'rate' field - Zoho might use different field names)
     if (isset($zoho_item_data[$zoho_name_field])) {
         $product->set_name($zoho_item_data[$zoho_name_field]);
+    } elseif (isset($zoho_item_data['name'])) {
+        // Fallback to 'name' if field mapping doesn't match
+        $product->set_name($zoho_item_data['name']);
     }
     
+    // Update price
     if (isset($zoho_item_data[$zoho_price_field])) {
         $product->set_regular_price($zoho_item_data[$zoho_price_field]);
+    } elseif (isset($zoho_item_data['rate'])) {
+        $product->set_regular_price($zoho_item_data['rate']);
+    } elseif (isset($zoho_item_data['sales_rate'])) {
+        $product->set_regular_price($zoho_item_data['sales_rate']);
     }
     
+    // Update stock
     if (isset($zoho_item_data[$zoho_stock_field])) {
         $product->set_manage_stock(true);
         $product->set_stock_quantity(intval($zoho_item_data[$zoho_stock_field]));
+    } elseif (isset($zoho_item_data['stock_on_hand'])) {
+        $product->set_manage_stock(true);
+        $product->set_stock_quantity(intval($zoho_item_data['stock_on_hand']));
+    } elseif (isset($zoho_item_data['available_stock'])) {
+        $product->set_manage_stock(true);
+        $product->set_stock_quantity(intval($zoho_item_data['available_stock']));
     }
     
+    // Update description
     if (isset($zoho_item_data[$zoho_description_field])) {
         $product->set_description($zoho_item_data[$zoho_description_field]);
+    } elseif (isset($zoho_item_data['description'])) {
+        $product->set_description($zoho_item_data['description']);
     }
     
     $product_id = $product->save();
@@ -318,7 +400,7 @@ function zoho_update_woo_product_from_zoho_item($product, $zoho_item_data) {
             'product',
             $product_id,
             'item',
-            $zoho_item_data['item_id'],
+            isset($zoho_item_data['item_id']) ? $zoho_item_data['item_id'] : '',
             json_encode(array('action' => 'webhook_update', 'zoho_data' => $zoho_item_data)),
             json_encode(array('status' => 'updated', 'product_id' => $product_id))
         );
