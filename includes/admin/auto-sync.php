@@ -1129,6 +1129,17 @@ function zoho_delete_invoice($zoho_invoice_id) {
         // Delete failed - try to cancel the invoice instead
         $cancel_response = zoho_api_post('invoices/' . $zoho_invoice_id . '/status/cancelled', array());
         
+        // Log cancel attempt with delete error info
+        zoho_add_detailed_log(
+            'invoice',
+            'order',
+            0,
+            'invoice',
+            $zoho_invoice_id,
+            json_encode(array('action' => 'delete_failed_cancel', 'invoice_id' => $zoho_invoice_id, 'delete_response' => $response)),
+            json_encode($cancel_response)
+        );
+        
         // If cancel worked, use that response
         if (!isset($cancel_response['error']) && (!isset($cancel_response['code']) || $cancel_response['code'] == 0)) {
             $response = array(
@@ -1137,9 +1148,14 @@ function zoho_delete_invoice($zoho_invoice_id) {
                 'cancelled' => true,
                 'delete_error' => isset($response['message']) ? $response['message'] : 'Delete not allowed'
             );
+            // Return success since cancel worked
+            return true;
         }
+        // If cancel also failed, return false (already logged above)
+        return false;
     }
     
+    // Log successful delete attempt
     zoho_add_detailed_log(
         'invoice',
         'order',
