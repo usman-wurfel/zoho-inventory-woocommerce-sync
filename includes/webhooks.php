@@ -44,6 +44,11 @@ function zoho_validate_webhook($request) {
 ====================================================== */
 function zoho_handle_webhook($request) {
     $body = $request->get_json_params();
+    $headers = $request->get_headers();
+    
+    // Store last webhook received time (for testing/verification)
+    update_option('zoho_last_webhook_received', current_time('mysql'));
+    update_option('zoho_last_webhook_data', $body);
     
     // Log webhook received
     zoho_add_detailed_log(
@@ -52,7 +57,11 @@ function zoho_handle_webhook($request) {
         0,
         'webhook',
         '',
-        json_encode(array('received_data' => $body)),
+        json_encode(array(
+            'received_data' => $body,
+            'headers' => $headers,
+            'timestamp' => current_time('mysql')
+        )),
         json_encode(array('status' => 'processing'))
     );
     
