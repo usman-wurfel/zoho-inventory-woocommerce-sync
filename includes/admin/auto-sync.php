@@ -1171,8 +1171,8 @@ function zoho_delete_contact($zoho_contact_id) {
     
     // Check if delete failed because contact is associated with transactions/documents (code 3000)
     if (isset($response['code']) && $response['code'] == 3000) {
-        // Contact cannot be deleted - deactivate instead
-        $deactivate_response = zoho_api_put('contacts/' . $zoho_contact_id, array('status' => 'inactive'));
+        // Contact cannot be deleted - mark as inactive using POST to /inactive endpoint
+        $deactivate_response = zoho_api_post('contacts/' . $zoho_contact_id . '/inactive', array());
         
         zoho_add_detailed_log(
             'contact',
