@@ -455,7 +455,24 @@ function zoho_dashboard_page() {
                 <?php endif; ?>
                 
                 <div style="margin-top: 15px;">
-                    <a href="<?php echo esc_url(zoho_auth_url()); ?>" class="button button-secondary" style="margin-right: 10px;">
+                    <?php
+                    // Handle reauthorize request - revoke tokens first
+                    if (isset($_GET['reauthorize']) && $_GET['reauthorize'] == '1') {
+                        check_admin_referer('zoho_reauthorize');
+                        // Revoke existing tokens
+                        if (function_exists('zoho_revoke_access_token')) {
+                            zoho_revoke_access_token();
+                        }
+                        // Delete local tokens
+                        delete_option('zoho_access_token');
+                        delete_option('zoho_refresh_token');
+                        delete_option('zoho_token_expires_at');
+                        // Redirect to auth URL
+                        wp_redirect(zoho_auth_url());
+                        exit;
+                    }
+                    ?>
+                    <a href="<?php echo esc_url(wp_nonce_url(admin_url('admin.php?page=zoho-sync&reauthorize=1'), 'zoho_reauthorize')); ?>" class="button button-secondary" style="margin-right: 10px;">
                         Reauthorize
                     </a>
                     <?php if ($organization_id && !empty($organizations) && count($organizations) > 1): ?>
@@ -541,6 +558,7 @@ function zoho_auth_url() {
         .'&client_id='.get_option('zoho_client_id')
         .'&response_type=code'
         .'&access_type=offline'
+        .'&prompt=consent'
         .'&redirect_uri='.urlencode(get_option('zoho_redirect_uri'));
 }
 

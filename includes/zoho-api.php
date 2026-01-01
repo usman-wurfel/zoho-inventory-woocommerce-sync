@@ -9,6 +9,49 @@ function zoho_get_organization_id() {
     return get_option('zoho_organization_id');
 }
 
+/**
+ * Revoke Zoho access token
+ */
+function zoho_revoke_access_token() {
+    $access_token = get_option('zoho_access_token');
+    $refresh_token = get_option('zoho_refresh_token');
+    
+    // Try to revoke using refresh_token first (preferred)
+    $token_to_revoke = $refresh_token ? $refresh_token : $access_token;
+    
+    if (empty($token_to_revoke)) {
+        return false; // No token to revoke
+    }
+    
+    // Try multiple Zoho domains
+    $zoho_domains = array(
+        'https://accounts.zoho.com/oauth/v2/revoke',
+        'https://accounts.zoho.in/oauth/v2/revoke',
+        'https://accounts.zoho.eu/oauth/v2/revoke',
+        'https://accounts.zoho.com.au/oauth/v2/revoke',
+    );
+    
+    foreach ($zoho_domains as $revoke_url) {
+        $response = wp_remote_post($revoke_url, [
+            'timeout' => 20,
+            'body' => [
+                'token' => $token_to_revoke
+            ]
+        ]);
+        
+        if (!is_wp_error($response)) {
+            $code = wp_remote_retrieve_response_code($response);
+            // 200 means success, but even if it fails, we'll still delete local tokens
+            if ($code == 200) {
+                return true;
+            }
+        }
+    }
+    
+    // Even if revoke API call failed, return true (we'll delete local tokens anyway)
+    return true;
+}
+
 function zoho_refresh_access_token() {
     $refresh_token = get_option('zoho_refresh_token');
     $client_id = get_option('zoho_client_id');
