@@ -279,9 +279,6 @@ function zoho_sync_single_order($order_id) {
         return false; // Skip draft orders
     }
     
-    error_log('=== ZOHO ORDER SYNC START ===');
-    error_log('Order ID: ' . $order_id . ' | Status: ' . $status);
-    
     // VALIDATION: Check if billing address has complete data (city and postcode REQUIRED)
     $billing_city = trim($order->get_billing_city());
     $billing_postcode = trim($order->get_billing_postcode());
@@ -308,13 +305,8 @@ function zoho_sync_single_order($order_id) {
     
     // CRITICAL CHECK: Only sync if BOTH billing city AND postcode are present
     if (empty($billing_city) || empty($billing_postcode)) {
-        error_log('=== ORDER SYNC SKIPPED: Missing billing city or postcode ===');
-        error_log('Billing City: ' . ($billing_city ?: 'EMPTY') . ' | Billing Postcode: ' . ($billing_postcode ?: 'EMPTY'));
-        error_log('Contact and Invoice will NOT be created without complete address');
         return false; // Don't create contact or invoice without complete address
     }
-    
-    error_log('Address validation PASSED - Billing City: ' . $billing_city . ' | Postcode: ' . $billing_postcode);
     
     // Check if order belongs to current organization
     $current_org_id = get_option('zoho_organization_id', '');
@@ -702,13 +694,7 @@ function zoho_sync_single_order($order_id) {
                     if (!empty($s_country)) $ship_addr['country'] = $s_country;
                     if (!empty($ship_addr)) $contact_data_from_order['shipping_address'] = $ship_addr;
                     
-                    error_log('=== LOCATION 5: EXISTING CUSTOMER ORDER - CREATE CONTACT (New Contact) ===');
-                    error_log('Order ID: ' . $order->get_id() . ' | Customer ID: ' . $customer_id);
-                    error_log('HPOS Billing: ' . json_encode($billing_data));
-                    error_log('HPOS Shipping: ' . json_encode($shipping_data));
-                    error_log('Final Request: ' . json_encode($contact_data_from_order, JSON_PRETTY_PRINT));
                     $create_response = zoho_api_post('contacts', $contact_data_from_order);
-                    error_log('Response: ' . json_encode($create_response, JSON_PRETTY_PRINT));
                     if (!is_wp_error($create_response) && isset($create_response['contact']['contact_id'])) {
                         $found_contact_id = $create_response['contact']['contact_id'];
                     }
@@ -1273,35 +1259,25 @@ function zoho_auto_delete_product($post_id) {
 add_action('woocommerce_update_order', 'zoho_schedule_order_sync', 10, 1);
 add_action('woocommerce_checkout_order_processed', 'zoho_schedule_order_sync', 10, 1);
 function zoho_schedule_order_sync($order_id) {
-    error_log('=== zoho_schedule_order_sync CALLED ===');
-    error_log('Order ID: ' . $order_id);
-    error_log('Current Hook: ' . current_filter());
-    
     // Skip only if order is draft/auto-draft (not yet saved)
     // Allow 'pending' status - that's normal for new orders
     $order = wc_get_order($order_id);
     if (!$order) {
-        error_log('Order not found, skipping');
         return;
     }
     
     $status = $order->get_status();
-    error_log('Order Status: ' . $status);
     
     // Only skip draft/auto-draft - pending is OK (new order pending payment)
     if (in_array($status, array('draft', 'auto-draft', 'trash'))) {
-        error_log('Order status is draft/auto-draft/trash, skipping');
         return; // Skip - order not yet saved
     }
-    
-    error_log('Order will be synced on shutdown');
     // Store order ID to sync on shutdown
     static $orders_to_sync = array();
     if (!in_array($order_id, $orders_to_sync)) {
         $orders_to_sync[] = $order_id;
         // Run on shutdown to ensure order is fully saved
         add_action('shutdown', function() use ($order_id) {
-            error_log('=== SHUTDOWN: Calling zoho_sync_single_order for Order ID: ' . $order_id . ' ===');
             zoho_sync_single_order($order_id);
         }, 20);
     }
