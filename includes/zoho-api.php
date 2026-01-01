@@ -2,12 +2,6 @@
 if (!defined('ABSPATH')) exit;
 
 function zoho_get_access_token() {
-    // Check if token is expired or about to expire (within 5 minutes)
-    $expires_at = get_option('zoho_token_expires_at', 0);
-    if ($expires_at > 0 && time() > ($expires_at - 300)) {
-        // Token expired or expiring soon - try to refresh
-        zoho_refresh_access_token();
-    }
     return get_option('zoho_access_token');
 }
 
@@ -88,12 +82,7 @@ function zoho_api_get($endpoint, $retry_on_auth_error = true) {
     $org_id = zoho_get_organization_id();
     
     if (empty($token)) {
-        // Try to refresh token first
-        if (zoho_refresh_access_token()) {
-            $token = get_option('zoho_access_token');
-        } else {
-            return ['error' => 'No access token found. Please connect to Zoho first.', 'code' => 57];
-        }
+        return ['error' => 'No access token found. Please connect to Zoho first.', 'code' => 57];
     }
     
     // Add organization_id if not in endpoint
@@ -127,7 +116,6 @@ function zoho_api_get($endpoint, $retry_on_auth_error = true) {
     
     // Check for 6024 error - multiple organizations, need to select one
     if (isset($data['code']) && $data['code'] == 6024) {
-        // Don't retry, just return the error
         return $data;
     }
     
@@ -147,12 +135,7 @@ function zoho_api_post($endpoint, $data, $retry_on_auth_error = true) {
     $org_id = zoho_get_organization_id();
     
     if (empty($token)) {
-        // Try to refresh token first
-        if (zoho_refresh_access_token()) {
-            $token = get_option('zoho_access_token');
-        } else {
-            return ['error' => 'No access token found. Please connect to Zoho first.', 'code' => 57];
-        }
+        return ['error' => 'No access token found. Please connect to Zoho first.', 'code' => 57];
     }
     
     $url = 'https://www.zohoapis.com/inventory/v1/' . $endpoint;
@@ -185,7 +168,6 @@ function zoho_api_post($endpoint, $data, $retry_on_auth_error = true) {
     
     // Check for 6024 error - multiple organizations, need to select one
     if (isset($result['code']) && $result['code'] == 6024) {
-        // Don't retry, just return the error
         return $result;
     }
     
@@ -205,12 +187,7 @@ function zoho_api_put($endpoint, $data, $retry_on_auth_error = true) {
     $org_id = zoho_get_organization_id();
     
     if (empty($token)) {
-        // Try to refresh token first
-        if (zoho_refresh_access_token()) {
-            $token = get_option('zoho_access_token');
-        } else {
-            return ['error' => 'No access token found. Please connect to Zoho first.', 'code' => 57];
-        }
+        return ['error' => 'No access token found. Please connect to Zoho first.', 'code' => 57];
     }
     
     $url = 'https://www.zohoapis.com/inventory/v1/' . $endpoint;
@@ -244,7 +221,6 @@ function zoho_api_put($endpoint, $data, $retry_on_auth_error = true) {
     
     // Check for 6024 error - multiple organizations, need to select one
     if (isset($result['code']) && $result['code'] == 6024) {
-        // Don't retry, just return the error
         return $result;
     }
     
@@ -264,12 +240,7 @@ function zoho_api_delete($endpoint, $retry_on_auth_error = true) {
     $org_id = zoho_get_organization_id();
     
     if (empty($token)) {
-        // Try to refresh token first
-        if (zoho_refresh_access_token()) {
-            $token = get_option('zoho_access_token');
-        } else {
-            return ['error' => 'No access token found. Please connect to Zoho first.', 'code' => 57];
-        }
+        return ['error' => 'No access token found. Please connect to Zoho first.', 'code' => 57];
     }
     
     $url = 'https://www.zohoapis.com/inventory/v1/' . $endpoint;
@@ -302,7 +273,6 @@ function zoho_api_delete($endpoint, $retry_on_auth_error = true) {
     
     // Check for 6024 error - multiple organizations, need to select one
     if (isset($result['code']) && $result['code'] == 6024) {
-        // Don't retry, just return the error
         return $result;
     }
     

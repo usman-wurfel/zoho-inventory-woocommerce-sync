@@ -188,29 +188,9 @@ function zoho_dashboard_page() {
 
     // Force refresh option cache to get latest values
     wp_cache_delete('zoho_access_token', 'options');
-    wp_cache_delete('zoho_token_expires_at', 'options');
     
     $connected = get_option('zoho_access_token');
-    $refresh_token = get_option('zoho_refresh_token');
-    $token_expires_at = get_option('zoho_token_expires_at', 0);
     $organization_id = get_option('zoho_organization_id');
-    
-    // If token exists but expiry time is not set or expired, try to auto-refresh or set default
-    if ($connected && ($token_expires_at == 0 || $token_expires_at < time())) {
-        // Try to refresh token automatically
-        if (function_exists('zoho_refresh_access_token') && !empty($refresh_token)) {
-            if (zoho_refresh_access_token()) {
-                // Refresh successful - get updated expiry time
-                wp_cache_delete('zoho_token_expires_at', 'options');
-                $token_expires_at = get_option('zoho_token_expires_at', 0);
-            }
-        }
-        // If still no expiry time but token exists, set it to 1 hour from now
-        if ($token_expires_at == 0 && $connected) {
-            $token_expires_at = time() + 3600;
-            update_option('zoho_token_expires_at', $token_expires_at);
-        }
-    }
     $default_redirect_uri = admin_url('admin.php?page=zoho-sync');
     
     // Handle organization selection/change
@@ -228,27 +208,6 @@ function zoho_dashboard_page() {
     
     // Check if user wants to change organization
     $show_change_org_form = isset($_GET['change_org']) && $_GET['change_org'] == '1';
-    
-    // If token exists but expiry time is not set, set it to 1 hour from now
-    if ($connected && !$token_expires_at) {
-        $token_expires_at = time() + 3600;
-        update_option('zoho_token_expires_at', $token_expires_at);
-    }
-    
-    // Calculate token expiry time
-    $expires_in = '60 minutes'; // Default
-    $is_token_expired = false;
-    if ($connected && $token_expires_at > 0) {
-        $time_left = $token_expires_at - time();
-        if ($time_left > 0) {
-            $minutes = round($time_left / 60);
-            $expires_in = $minutes . ' minutes';
-        } else {
-            $is_token_expired = true;
-            // Token expired - but auto-refresh will handle it on next API call
-            $expires_in = 'Token expired (will auto-refresh on next API call)';
-        }
-    }
     
     // Fetch organizations if connected (always fetch to show Change Organization button if multiple orgs exist)
     $organizations = array();
@@ -492,35 +451,6 @@ function zoho_dashboard_page() {
                         <p style="margin: 5px 0; color: #666;">
                             <strong>Organization ID:</strong> <?php echo esc_html($organization_id); ?>
                         </p>
-                        <p style="margin: 5px 0; color: <?php echo $is_token_expired ? '#ff9800' : '#666'; ?>;">
-                            <?php if ($is_token_expired): ?>
-                                <strong>⚠️ Token Status:</strong> <?php echo esc_html($expires_in); ?>
-                                <span style="font-size: 12px; display: block; margin-top: 3px; color: #666;">
-                                    Token will automatically refresh when needed. Manual refresh is optional.
-                                </span>
-                            <?php else: ?>
-                                <strong>Token Status:</strong> Active - Expires in <?php echo esc_html($expires_in); ?>
-                                <span style="font-size: 12px; display: block; margin-top: 3px; color: #666;">
-                                    Token will automatically refresh when expired.
-                                </span>
-                            <?php endif; ?>
-                        </p>
-                    </div>
-                <?php else: ?>
-                    <div style="margin-bottom: 15px;">
-                        <p style="margin: 5px 0; color: <?php echo $is_token_expired ? '#ff9800' : '#666'; ?>;">
-                            <?php if ($is_token_expired): ?>
-                                <strong>⚠️ Token Status:</strong> <?php echo esc_html($expires_in); ?>
-                                <span style="font-size: 12px; display: block; margin-top: 3px; color: #666;">
-                                    Token will automatically refresh when needed. Manual refresh is optional.
-                                </span>
-                            <?php else: ?>
-                                <strong>Token Status:</strong> Active - Expires in <?php echo esc_html($expires_in); ?>
-                                <span style="font-size: 12px; display: block; margin-top: 3px; color: #666;">
-                                    Token will automatically refresh when expired.
-                                </span>
-                            <?php endif; ?>
-                        </p>
                     </div>
                 <?php endif; ?>
                 
@@ -528,11 +458,6 @@ function zoho_dashboard_page() {
                     <a href="<?php echo esc_url(zoho_auth_url()); ?>" class="button button-secondary" style="margin-right: 10px;">
                         Reauthorize
                     </a>
-                    <?php if ($is_token_expired): ?>
-                        <a href="<?php echo esc_url(zoho_auth_url()); ?>" class="button button-secondary" style="margin-right: 10px;" title="Manually refresh token (auto-refresh will handle it automatically)">
-                            🔄 Refresh Token
-                        </a>
-                    <?php endif; ?>
                     <?php if ($organization_id && !empty($organizations) && count($organizations) > 1): ?>
                         <a href="<?php echo esc_url(admin_url('admin.php?page=zoho-sync&change_org=1')); ?>" class="button button-secondary" style="margin-right: 10px;">
                             Change Organization
