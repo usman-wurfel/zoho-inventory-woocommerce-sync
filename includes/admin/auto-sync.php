@@ -503,9 +503,69 @@ function zoho_sync_single_order($order_id) {
                             if (empty($contact_data_direct['contact_name']) || $contact_data_direct['contact_name'] === $contact_data_direct['email']) {
                                 $contact_data_direct['contact_name'] = trim($order_first_name . ' ' . $order_last_name);
                             }
+                            
+                            // FORCE complete addresses from order directly before API call
+                            // Billing address - ALL fields
+                            $bill_addr = array();
+                            $bill_addr1 = trim($order->get_billing_address_1());
+                            $bill_addr2 = trim($order->get_billing_address_2());
+                            $bill_city = trim($order->get_billing_city());
+                            $bill_state = trim($order->get_billing_state());
+                            $bill_postcode = trim($order->get_billing_postcode());
+                            $bill_country = trim($order->get_billing_country());
+                            if (!empty($bill_addr1)) $bill_addr['address'] = $bill_addr1;
+                            if (!empty($bill_addr2)) $bill_addr['street2'] = $bill_addr2;
+                            if (!empty($bill_city)) $bill_addr['city'] = $bill_city;
+                            if (!empty($bill_state)) $bill_addr['state'] = $bill_state;
+                            if (!empty($bill_postcode)) $bill_addr['zip'] = $bill_postcode;
+                            if (!empty($bill_country)) $bill_addr['country'] = $bill_country;
+                            if (!empty($bill_addr)) $contact_data_direct['billing_address'] = $bill_addr;
+                            
+                            // Shipping address - ALL fields
+                            $ship_addr = array();
+                            $ship_addr1 = trim($order->get_shipping_address_1());
+                            $ship_addr2 = trim($order->get_shipping_address_2());
+                            $ship_city = trim($order->get_shipping_city());
+                            $ship_state = trim($order->get_shipping_state());
+                            $ship_postcode = trim($order->get_shipping_postcode());
+                            $ship_country = trim($order->get_shipping_country());
+                            if (!empty($ship_addr1)) $ship_addr['address'] = $ship_addr1;
+                            if (!empty($ship_addr2)) $ship_addr['street2'] = $ship_addr2;
+                            if (!empty($ship_city)) $ship_addr['city'] = $ship_city;
+                            if (!empty($ship_state)) $ship_addr['state'] = $ship_state;
+                            if (!empty($ship_postcode)) $ship_addr['zip'] = $ship_postcode;
+                            if (!empty($ship_country)) $ship_addr['country'] = $ship_country;
+                            if (!empty($ship_addr)) $contact_data_direct['shipping_address'] = $ship_addr;
+                            
+                            // FORCE first_name and last_name
+                            if (!empty($order_first_name)) $contact_data_direct['first_name'] = $order_first_name;
+                            if (!empty($order_last_name)) $contact_data_direct['last_name'] = $order_last_name;
+                            
+                            // Log the data being sent to Zoho
+                            error_log('=== ZOHO CONTACT CREATE REQUEST (Guest Order) ===');
+                            error_log('Order ID: ' . $order->get_id());
+                            error_log('User ID: ' . $user_id);
+                            error_log('Request Data: ' . json_encode($contact_data_direct, JSON_PRETTY_PRINT));
+                            
                             $contact_response = zoho_api_post('contacts', $contact_data_direct);
+                            
+                            // Log the response from Zoho
+                            error_log('=== ZOHO CONTACT CREATE RESPONSE ===');
+                            error_log('Response: ' . json_encode($contact_response, JSON_PRETTY_PRINT));
+                            
                             if (!is_wp_error($contact_response) && isset($contact_response['contact']['contact_id'])) {
                                 $existing_contact_id = $contact_response['contact']['contact_id'];
+                                
+                                // Also log using detailed log function
+                                zoho_add_detailed_log(
+                                    'contact',
+                                    'customer',
+                                    $user_id,
+                                    'contact',
+                                    $existing_contact_id,
+                                    json_encode($contact_data_direct),
+                                    json_encode($contact_response)
+                                );
                             }
                         }
                         

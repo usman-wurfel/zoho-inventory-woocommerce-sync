@@ -677,21 +677,51 @@ function zoho_build_contact_data_from_order($order) {
     global $wpdb;
     $order_id = $order->get_id();
     $addresses_table = $wpdb->prefix . 'wc_order_addresses';
-    // Get first_name and last_name - use order methods directly (same as manual syncing)
-    // Order methods work with both HPOS and non-HPOS systems
-    $first_name = trim($order->get_billing_first_name());
-    $last_name = trim($order->get_billing_last_name());
+    $first_name = '';
+    $last_name = '';
+    
+    // PRIORITY 1: Get from HPOS addresses table (most reliable)
+    $address_data = null;
+    if ($wpdb->get_var("SHOW TABLES LIKE '{$addresses_table}'") === $addresses_table) {
+        $address_data = $wpdb->get_row($wpdb->prepare(
+            "SELECT first_name, last_name, address_1, address_2, city, state, postcode, country, email, phone FROM {$addresses_table} WHERE order_id = %d AND address_type = 'billing' LIMIT 1",
+            $order_id
+        ), ARRAY_A);
+        
+        if ($address_data && is_array($address_data)) {
+            $first_name = trim($address_data['first_name'] ?? '');
+            $last_name = trim($address_data['last_name'] ?? '');
+        }
+    }
+    
+    // PRIORITY 2: If empty, try order methods
+    if (empty($first_name)) {
+        $first_name = trim($order->get_billing_first_name());
+    }
+    if (empty($last_name)) {
+        $last_name = trim($order->get_billing_last_name());
+    }
     
     // Build contact name
     $contact_name = trim($first_name . ' ' . $last_name);
     
-    // Get email and phone - use order methods directly
-    $billing_email = $order->get_billing_email();
-    $billing_phone = $order->get_billing_phone();
-    
     // Fallback to email ONLY if absolutely no name
     if (empty($contact_name) || $contact_name === ' ') {
-        $contact_name = $billing_email;
+        $contact_name = $order->get_billing_email();
+    }
+
+    // Get email and phone - try HPOS table first if available
+    $billing_email = '';
+    $billing_phone = '';
+    if (isset($address_data)) {
+        $billing_email = trim($address_data['email'] ?? '');
+        $billing_phone = trim($address_data['phone'] ?? '');
+    }
+    if (empty($billing_email)) {
+        $billing_email = $order->get_billing_email();
+    }
+    if (empty($billing_phone)) {
+        $billing_phone = $order->get_billing_phone();
     }
     
     $contact_data = array(
@@ -749,54 +779,137 @@ function zoho_build_contact_data_from_order($order) {
         $contact_data['company_name'] = $order->get_billing_company();
     }
 
-    // Add billing address - use order methods directly (same as manual syncing)
+    // Add billing address if available (use HPOS table data if available)
     // Note: Zoho uses 'address' field, not 'street'
-    $billing_address = array();
-    if (!empty($order->get_billing_address_1())) {
-        $billing_address['address'] = trim($order->get_billing_address_1());
+    $billing_address_1 = '';
+    $billing_address_2 = '';
+    $billing_city = '';
+    $billing_state = '';
+    $billing_postcode = '';
+    $billing_country = '';
+    
+    // Use data from HPOS table if already fetched
+    if (isset($address_data)) {
+        $billing_address_1 = trim($address_data['address_1'] ?? '');
+        $billing_address_2 = trim($address_data['address_2'] ?? '');
+        $billing_city = trim($address_data['city'] ?? '');
+        $billing_state = trim($address_data['state'] ?? '');
+        $billing_postcode = trim($address_data['postcode'] ?? '');
+        $billing_country = trim($address_data['country'] ?? '');
     }
-    if (!empty($order->get_billing_address_2())) {
-        $billing_address['street2'] = trim($order->get_billing_address_2());
+    
+    // If empty, try order methods
+    if (empty($billing_address_1)) {
+        $billing_address_1 = trim($order->get_billing_address_1());
     }
-    if (!empty($order->get_billing_city())) {
-        $billing_address['city'] = trim($order->get_billing_city());
+    if (empty($billing_address_2)) {
+        $billing_address_2 = trim($order->get_billing_address_2());
     }
-    if (!empty($order->get_billing_state())) {
-        $billing_address['state'] = trim($order->get_billing_state());
+    if (empty($billing_city)) {
+        $billing_city = trim($order->get_billing_city());
     }
-    if (!empty($order->get_billing_postcode())) {
-        $billing_address['zip'] = trim($order->get_billing_postcode());
+    if (empty($billing_state)) {
+        $billing_state = trim($order->get_billing_state());
     }
-    if (!empty($order->get_billing_country())) {
-        $billing_address['country'] = trim($order->get_billing_country());
+    if (empty($billing_postcode)) {
+        $billing_postcode = trim($order->get_billing_postcode());
     }
-    if (!empty($billing_address)) {
-        $contact_data['billing_address'] = $billing_address;
+    if (empty($billing_country)) {
+        $billing_country = trim($order->get_billing_country());
+    }
+    
+    // Add billing address if any field is available
+    if (!empty($billing_address_1) || !empty($billing_address_2) || !empty($billing_city) || !empty($billing_state) || !empty($billing_postcode) || !empty($billing_country)) {
+        $contact_data['billing_address'] = array();
+        
+        if (!empty($billing_address_1)) {
+            $contact_data['billing_address']['address'] = $billing_address_1;
+        }
+        if (!empty($billing_address_2)) {
+            $contact_data['billing_address']['street2'] = $billing_address_2;
+        }
+        if (!empty($billing_city)) {
+            $contact_data['billing_address']['city'] = $billing_city;
+        }
+        if (!empty($billing_state)) {
+            $contact_data['billing_address']['state'] = $billing_state;
+        }
+        if (!empty($billing_postcode)) {
+            $contact_data['billing_address']['zip'] = $billing_postcode;
+        }
+        if (!empty($billing_country)) {
+            $contact_data['billing_address']['country'] = $billing_country;
+        }
     }
 
-    // Add shipping address - use order methods directly (same as manual syncing)
+    // Add shipping address if available (HPOS compatible)
     // Note: Zoho uses 'address' field, not 'street'
-    $shipping_address = array();
-    if (!empty($order->get_shipping_address_1())) {
-        $shipping_address['address'] = trim($order->get_shipping_address_1());
+    $shipping_address_1 = '';
+    $shipping_address_2 = '';
+    $shipping_city = '';
+    $shipping_state = '';
+    $shipping_postcode = '';
+    $shipping_country = '';
+    
+    // PRIORITY 1: Get from HPOS addresses table
+    if ($wpdb->get_var("SHOW TABLES LIKE '{$addresses_table}'") === $addresses_table) {
+        $shipping_address_data = $wpdb->get_row($wpdb->prepare(
+            "SELECT address_1, address_2, city, state, postcode, country FROM {$addresses_table} WHERE order_id = %d AND address_type = 'shipping' LIMIT 1",
+            $order_id
+        ), ARRAY_A);
+        
+        if ($shipping_address_data) {
+            $shipping_address_1 = trim($shipping_address_data['address_1'] ?? '');
+            $shipping_address_2 = trim($shipping_address_data['address_2'] ?? '');
+            $shipping_city = trim($shipping_address_data['city'] ?? '');
+            $shipping_state = trim($shipping_address_data['state'] ?? '');
+            $shipping_postcode = trim($shipping_address_data['postcode'] ?? '');
+            $shipping_country = trim($shipping_address_data['country'] ?? '');
+        }
     }
-    if (!empty($order->get_shipping_address_2())) {
-        $shipping_address['street2'] = trim($order->get_shipping_address_2());
+    
+    // PRIORITY 2: If empty, try order methods
+    if (empty($shipping_address_1)) {
+        $shipping_address_1 = trim($order->get_shipping_address_1());
     }
-    if (!empty($order->get_shipping_city())) {
-        $shipping_address['city'] = trim($order->get_shipping_city());
+    if (empty($shipping_address_2)) {
+        $shipping_address_2 = trim($order->get_shipping_address_2());
     }
-    if (!empty($order->get_shipping_state())) {
-        $shipping_address['state'] = trim($order->get_shipping_state());
+    if (empty($shipping_city)) {
+        $shipping_city = trim($order->get_shipping_city());
     }
-    if (!empty($order->get_shipping_postcode())) {
-        $shipping_address['zip'] = trim($order->get_shipping_postcode());
+    if (empty($shipping_state)) {
+        $shipping_state = trim($order->get_shipping_state());
     }
-    if (!empty($order->get_shipping_country())) {
-        $shipping_address['country'] = trim($order->get_shipping_country());
+    if (empty($shipping_postcode)) {
+        $shipping_postcode = trim($order->get_shipping_postcode());
     }
-    if (!empty($shipping_address)) {
-        $contact_data['shipping_address'] = $shipping_address;
+    if (empty($shipping_country)) {
+        $shipping_country = trim($order->get_shipping_country());
+    }
+    
+    // Add shipping address if any field is available
+    if (!empty($shipping_address_1) || !empty($shipping_address_2) || !empty($shipping_city) || !empty($shipping_state) || !empty($shipping_postcode) || !empty($shipping_country)) {
+        $contact_data['shipping_address'] = array();
+        
+        if (!empty($shipping_address_1)) {
+            $contact_data['shipping_address']['address'] = $shipping_address_1;
+        }
+        if (!empty($shipping_address_2)) {
+            $contact_data['shipping_address']['street2'] = $shipping_address_2;
+        }
+        if (!empty($shipping_city)) {
+            $contact_data['shipping_address']['city'] = $shipping_city;
+        }
+        if (!empty($shipping_state)) {
+            $contact_data['shipping_address']['state'] = $shipping_state;
+        }
+        if (!empty($shipping_postcode)) {
+            $contact_data['shipping_address']['zip'] = $shipping_postcode;
+        }
+        if (!empty($shipping_country)) {
+            $contact_data['shipping_address']['country'] = $shipping_country;
+        }
     }
 
     return $contact_data;
