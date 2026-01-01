@@ -584,39 +584,72 @@ function zoho_sync_single_order($order_id) {
                         $found_email = isset($found_contact['email']) ? strtolower(trim($found_contact['email'])) : '';
                         if ($found_email === strtolower(trim($contact_data_from_order['email']))) {
                             $found_contact_id = $found_contact['contact_id'];
-                            // Force update with proper name from order
-                            $contact_data_from_order['contact_name'] = trim($order_first_name . ' ' . $order_last_name);
+                            // DIRECTLY FETCH FROM HPOS TABLE USING RAW SQL - ORDER ID BASED
+                            global $wpdb;
+                            $order_id = $order->get_id();
+                            $addresses_table = $wpdb->prefix . 'wc_order_addresses';
+                            
+                            // Fetch billing address directly from HPOS table
+                            $billing_data = $wpdb->get_row($wpdb->prepare(
+                                "SELECT first_name, last_name, address_1, address_2, city, state, postcode, country, email, phone 
+                                 FROM {$addresses_table} 
+                                 WHERE order_id = %d AND address_type = 'billing' 
+                                 LIMIT 1",
+                                $order_id
+                            ), ARRAY_A);
+                            
+                            // Fetch shipping address directly from HPOS table
+                            $shipping_data = $wpdb->get_row($wpdb->prepare(
+                                "SELECT address_1, address_2, city, state, postcode, country 
+                                 FROM {$addresses_table} 
+                                 WHERE order_id = %d AND address_type = 'shipping' 
+                                 LIMIT 1",
+                                $order_id
+                            ), ARRAY_A);
+                            
+                            // Use HPOS table data
+                            $hp_first_name = !empty($billing_data['first_name']) ? trim($billing_data['first_name']) : trim($order->get_billing_first_name());
+                            $hp_last_name = !empty($billing_data['last_name']) ? trim($billing_data['last_name']) : trim($order->get_billing_last_name());
+                            
+                            // Set contact name from HPOS table
+                            $contact_data_from_order['contact_name'] = trim($hp_first_name . ' ' . $hp_last_name);
                             if (empty($contact_data_from_order['contact_name'])) {
                                 $contact_data_from_order['contact_name'] = $order->get_formatted_billing_full_name();
                             }
                             
-                            // FORCE complete addresses and names from order directly
-                            if (!empty($order_first_name)) $contact_data_from_order['first_name'] = $order_first_name;
-                            if (!empty($order_last_name)) $contact_data_from_order['last_name'] = $order_last_name;
+                            // Set first_name and last_name from HPOS
+                            if (!empty($hp_first_name)) $contact_data_from_order['first_name'] = $hp_first_name;
+                            if (!empty($hp_last_name)) $contact_data_from_order['last_name'] = $hp_last_name;
                             
-                            // FORCE complete billing address
-                            $bill_addr = array();
-                            if (!empty(trim($order->get_billing_address_1()))) $bill_addr['address'] = trim($order->get_billing_address_1());
-                            if (!empty(trim($order->get_billing_address_2()))) $bill_addr['street2'] = trim($order->get_billing_address_2());
-                            if (!empty(trim($order->get_billing_city()))) $bill_addr['city'] = trim($order->get_billing_city());
-                            if (!empty(trim($order->get_billing_state()))) $bill_addr['state'] = trim($order->get_billing_state());
-                            if (!empty(trim($order->get_billing_postcode()))) $bill_addr['zip'] = trim($order->get_billing_postcode());
-                            if (!empty(trim($order->get_billing_country()))) $bill_addr['country'] = trim($order->get_billing_country());
-                            if (!empty($bill_addr)) $contact_data_from_order['billing_address'] = $bill_addr;
+                            // Build billing address from HPOS table
+                            if ($billing_data) {
+                                $bill_addr = array();
+                                if (!empty($billing_data['address_1'])) $bill_addr['address'] = trim($billing_data['address_1']);
+                                if (!empty($billing_data['address_2'])) $bill_addr['street2'] = trim($billing_data['address_2']);
+                                if (!empty($billing_data['city'])) $bill_addr['city'] = trim($billing_data['city']);
+                                if (!empty($billing_data['state'])) $bill_addr['state'] = trim($billing_data['state']);
+                                if (!empty($billing_data['postcode'])) $bill_addr['zip'] = trim($billing_data['postcode']);
+                                if (!empty($billing_data['country'])) $bill_addr['country'] = trim($billing_data['country']);
+                                if (!empty($bill_addr)) $contact_data_from_order['billing_address'] = $bill_addr;
+                            }
                             
-                            // FORCE complete shipping address
-                            $ship_addr = array();
-                            if (!empty(trim($order->get_shipping_address_1()))) $ship_addr['address'] = trim($order->get_shipping_address_1());
-                            if (!empty(trim($order->get_shipping_address_2()))) $ship_addr['street2'] = trim($order->get_shipping_address_2());
-                            if (!empty(trim($order->get_shipping_city()))) $ship_addr['city'] = trim($order->get_shipping_city());
-                            if (!empty(trim($order->get_shipping_state()))) $ship_addr['state'] = trim($order->get_shipping_state());
-                            if (!empty(trim($order->get_shipping_postcode()))) $ship_addr['zip'] = trim($order->get_shipping_postcode());
-                            if (!empty(trim($order->get_shipping_country()))) $ship_addr['country'] = trim($order->get_shipping_country());
-                            if (!empty($ship_addr)) $contact_data_from_order['shipping_address'] = $ship_addr;
+                            // Build shipping address from HPOS table
+                            if ($shipping_data) {
+                                $ship_addr = array();
+                                if (!empty($shipping_data['address_1'])) $ship_addr['address'] = trim($shipping_data['address_1']);
+                                if (!empty($shipping_data['address_2'])) $ship_addr['street2'] = trim($shipping_data['address_2']);
+                                if (!empty($shipping_data['city'])) $ship_addr['city'] = trim($shipping_data['city']);
+                                if (!empty($shipping_data['state'])) $ship_addr['state'] = trim($shipping_data['state']);
+                                if (!empty($shipping_data['postcode'])) $ship_addr['zip'] = trim($shipping_data['postcode']);
+                                if (!empty($shipping_data['country'])) $ship_addr['country'] = trim($shipping_data['country']);
+                                if (!empty($ship_addr)) $contact_data_from_order['shipping_address'] = $ship_addr;
+                            }
                             
                             error_log('=== LOCATION 4: EXISTING CUSTOMER ORDER - UPDATE CONTACT (Found by Email) ===');
                             error_log('Order ID: ' . $order->get_id() . ' | Customer ID: ' . $customer_id . ' | Contact ID: ' . $found_contact_id);
-                            error_log('Request: ' . json_encode($contact_data_from_order, JSON_PRETTY_PRINT));
+                            error_log('HPOS Billing Data: ' . json_encode($billing_data, JSON_PRETTY_PRINT));
+                            error_log('HPOS Shipping Data: ' . json_encode($shipping_data, JSON_PRETTY_PRINT));
+                            error_log('Final Request: ' . json_encode($contact_data_from_order, JSON_PRETTY_PRINT));
                             $update_response = zoho_api_put('contacts/' . $found_contact_id, $contact_data_from_order);
                             error_log('Response: ' . json_encode($update_response, JSON_PRETTY_PRINT));
                             break;
@@ -626,56 +659,76 @@ function zoho_sync_single_order($order_id) {
                 
                 // Create new contact if not found
                 if (empty($found_contact_id)) {
-                    // Ensure name is properly set before creating
-                    $contact_data_from_order['contact_name'] = trim($order_first_name . ' ' . $order_last_name);
+                    // DIRECTLY FETCH FROM HPOS TABLE USING RAW SQL - ORDER ID BASED
+                    global $wpdb;
+                    $order_id = $order->get_id();
+                    $addresses_table = $wpdb->prefix . 'wc_order_addresses';
+                    
+                    // Fetch billing address directly from HPOS table
+                    $billing_data = $wpdb->get_row($wpdb->prepare(
+                        "SELECT first_name, last_name, address_1, address_2, city, state, postcode, country, email, phone 
+                         FROM {$addresses_table} 
+                         WHERE order_id = %d AND address_type = 'billing' 
+                         LIMIT 1",
+                        $order_id
+                    ), ARRAY_A);
+                    
+                    // Fetch shipping address directly from HPOS table
+                    $shipping_data = $wpdb->get_row($wpdb->prepare(
+                        "SELECT address_1, address_2, city, state, postcode, country 
+                         FROM {$addresses_table} 
+                         WHERE order_id = %d AND address_type = 'shipping' 
+                         LIMIT 1",
+                        $order_id
+                    ), ARRAY_A);
+                    
+                    // Use HPOS table data if available, otherwise fallback to order methods
+                    $hp_first_name = !empty($billing_data['first_name']) ? trim($billing_data['first_name']) : trim($order->get_billing_first_name());
+                    $hp_last_name = !empty($billing_data['last_name']) ? trim($billing_data['last_name']) : trim($order->get_billing_last_name());
+                    $hp_email = !empty($billing_data['email']) ? trim($billing_data['email']) : trim($order->get_billing_email());
+                    
+                    // Set contact name from HPOS table data
+                    $contact_data_from_order['contact_name'] = trim($hp_first_name . ' ' . $hp_last_name);
                     if (empty($contact_data_from_order['contact_name'])) {
                         $contact_data_from_order['contact_name'] = $order->get_formatted_billing_full_name();
                     }
-                    // Final check - don't use email as name
                     if (empty($contact_data_from_order['contact_name']) || $contact_data_from_order['contact_name'] === $contact_data_from_order['email']) {
-                        $contact_data_from_order['contact_name'] = trim($order_first_name . ' ' . $order_last_name);
+                        $contact_data_from_order['contact_name'] = trim($hp_first_name . ' ' . $hp_last_name);
                     }
                     
-                    // FORCE complete addresses and names from order directly before API call
-                    // Force first_name and last_name
-                    if (!empty($order_first_name)) $contact_data_from_order['first_name'] = $order_first_name;
-                    if (!empty($order_last_name)) $contact_data_from_order['last_name'] = $order_last_name;
+                    // Set first_name and last_name from HPOS
+                    if (!empty($hp_first_name)) $contact_data_from_order['first_name'] = $hp_first_name;
+                    if (!empty($hp_last_name)) $contact_data_from_order['last_name'] = $hp_last_name;
                     
-                    // FORCE complete billing address - ALL fields from order
-                    $bill_addr = array();
-                    $bill_addr1 = trim($order->get_billing_address_1());
-                    $bill_addr2 = trim($order->get_billing_address_2());
-                    $bill_city = trim($order->get_billing_city());
-                    $bill_state = trim($order->get_billing_state());
-                    $bill_postcode = trim($order->get_billing_postcode());
-                    $bill_country = trim($order->get_billing_country());
-                    if (!empty($bill_addr1)) $bill_addr['address'] = $bill_addr1;
-                    if (!empty($bill_addr2)) $bill_addr['street2'] = $bill_addr2;
-                    if (!empty($bill_city)) $bill_addr['city'] = $bill_city;
-                    if (!empty($bill_state)) $bill_addr['state'] = $bill_state;
-                    if (!empty($bill_postcode)) $bill_addr['zip'] = $bill_postcode;
-                    if (!empty($bill_country)) $bill_addr['country'] = $bill_country;
-                    if (!empty($bill_addr)) $contact_data_from_order['billing_address'] = $bill_addr;
+                    // Build billing address from HPOS table
+                    if ($billing_data) {
+                        $bill_addr = array();
+                        if (!empty($billing_data['address_1'])) $bill_addr['address'] = trim($billing_data['address_1']);
+                        if (!empty($billing_data['address_2'])) $bill_addr['street2'] = trim($billing_data['address_2']);
+                        if (!empty($billing_data['city'])) $bill_addr['city'] = trim($billing_data['city']);
+                        if (!empty($billing_data['state'])) $bill_addr['state'] = trim($billing_data['state']);
+                        if (!empty($billing_data['postcode'])) $bill_addr['zip'] = trim($billing_data['postcode']);
+                        if (!empty($billing_data['country'])) $bill_addr['country'] = trim($billing_data['country']);
+                        if (!empty($bill_addr)) $contact_data_from_order['billing_address'] = $bill_addr;
+                    }
                     
-                    // FORCE complete shipping address - ALL fields from order
-                    $ship_addr = array();
-                    $ship_addr1 = trim($order->get_shipping_address_1());
-                    $ship_addr2 = trim($order->get_shipping_address_2());
-                    $ship_city = trim($order->get_shipping_city());
-                    $ship_state = trim($order->get_shipping_state());
-                    $ship_postcode = trim($order->get_shipping_postcode());
-                    $ship_country = trim($order->get_shipping_country());
-                    if (!empty($ship_addr1)) $ship_addr['address'] = $ship_addr1;
-                    if (!empty($ship_addr2)) $ship_addr['street2'] = $ship_addr2;
-                    if (!empty($ship_city)) $ship_addr['city'] = $ship_city;
-                    if (!empty($ship_state)) $ship_addr['state'] = $ship_state;
-                    if (!empty($ship_postcode)) $ship_addr['zip'] = $ship_postcode;
-                    if (!empty($ship_country)) $ship_addr['country'] = $ship_country;
-                    if (!empty($ship_addr)) $contact_data_from_order['shipping_address'] = $ship_addr;
+                    // Build shipping address from HPOS table
+                    if ($shipping_data) {
+                        $ship_addr = array();
+                        if (!empty($shipping_data['address_1'])) $ship_addr['address'] = trim($shipping_data['address_1']);
+                        if (!empty($shipping_data['address_2'])) $ship_addr['street2'] = trim($shipping_data['address_2']);
+                        if (!empty($shipping_data['city'])) $ship_addr['city'] = trim($shipping_data['city']);
+                        if (!empty($shipping_data['state'])) $ship_addr['state'] = trim($shipping_data['state']);
+                        if (!empty($shipping_data['postcode'])) $ship_addr['zip'] = trim($shipping_data['postcode']);
+                        if (!empty($shipping_data['country'])) $ship_addr['country'] = trim($shipping_data['country']);
+                        if (!empty($ship_addr)) $contact_data_from_order['shipping_address'] = $ship_addr;
+                    }
                     
                     error_log('=== LOCATION 5: EXISTING CUSTOMER ORDER - CREATE CONTACT (New Contact) ===');
                     error_log('Order ID: ' . $order->get_id() . ' | Customer ID: ' . $customer_id);
-                    error_log('Request: ' . json_encode($contact_data_from_order, JSON_PRETTY_PRINT));
+                    error_log('HPOS Billing Data: ' . json_encode($billing_data, JSON_PRETTY_PRINT));
+                    error_log('HPOS Shipping Data: ' . json_encode($shipping_data, JSON_PRETTY_PRINT));
+                    error_log('Final Request: ' . json_encode($contact_data_from_order, JSON_PRETTY_PRINT));
                     $create_response = zoho_api_post('contacts', $contact_data_from_order);
                     error_log('Response: ' . json_encode($create_response, JSON_PRETTY_PRINT));
                     if (!is_wp_error($create_response) && isset($create_response['contact']['contact_id'])) {
