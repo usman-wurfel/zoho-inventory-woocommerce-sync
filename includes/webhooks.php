@@ -88,12 +88,20 @@ function zoho_handle_webhook($request) {
         $object_type = 'items';
         $object_data = $body['item'];
         $object_id = isset($object_data['item_id']) ? $object_data['item_id'] : '';
-        // Determine action from event_type or default to 'update'
+        // Determine action from event_type, status, or default to 'update'
         if (isset($body['event_type'])) {
             $event_type = strtolower($body['event_type']);
             if (strpos($event_type, 'created') !== false || strpos($event_type, 'create') !== false) {
                 $action = 'create';
             } elseif (strpos($event_type, 'deleted') !== false || strpos($event_type, 'delete') !== false) {
+                $action = 'delete';
+            } else {
+                $action = 'update';
+            }
+        } elseif (isset($object_data['status'])) {
+            // Check status field - if inactive, treat as delete
+            $status = strtolower($object_data['status']);
+            if ($status === 'inactive' || $status === 'deleted') {
                 $action = 'delete';
             } else {
                 $action = 'update';
@@ -413,17 +421,21 @@ function zoho_update_woo_product_from_zoho_item($product, $zoho_item_data) {
  * Delete or deactivate WooCommerce product when Zoho item is deleted
  */
 function zoho_delete_woo_product_from_zoho_item($zoho_item_id) {
-    if (get_option('zoho_auto_delete_woo_products', 'no') !== 'yes') {
-        return; // Don't delete if not enabled
-    }
-    
     global $wpdb;
     $product_id = $wpdb->get_var($wpdb->prepare(
         "SELECT post_id FROM {$wpdb->postmeta} WHERE meta_key = '_zoho_item_id' AND meta_value = %s LIMIT 1",
         $zoho_item_id
     ));
     
-    if ($product_id) {
+    if (!$product_id) {
+        return; // Product not found
+    }
+    
+    // Check if auto-delete is enabled
+    $auto_delete = get_option('zoho_auto_delete_woo_products', 'no');
+    
+    if ($auto_delete === 'yes') {
+        // Permanently delete the product
         wp_delete_post($product_id, true);
         
         zoho_add_detailed_log(
@@ -435,6 +447,22 @@ function zoho_delete_woo_product_from_zoho_item($zoho_item_id) {
             json_encode(array('action' => 'webhook_delete')),
             json_encode(array('status' => 'deleted', 'product_id' => $product_id))
         );
+    } else {
+        // Just move to trash (default behavior)
+        $product = wc_get_product($product_id);
+        if ($product) {
+            $product->delete(false); // false = move to trash, true = permanently delete
+            
+            zoho_add_detailed_log(
+                'item',
+                'product',
+                $product_id,
+                'item',
+                $zoho_item_id,
+                json_encode(array('action' => 'webhook_delete')),
+                json_encode(array('status' => 'trashed', 'product_id' => $product_id))
+            );
+        }
     }
 }
 

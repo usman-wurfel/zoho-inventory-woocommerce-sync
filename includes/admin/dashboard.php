@@ -497,6 +497,7 @@ function zoho_dashboard_page() {
             update_option('zoho_sync_zoho_to_woo_contacts', isset($_POST['sync_contacts']) ? 'yes' : 'no');
             update_option('zoho_sync_zoho_to_woo_invoices', isset($_POST['sync_invoices']) ? 'yes' : 'no');
             update_option('zoho_webhook_secret', sanitize_text_field($_POST['webhook_secret']));
+            update_option('zoho_auto_delete_woo_products', isset($_POST['auto_delete_products']) ? 'yes' : 'no');
             echo '<div class="notice notice-success"><p>Webhook settings saved!</p></div>';
         }
         
@@ -622,6 +623,20 @@ function zoho_dashboard_page() {
                                 <input type="checkbox" name="sync_invoices" value="1" <?php checked($sync_invoices, 'yes'); ?>>
                                 <strong>Invoices → Orders:</strong> Sync Zoho invoices to WooCommerce orders
                             </label>
+                        </td>
+                    </tr>
+                    
+                    <tr>
+                        <th scope="row">Delete Options</th>
+                        <td>
+                            <?php 
+                            $auto_delete_products = get_option('zoho_auto_delete_woo_products', 'no');
+                            ?>
+                            <label style="display: block; margin-bottom: 10px;">
+                                <input type="checkbox" name="auto_delete_products" value="1" <?php checked($auto_delete_products, 'yes'); ?>>
+                                <strong>Permanently delete products:</strong> When Zoho item is deleted, permanently delete WooCommerce product (otherwise move to trash)
+                            </label>
+                            <p class="description">By default, deleted items are moved to trash. Enable this to permanently delete them.</p>
                         </td>
                     </tr>
                 </table>
