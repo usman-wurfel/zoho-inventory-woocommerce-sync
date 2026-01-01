@@ -589,23 +589,31 @@ function zoho_sync_single_order($order_id) {
                             $order_id = $order->get_id();
                             $addresses_table = $wpdb->prefix . 'wc_order_addresses';
                             
-                            // Fetch billing address directly from HPOS table
-                            $billing_data = $wpdb->get_row($wpdb->prepare(
+                            // Fetch billing address directly from HPOS table - RAW SQL QUERY
+                            $billing_query = $wpdb->prepare(
                                 "SELECT first_name, last_name, address_1, address_2, city, state, postcode, country, email, phone 
                                  FROM {$addresses_table} 
                                  WHERE order_id = %d AND address_type = 'billing' 
                                  LIMIT 1",
                                 $order_id
-                            ), ARRAY_A);
+                            );
+                            error_log('LOCATION 4 - Billing Query: ' . $billing_query);
+                            $billing_data = $wpdb->get_row($billing_query, ARRAY_A);
                             
-                            // Fetch shipping address directly from HPOS table
-                            $shipping_data = $wpdb->get_row($wpdb->prepare(
+                            // Fetch shipping address directly from HPOS table - RAW SQL QUERY
+                            $shipping_query = $wpdb->prepare(
                                 "SELECT address_1, address_2, city, state, postcode, country 
                                  FROM {$addresses_table} 
                                  WHERE order_id = %d AND address_type = 'shipping' 
                                  LIMIT 1",
                                 $order_id
-                            ), ARRAY_A);
+                            );
+                            error_log('LOCATION 4 - Shipping Query: ' . $shipping_query);
+                            $shipping_data = $wpdb->get_row($shipping_query, ARRAY_A);
+                            
+                            // Debug: Check raw SQL result
+                            error_log('LOCATION 4 - Raw Billing Result (before processing): ' . print_r($billing_data, true));
+                            error_log('LOCATION 4 - Raw Shipping Result (before processing): ' . print_r($shipping_data, true));
                             
                             // Use HPOS table data
                             $hp_first_name = !empty($billing_data['first_name']) ? trim($billing_data['first_name']) : trim($order->get_billing_first_name());
@@ -664,23 +672,31 @@ function zoho_sync_single_order($order_id) {
                     $order_id = $order->get_id();
                     $addresses_table = $wpdb->prefix . 'wc_order_addresses';
                     
-                    // Fetch billing address directly from HPOS table
-                    $billing_data = $wpdb->get_row($wpdb->prepare(
+                    // Fetch billing address directly from HPOS table - RAW SQL QUERY
+                    $billing_query = $wpdb->prepare(
                         "SELECT first_name, last_name, address_1, address_2, city, state, postcode, country, email, phone 
                          FROM {$addresses_table} 
                          WHERE order_id = %d AND address_type = 'billing' 
                          LIMIT 1",
                         $order_id
-                    ), ARRAY_A);
+                    );
+                    error_log('LOCATION 5 - Billing Query: ' . $billing_query);
+                    $billing_data = $wpdb->get_row($billing_query, ARRAY_A);
                     
-                    // Fetch shipping address directly from HPOS table
-                    $shipping_data = $wpdb->get_row($wpdb->prepare(
+                    // Fetch shipping address directly from HPOS table - RAW SQL QUERY
+                    $shipping_query = $wpdb->prepare(
                         "SELECT address_1, address_2, city, state, postcode, country 
                          FROM {$addresses_table} 
                          WHERE order_id = %d AND address_type = 'shipping' 
                          LIMIT 1",
                         $order_id
-                    ), ARRAY_A);
+                    );
+                    error_log('LOCATION 5 - Shipping Query: ' . $shipping_query);
+                    $shipping_data = $wpdb->get_row($shipping_query, ARRAY_A);
+                    
+                    // Debug: Check raw SQL result
+                    error_log('LOCATION 5 - Raw Billing Result (before processing): ' . print_r($billing_data, true));
+                    error_log('LOCATION 5 - Raw Shipping Result (before processing): ' . print_r($shipping_data, true));
                     
                     // Use HPOS table data if available, otherwise fallback to order methods
                     $hp_first_name = !empty($billing_data['first_name']) ? trim($billing_data['first_name']) : trim($order->get_billing_first_name());
@@ -700,27 +716,45 @@ function zoho_sync_single_order($order_id) {
                     if (!empty($hp_first_name)) $contact_data_from_order['first_name'] = $hp_first_name;
                     if (!empty($hp_last_name)) $contact_data_from_order['last_name'] = $hp_last_name;
                     
-                    // Build billing address from HPOS table
+                    // Build billing address from HPOS table - Handle NULL values properly
                     if ($billing_data) {
                         $bill_addr = array();
-                        if (!empty($billing_data['address_1'])) $bill_addr['address'] = trim($billing_data['address_1']);
-                        if (!empty($billing_data['address_2'])) $bill_addr['street2'] = trim($billing_data['address_2']);
-                        if (!empty($billing_data['city'])) $bill_addr['city'] = trim($billing_data['city']);
-                        if (!empty($billing_data['state'])) $bill_addr['state'] = trim($billing_data['state']);
-                        if (!empty($billing_data['postcode'])) $bill_addr['zip'] = trim($billing_data['postcode']);
-                        if (!empty($billing_data['country'])) $bill_addr['country'] = trim($billing_data['country']);
+                        // Check if value exists and is not NULL or empty string
+                        $addr1 = isset($billing_data['address_1']) && $billing_data['address_1'] !== null && $billing_data['address_1'] !== '' ? trim($billing_data['address_1']) : '';
+                        $addr2 = isset($billing_data['address_2']) && $billing_data['address_2'] !== null && $billing_data['address_2'] !== '' ? trim($billing_data['address_2']) : '';
+                        $city = isset($billing_data['city']) && $billing_data['city'] !== null && $billing_data['city'] !== '' ? trim($billing_data['city']) : '';
+                        $state = isset($billing_data['state']) && $billing_data['state'] !== null && $billing_data['state'] !== '' ? trim($billing_data['state']) : '';
+                        $postcode = isset($billing_data['postcode']) && $billing_data['postcode'] !== null && $billing_data['postcode'] !== '' ? trim($billing_data['postcode']) : '';
+                        $country = isset($billing_data['country']) && $billing_data['country'] !== null && $billing_data['country'] !== '' ? trim($billing_data['country']) : '';
+                        
+                        if (!empty($addr1)) $bill_addr['address'] = $addr1;
+                        if (!empty($addr2)) $bill_addr['street2'] = $addr2;
+                        if (!empty($city)) $bill_addr['city'] = $city;
+                        if (!empty($state)) $bill_addr['state'] = $state;
+                        if (!empty($postcode)) $bill_addr['zip'] = $postcode;
+                        if (!empty($country)) $bill_addr['country'] = $country;
+                        
                         if (!empty($bill_addr)) $contact_data_from_order['billing_address'] = $bill_addr;
                     }
                     
-                    // Build shipping address from HPOS table
+                    // Build shipping address from HPOS table - Handle NULL values properly
                     if ($shipping_data) {
                         $ship_addr = array();
-                        if (!empty($shipping_data['address_1'])) $ship_addr['address'] = trim($shipping_data['address_1']);
-                        if (!empty($shipping_data['address_2'])) $ship_addr['street2'] = trim($shipping_data['address_2']);
-                        if (!empty($shipping_data['city'])) $ship_addr['city'] = trim($shipping_data['city']);
-                        if (!empty($shipping_data['state'])) $ship_addr['state'] = trim($shipping_data['state']);
-                        if (!empty($shipping_data['postcode'])) $ship_addr['zip'] = trim($shipping_data['postcode']);
-                        if (!empty($shipping_data['country'])) $ship_addr['country'] = trim($shipping_data['country']);
+                        // Check if value exists and is not NULL or empty string
+                        $s_addr1 = isset($shipping_data['address_1']) && $shipping_data['address_1'] !== null && $shipping_data['address_1'] !== '' ? trim($shipping_data['address_1']) : '';
+                        $s_addr2 = isset($shipping_data['address_2']) && $shipping_data['address_2'] !== null && $shipping_data['address_2'] !== '' ? trim($shipping_data['address_2']) : '';
+                        $s_city = isset($shipping_data['city']) && $shipping_data['city'] !== null && $shipping_data['city'] !== '' ? trim($shipping_data['city']) : '';
+                        $s_state = isset($shipping_data['state']) && $shipping_data['state'] !== null && $shipping_data['state'] !== '' ? trim($shipping_data['state']) : '';
+                        $s_postcode = isset($shipping_data['postcode']) && $shipping_data['postcode'] !== null && $shipping_data['postcode'] !== '' ? trim($shipping_data['postcode']) : '';
+                        $s_country = isset($shipping_data['country']) && $shipping_data['country'] !== null && $shipping_data['country'] !== '' ? trim($shipping_data['country']) : '';
+                        
+                        if (!empty($s_addr1)) $ship_addr['address'] = $s_addr1;
+                        if (!empty($s_addr2)) $ship_addr['street2'] = $s_addr2;
+                        if (!empty($s_city)) $ship_addr['city'] = $s_city;
+                        if (!empty($s_state)) $ship_addr['state'] = $s_state;
+                        if (!empty($s_postcode)) $ship_addr['zip'] = $s_postcode;
+                        if (!empty($s_country)) $ship_addr['country'] = $s_country;
+                        
                         if (!empty($ship_addr)) $contact_data_from_order['shipping_address'] = $ship_addr;
                     }
                     
