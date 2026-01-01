@@ -14,7 +14,10 @@ function zoho_refresh_access_token() {
     $client_id = get_option('zoho_client_id');
     $client_secret = get_option('zoho_client_secret');
     
+    error_log('Token Refresh Attempt - Refresh token exists: ' . (!empty($refresh_token) ? 'YES' : 'NO'));
+    
     if (empty($refresh_token) || empty($client_id) || empty($client_secret)) {
+        error_log('Token Refresh FAILED: Missing credentials');
         return false;
     }
     
@@ -48,10 +51,14 @@ function zoho_refresh_access_token() {
             update_option('zoho_access_token', $data['access_token']);
             // Always set expiry time to 1 hour (3600 seconds) from now
             update_option('zoho_token_expires_at', time() + 3600);
+            error_log('Token Refresh SUCCESS - New token saved');
             return true;
+        } else {
+            error_log('Token Refresh FAILED from ' . $token_url . ' - Response: ' . json_encode($data));
         }
     }
     
+    error_log('Token Refresh FAILED - Tried all domains');
     return false;
 }
 
@@ -226,9 +233,13 @@ function zoho_api_put($endpoint, $data, $retry_on_auth_error = true) {
     
     // If authorization error (401 or auth-related) and retry allowed, refresh token and retry
     if (zoho_is_auth_error($result, $http_code) && $retry_on_auth_error) {
+        error_log('PUT API - Auth error detected. Code: ' . (isset($result['code']) ? $result['code'] : 'N/A') . ', HTTP: ' . $http_code);
         if (zoho_refresh_access_token()) {
+            error_log('PUT API - Token refreshed successfully, retrying API call');
             // Retry the same API call with new token
             return zoho_api_put($endpoint, $data, false);
+        } else {
+            error_log('PUT API - Token refresh FAILED');
         }
     }
     
