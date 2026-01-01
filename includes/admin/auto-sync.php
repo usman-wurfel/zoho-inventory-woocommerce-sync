@@ -1319,9 +1319,39 @@ function zoho_schedule_order_sync($order_id) {
     }
 }
 
-// Order deleted
-add_action('before_delete_post', 'zoho_auto_delete_order', 10, 1);
-function zoho_auto_delete_order($post_id) {
+// Order deleted - Support both traditional and HPOS orders
+// HPOS hook (WooCommerce 8.0+)
+add_action('woocommerce_before_delete_order', 'zoho_auto_delete_order', 10, 1);
+// Traditional post-based hook (fallback for older WooCommerce)
+add_action('before_delete_post', 'zoho_auto_delete_order_traditional', 10, 1);
+
+function zoho_auto_delete_order($order) {
+    // HPOS hook passes order object directly
+    if (!is_a($order, 'WC_Order')) {
+        return;
+    }
+    
+    $order_id = $order->get_id();
+    $zoho_invoice_id = $order->get_meta('_zoho_invoice_id', true);
+    
+    if (!empty($zoho_invoice_id)) {
+        zoho_delete_invoice($zoho_invoice_id);
+    } else {
+        // Log when order deleted but no invoice ID found
+        zoho_add_detailed_log(
+            'invoice',
+            'order',
+            $order_id,
+            'invoice',
+            '',
+            json_encode(array('action' => 'delete_order_no_invoice', 'order_id' => $order_id)),
+            json_encode(array('message' => 'Order deleted but no Zoho invoice ID found'))
+        );
+    }
+}
+
+function zoho_auto_delete_order_traditional($post_id) {
+    // Traditional hook - check if it's an order
     $post_type = get_post_type($post_id);
     if ($post_type !== 'shop_order') {
         return;
@@ -1333,8 +1363,20 @@ function zoho_auto_delete_order($post_id) {
     }
     
     $zoho_invoice_id = $order->get_meta('_zoho_invoice_id', true);
+    
     if (!empty($zoho_invoice_id)) {
         zoho_delete_invoice($zoho_invoice_id);
+    } else {
+        // Log when order deleted but no invoice ID found
+        zoho_add_detailed_log(
+            'invoice',
+            'order',
+            $post_id,
+            'invoice',
+            '',
+            json_encode(array('action' => 'delete_order_no_invoice', 'order_id' => $post_id)),
+            json_encode(array('message' => 'Order deleted but no Zoho invoice ID found'))
+        );
     }
 }
 
