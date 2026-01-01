@@ -415,71 +415,40 @@ function zoho_sync_single_order($order_id) {
                 if (function_exists('zoho_build_contact_data_from_order')) {
                     $contact_data_direct = zoho_build_contact_data_from_order($order);
                     
-                    // Get name directly from order methods (same as manual syncing - works with both HPOS and non-HPOS)
-                    $order_first_name = trim($order->get_billing_first_name());
-                    $order_last_name = trim($order->get_billing_last_name());
+                    // Force get name from HPOS table if empty
+                    global $wpdb;
+                    $order_id = $order->get_id();
+                    $addresses_table = $wpdb->prefix . 'wc_order_addresses';
+                    $order_first_name = '';
+                    $order_last_name = '';
+                    
+                    if ($wpdb->get_var("SHOW TABLES LIKE '{$addresses_table}'") === $addresses_table) {
+                        $address_data = $wpdb->get_row($wpdb->prepare(
+                            "SELECT first_name, last_name FROM {$addresses_table} WHERE order_id = %d AND address_type = 'billing' LIMIT 1",
+                            $order_id
+                        ), ARRAY_A);
+                        if ($address_data) {
+                            $order_first_name = trim($address_data['first_name'] ?? '');
+                            $order_last_name = trim($address_data['last_name'] ?? '');
+                        }
+                    }
+                    
+                    // If still empty, try order methods
+                    if (empty($order_first_name)) {
+                        $order_first_name = trim($order->get_billing_first_name());
+                    }
+                    if (empty($order_last_name)) {
+                        $order_last_name = trim($order->get_billing_last_name());
+                    }
                     
                     // Force set contact_name from billing name (not email/username)
-                    // Build full name from both first and last name
-                    $proper_name = trim($order_first_name . ' ' . $order_last_name);
-                    
-                    if (!empty($proper_name)) {
-                        $contact_data_direct['contact_name'] = $proper_name;
-                        // Always set first_name and last_name separately for Zoho
-                        if (!empty($order_first_name)) {
+                    if (!empty($order_first_name) || !empty($order_last_name)) {
+                        $proper_name = trim($order_first_name . ' ' . $order_last_name);
+                        if (!empty($proper_name)) {
+                            $contact_data_direct['contact_name'] = $proper_name;
                             $contact_data_direct['first_name'] = $order_first_name;
-                        }
-                        if (!empty($order_last_name)) {
                             $contact_data_direct['last_name'] = $order_last_name;
                         }
-                    }
-                    
-                    // Ensure complete billing address is included (all fields from order)
-                    $billing_address = array();
-                    if (!empty($order->get_billing_address_1())) {
-                        $billing_address['address'] = trim($order->get_billing_address_1());
-                    }
-                    if (!empty($order->get_billing_address_2())) {
-                        $billing_address['street2'] = trim($order->get_billing_address_2());
-                    }
-                    if (!empty($order->get_billing_city())) {
-                        $billing_address['city'] = trim($order->get_billing_city());
-                    }
-                    if (!empty($order->get_billing_state())) {
-                        $billing_address['state'] = trim($order->get_billing_state());
-                    }
-                    if (!empty($order->get_billing_postcode())) {
-                        $billing_address['zip'] = trim($order->get_billing_postcode());
-                    }
-                    if (!empty($order->get_billing_country())) {
-                        $billing_address['country'] = trim($order->get_billing_country());
-                    }
-                    if (!empty($billing_address)) {
-                        $contact_data_direct['billing_address'] = $billing_address;
-                    }
-                    
-                    // Ensure complete shipping address is included (all fields from order)
-                    $shipping_address = array();
-                    if (!empty($order->get_shipping_address_1())) {
-                        $shipping_address['address'] = trim($order->get_shipping_address_1());
-                    }
-                    if (!empty($order->get_shipping_address_2())) {
-                        $shipping_address['street2'] = trim($order->get_shipping_address_2());
-                    }
-                    if (!empty($order->get_shipping_city())) {
-                        $shipping_address['city'] = trim($order->get_shipping_city());
-                    }
-                    if (!empty($order->get_shipping_state())) {
-                        $shipping_address['state'] = trim($order->get_shipping_state());
-                    }
-                    if (!empty($order->get_shipping_postcode())) {
-                        $shipping_address['zip'] = trim($order->get_shipping_postcode());
-                    }
-                    if (!empty($order->get_shipping_country())) {
-                        $shipping_address['country'] = trim($order->get_shipping_country());
-                    }
-                    if (!empty($shipping_address)) {
-                        $contact_data_direct['shipping_address'] = $shipping_address;
                     }
                     
                     // Ensure contact_name is not email or username
@@ -495,6 +464,30 @@ function zoho_sync_single_order($order_id) {
                         $existing_contact_id = get_user_meta($user_id, '_zoho_contact_id', true);
                         
                         if ($existing_contact_id) {
+                            // RE-ENSURE complete data before updating
+                            $contact_data_direct['contact_name'] = trim($order_first_name . ' ' . $order_last_name);
+                            if (!empty($order_first_name)) $contact_data_direct['first_name'] = $order_first_name;
+                            if (!empty($order_last_name)) $contact_data_direct['last_name'] = $order_last_name;
+                            
+                            // Re-ensure addresses
+                            $billing_addr = array();
+                            if (!empty(trim($order->get_billing_address_1()))) $billing_addr['address'] = trim($order->get_billing_address_1());
+                            if (!empty(trim($order->get_billing_address_2()))) $billing_addr['street2'] = trim($order->get_billing_address_2());
+                            if (!empty(trim($order->get_billing_city()))) $billing_addr['city'] = trim($order->get_billing_city());
+                            if (!empty(trim($order->get_billing_state()))) $billing_addr['state'] = trim($order->get_billing_state());
+                            if (!empty(trim($order->get_billing_postcode()))) $billing_addr['zip'] = trim($order->get_billing_postcode());
+                            if (!empty(trim($order->get_billing_country()))) $billing_addr['country'] = trim($order->get_billing_country());
+                            if (!empty($billing_addr)) $contact_data_direct['billing_address'] = $billing_addr;
+                            
+                            $shipping_addr = array();
+                            if (!empty(trim($order->get_shipping_address_1()))) $shipping_addr['address'] = trim($order->get_shipping_address_1());
+                            if (!empty(trim($order->get_shipping_address_2()))) $shipping_addr['street2'] = trim($order->get_shipping_address_2());
+                            if (!empty(trim($order->get_shipping_city()))) $shipping_addr['city'] = trim($order->get_shipping_city());
+                            if (!empty(trim($order->get_shipping_state()))) $shipping_addr['state'] = trim($order->get_shipping_state());
+                            if (!empty(trim($order->get_shipping_postcode()))) $shipping_addr['zip'] = trim($order->get_shipping_postcode());
+                            if (!empty(trim($order->get_shipping_country()))) $shipping_addr['country'] = trim($order->get_shipping_country());
+                            if (!empty($shipping_addr)) $contact_data_direct['shipping_address'] = $shipping_addr;
+                            
                             // Update existing contact with proper name
                             $contact_response = zoho_api_put('contacts/' . $existing_contact_id, $contact_data_direct);
                             if (isset($contact_response['code']) && $contact_response['code'] == 1002) {
@@ -517,6 +510,28 @@ function zoho_sync_single_order($order_id) {
                                         if (empty($contact_data_direct['contact_name'])) {
                                             $contact_data_direct['contact_name'] = $order->get_formatted_billing_full_name();
                                         }
+                                        if (!empty($order_first_name)) $contact_data_direct['first_name'] = $order_first_name;
+                                        if (!empty($order_last_name)) $contact_data_direct['last_name'] = $order_last_name;
+                                        
+                                        // Re-ensure addresses
+                                        $billing_addr = array();
+                                        if (!empty(trim($order->get_billing_address_1()))) $billing_addr['address'] = trim($order->get_billing_address_1());
+                                        if (!empty(trim($order->get_billing_address_2()))) $billing_addr['street2'] = trim($order->get_billing_address_2());
+                                        if (!empty(trim($order->get_billing_city()))) $billing_addr['city'] = trim($order->get_billing_city());
+                                        if (!empty(trim($order->get_billing_state()))) $billing_addr['state'] = trim($order->get_billing_state());
+                                        if (!empty(trim($order->get_billing_postcode()))) $billing_addr['zip'] = trim($order->get_billing_postcode());
+                                        if (!empty(trim($order->get_billing_country()))) $billing_addr['country'] = trim($order->get_billing_country());
+                                        if (!empty($billing_addr)) $contact_data_direct['billing_address'] = $billing_addr;
+                                        
+                                        $shipping_addr = array();
+                                        if (!empty(trim($order->get_shipping_address_1()))) $shipping_addr['address'] = trim($order->get_shipping_address_1());
+                                        if (!empty(trim($order->get_shipping_address_2()))) $shipping_addr['street2'] = trim($order->get_shipping_address_2());
+                                        if (!empty(trim($order->get_shipping_city()))) $shipping_addr['city'] = trim($order->get_shipping_city());
+                                        if (!empty(trim($order->get_shipping_state()))) $shipping_addr['state'] = trim($order->get_shipping_state());
+                                        if (!empty(trim($order->get_shipping_postcode()))) $shipping_addr['zip'] = trim($order->get_shipping_postcode());
+                                        if (!empty(trim($order->get_shipping_country()))) $shipping_addr['country'] = trim($order->get_shipping_country());
+                                        if (!empty($shipping_addr)) $contact_data_direct['shipping_address'] = $shipping_addr;
+                                        
                                         zoho_api_put('contacts/' . $existing_contact_id, $contact_data_direct);
                                         break;
                                     }
@@ -534,6 +549,54 @@ function zoho_sync_single_order($order_id) {
                             if (empty($contact_data_direct['contact_name']) || $contact_data_direct['contact_name'] === $contact_data_direct['email']) {
                                 $contact_data_direct['contact_name'] = trim($order_first_name . ' ' . $order_last_name);
                             }
+                            
+                            // RE-ENSURE first_name and last_name are set before sending
+                            if (!empty($order_first_name)) {
+                                $contact_data_direct['first_name'] = $order_first_name;
+                            }
+                            if (!empty($order_last_name)) {
+                                $contact_data_direct['last_name'] = $order_last_name;
+                            }
+                            
+                            // RE-ENSURE complete addresses before sending
+                            // Billing address
+                            $billing_addr = array();
+                            $addr1 = trim($order->get_billing_address_1());
+                            $addr2 = trim($order->get_billing_address_2());
+                            $city = trim($order->get_billing_city());
+                            $state = trim($order->get_billing_state());
+                            $postcode = trim($order->get_billing_postcode());
+                            $country = trim($order->get_billing_country());
+                            
+                            if (!empty($addr1)) $billing_addr['address'] = $addr1;
+                            if (!empty($addr2)) $billing_addr['street2'] = $addr2;
+                            if (!empty($city)) $billing_addr['city'] = $city;
+                            if (!empty($state)) $billing_addr['state'] = $state;
+                            if (!empty($postcode)) $billing_addr['zip'] = $postcode;
+                            if (!empty($country)) $billing_addr['country'] = $country;
+                            if (!empty($billing_addr)) {
+                                $contact_data_direct['billing_address'] = $billing_addr;
+                            }
+                            
+                            // Shipping address
+                            $shipping_addr = array();
+                            $s_addr1 = trim($order->get_shipping_address_1());
+                            $s_addr2 = trim($order->get_shipping_address_2());
+                            $s_city = trim($order->get_shipping_city());
+                            $s_state = trim($order->get_shipping_state());
+                            $s_postcode = trim($order->get_shipping_postcode());
+                            $s_country = trim($order->get_shipping_country());
+                            
+                            if (!empty($s_addr1)) $shipping_addr['address'] = $s_addr1;
+                            if (!empty($s_addr2)) $shipping_addr['street2'] = $s_addr2;
+                            if (!empty($s_city)) $shipping_addr['city'] = $s_city;
+                            if (!empty($s_state)) $shipping_addr['state'] = $s_state;
+                            if (!empty($s_postcode)) $shipping_addr['zip'] = $s_postcode;
+                            if (!empty($s_country)) $shipping_addr['country'] = $s_country;
+                            if (!empty($shipping_addr)) {
+                                $contact_data_direct['shipping_address'] = $shipping_addr;
+                            }
+                            
                             $contact_response = zoho_api_post('contacts', $contact_data_direct);
                             if (!is_wp_error($contact_response) && isset($contact_response['contact']['contact_id'])) {
                                 $existing_contact_id = $contact_response['contact']['contact_id'];
@@ -580,75 +643,18 @@ function zoho_sync_single_order($order_id) {
                 }
             }
             if (!empty($contact_data_from_order['contact_name']) && $contact_data_from_order['contact_name'] !== $contact_data_from_order['email'] && !empty($contact_data_from_order['email'])) {
-                // Force contact_name from order billing name (not email) - use order methods directly
+                // Force contact_name from order billing name (not email)
                 $order_first_name = trim($order->get_billing_first_name());
                 $order_last_name = trim($order->get_billing_last_name());
-                
-                // Build full name from both first and last name
-                $proper_name = trim($order_first_name . ' ' . $order_last_name);
-                
-                if (!empty($proper_name)) {
-                    $contact_data_from_order['contact_name'] = $proper_name;
-                    // Also set first_name and last_name separately for Zoho
-                    if (!empty($order_first_name)) {
-                        $contact_data_from_order['first_name'] = $order_first_name;
-                    }
-                    if (!empty($order_last_name)) {
-                        $contact_data_from_order['last_name'] = $order_last_name;
+                if (!empty($order_first_name) || !empty($order_last_name)) {
+                    $proper_name = trim($order_first_name . ' ' . $order_last_name);
+                    if (!empty($proper_name)) {
+                        $contact_data_from_order['contact_name'] = $proper_name;
                     }
                 }
-                
-                // Fallback to formatted billing name only if name is still empty
+                // Fallback to formatted billing name
                 if (empty($contact_data_from_order['contact_name']) || $contact_data_from_order['contact_name'] === $contact_data_from_order['email']) {
                     $contact_data_from_order['contact_name'] = $order->get_formatted_billing_full_name();
-                }
-                
-                // Ensure complete billing address is included (all fields from order)
-                $billing_address = array();
-                if (!empty($order->get_billing_address_1())) {
-                    $billing_address['address'] = trim($order->get_billing_address_1());
-                }
-                if (!empty($order->get_billing_address_2())) {
-                    $billing_address['street2'] = trim($order->get_billing_address_2());
-                }
-                if (!empty($order->get_billing_city())) {
-                    $billing_address['city'] = trim($order->get_billing_city());
-                }
-                if (!empty($order->get_billing_state())) {
-                    $billing_address['state'] = trim($order->get_billing_state());
-                }
-                if (!empty($order->get_billing_postcode())) {
-                    $billing_address['zip'] = trim($order->get_billing_postcode());
-                }
-                if (!empty($order->get_billing_country())) {
-                    $billing_address['country'] = trim($order->get_billing_country());
-                }
-                if (!empty($billing_address)) {
-                    $contact_data_from_order['billing_address'] = $billing_address;
-                }
-                
-                // Ensure complete shipping address is included (all fields from order)
-                $shipping_address = array();
-                if (!empty($order->get_shipping_address_1())) {
-                    $shipping_address['address'] = trim($order->get_shipping_address_1());
-                }
-                if (!empty($order->get_shipping_address_2())) {
-                    $shipping_address['street2'] = trim($order->get_shipping_address_2());
-                }
-                if (!empty($order->get_shipping_city())) {
-                    $shipping_address['city'] = trim($order->get_shipping_city());
-                }
-                if (!empty($order->get_shipping_state())) {
-                    $shipping_address['state'] = trim($order->get_shipping_state());
-                }
-                if (!empty($order->get_shipping_postcode())) {
-                    $shipping_address['zip'] = trim($order->get_shipping_postcode());
-                }
-                if (!empty($order->get_shipping_country())) {
-                    $shipping_address['country'] = trim($order->get_shipping_country());
-                }
-                if (!empty($shipping_address)) {
-                    $contact_data_from_order['shipping_address'] = $shipping_address;
                 }
                 
                 // Search by email first
@@ -664,6 +670,28 @@ function zoho_sync_single_order($order_id) {
                             if (empty($contact_data_from_order['contact_name'])) {
                                 $contact_data_from_order['contact_name'] = $order->get_formatted_billing_full_name();
                             }
+                            if (!empty($order_first_name)) $contact_data_from_order['first_name'] = $order_first_name;
+                            if (!empty($order_last_name)) $contact_data_from_order['last_name'] = $order_last_name;
+                            
+                            // Re-ensure addresses
+                            $billing_addr = array();
+                            if (!empty(trim($order->get_billing_address_1()))) $billing_addr['address'] = trim($order->get_billing_address_1());
+                            if (!empty(trim($order->get_billing_address_2()))) $billing_addr['street2'] = trim($order->get_billing_address_2());
+                            if (!empty(trim($order->get_billing_city()))) $billing_addr['city'] = trim($order->get_billing_city());
+                            if (!empty(trim($order->get_billing_state()))) $billing_addr['state'] = trim($order->get_billing_state());
+                            if (!empty(trim($order->get_billing_postcode()))) $billing_addr['zip'] = trim($order->get_billing_postcode());
+                            if (!empty(trim($order->get_billing_country()))) $billing_addr['country'] = trim($order->get_billing_country());
+                            if (!empty($billing_addr)) $contact_data_from_order['billing_address'] = $billing_addr;
+                            
+                            $shipping_addr = array();
+                            if (!empty(trim($order->get_shipping_address_1()))) $shipping_addr['address'] = trim($order->get_shipping_address_1());
+                            if (!empty(trim($order->get_shipping_address_2()))) $shipping_addr['street2'] = trim($order->get_shipping_address_2());
+                            if (!empty(trim($order->get_shipping_city()))) $shipping_addr['city'] = trim($order->get_shipping_city());
+                            if (!empty(trim($order->get_shipping_state()))) $shipping_addr['state'] = trim($order->get_shipping_state());
+                            if (!empty(trim($order->get_shipping_postcode()))) $shipping_addr['zip'] = trim($order->get_shipping_postcode());
+                            if (!empty(trim($order->get_shipping_country()))) $shipping_addr['country'] = trim($order->get_shipping_country());
+                            if (!empty($shipping_addr)) $contact_data_from_order['shipping_address'] = $shipping_addr;
+                            
                             zoho_api_put('contacts/' . $found_contact_id, $contact_data_from_order);
                             break;
                         }
@@ -681,6 +709,54 @@ function zoho_sync_single_order($order_id) {
                     if (empty($contact_data_from_order['contact_name']) || $contact_data_from_order['contact_name'] === $contact_data_from_order['email']) {
                         $contact_data_from_order['contact_name'] = trim($order_first_name . ' ' . $order_last_name);
                     }
+                    
+                    // RE-ENSURE first_name and last_name are set before sending
+                    if (!empty($order_first_name)) {
+                        $contact_data_from_order['first_name'] = $order_first_name;
+                    }
+                    if (!empty($order_last_name)) {
+                        $contact_data_from_order['last_name'] = $order_last_name;
+                    }
+                    
+                    // RE-ENSURE complete addresses before sending
+                    // Billing address
+                    $billing_addr = array();
+                    $addr1 = trim($order->get_billing_address_1());
+                    $addr2 = trim($order->get_billing_address_2());
+                    $city = trim($order->get_billing_city());
+                    $state = trim($order->get_billing_state());
+                    $postcode = trim($order->get_billing_postcode());
+                    $country = trim($order->get_billing_country());
+                    
+                    if (!empty($addr1)) $billing_addr['address'] = $addr1;
+                    if (!empty($addr2)) $billing_addr['street2'] = $addr2;
+                    if (!empty($city)) $billing_addr['city'] = $city;
+                    if (!empty($state)) $billing_addr['state'] = $state;
+                    if (!empty($postcode)) $billing_addr['zip'] = $postcode;
+                    if (!empty($country)) $billing_addr['country'] = $country;
+                    if (!empty($billing_addr)) {
+                        $contact_data_from_order['billing_address'] = $billing_addr;
+                    }
+                    
+                    // Shipping address
+                    $shipping_addr = array();
+                    $s_addr1 = trim($order->get_shipping_address_1());
+                    $s_addr2 = trim($order->get_shipping_address_2());
+                    $s_city = trim($order->get_shipping_city());
+                    $s_state = trim($order->get_shipping_state());
+                    $s_postcode = trim($order->get_shipping_postcode());
+                    $s_country = trim($order->get_shipping_country());
+                    
+                    if (!empty($s_addr1)) $shipping_addr['address'] = $s_addr1;
+                    if (!empty($s_addr2)) $shipping_addr['street2'] = $s_addr2;
+                    if (!empty($s_city)) $shipping_addr['city'] = $s_city;
+                    if (!empty($s_state)) $shipping_addr['state'] = $s_state;
+                    if (!empty($s_postcode)) $shipping_addr['zip'] = $s_postcode;
+                    if (!empty($s_country)) $shipping_addr['country'] = $s_country;
+                    if (!empty($shipping_addr)) {
+                        $contact_data_from_order['shipping_address'] = $shipping_addr;
+                    }
+                    
                     $create_response = zoho_api_post('contacts', $contact_data_from_order);
                     if (!is_wp_error($create_response) && isset($create_response['contact']['contact_id'])) {
                         $found_contact_id = $create_response['contact']['contact_id'];
