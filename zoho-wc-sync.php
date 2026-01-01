@@ -20,6 +20,7 @@ require_once plugin_dir_path(__FILE__) . 'includes/admin/contact.php';
 require_once plugin_dir_path(__FILE__) . 'includes/admin/invoice.php';
 require_once plugin_dir_path(__FILE__) . 'includes/admin/logs.php';
 require_once plugin_dir_path(__FILE__) . 'includes/admin/auto-sync.php';
+require_once plugin_dir_path(__FILE__) . 'includes/webhooks.php';
 
 
 

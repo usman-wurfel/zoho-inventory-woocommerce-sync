@@ -487,6 +487,101 @@ function zoho_dashboard_page() {
             <?php endif; ?>
         </div>
         
+        <!-- Webhooks Settings -->
+        <?php
+        // Handle webhook settings save
+        if (isset($_POST['save_webhook_settings']) && $connected) {
+            check_admin_referer('zoho_webhook_settings');
+            update_option('zoho_webhooks_enabled', isset($_POST['webhooks_enabled']) ? 'yes' : 'no');
+            update_option('zoho_sync_zoho_to_woo_items', isset($_POST['sync_items']) ? 'yes' : 'no');
+            update_option('zoho_sync_zoho_to_woo_contacts', isset($_POST['sync_contacts']) ? 'yes' : 'no');
+            update_option('zoho_sync_zoho_to_woo_invoices', isset($_POST['sync_invoices']) ? 'yes' : 'no');
+            update_option('zoho_webhook_secret', sanitize_text_field($_POST['webhook_secret']));
+            echo '<div class="notice notice-success"><p>Webhook settings saved!</p></div>';
+        }
+        
+        $webhooks_enabled = get_option('zoho_webhooks_enabled', 'no');
+        $webhook_secret = get_option('zoho_webhook_secret', '');
+        $sync_items = get_option('zoho_sync_zoho_to_woo_items', 'no');
+        $sync_contacts = get_option('zoho_sync_zoho_to_woo_contacts', 'no');
+        $sync_invoices = get_option('zoho_sync_zoho_to_woo_invoices', 'no');
+        $webhook_url = rest_url('zoho-inventory/v1/webhook');
+        ?>
+        
+        <?php if ($connected): ?>
+        <div style="background: #fff; border: 1px solid #ccd0d4; box-shadow: 0 1px 1px rgba(0,0,0,.04); padding: 20px; margin-bottom: 20px; border-radius: 4px;">
+            <h2 style="margin-top: 0; font-size: 18px; margin-bottom: 20px;">Webhooks Settings (Zoho → WooCommerce)</h2>
+            
+            <p style="color: #666; margin-bottom: 15px;">
+                Configure webhooks to automatically sync changes from Zoho to WooCommerce in real-time.
+                <strong>Note:</strong> This requires Zoho Inventory to support webhooks. If webhooks are not available, use Polling/Cron sync instead.
+            </p>
+            
+            <div style="background: #f0f0f0; padding: 15px; border-radius: 4px; margin-bottom: 20px;">
+                <p style="margin: 5px 0;"><strong>Webhook URL:</strong></p>
+                <p style="margin: 5px 0; font-family: monospace; background: #fff; padding: 10px; border: 1px solid #ddd; border-radius: 4px;">
+                    <?php echo esc_html($webhook_url); ?>
+                </p>
+                <p style="margin: 10px 0 0 0; font-size: 12px; color: #666;">
+                    Copy this URL and configure it in Zoho Inventory webhook settings (if webhooks are supported).
+                </p>
+            </div>
+            
+            <form method="post">
+                <?php wp_nonce_field('zoho_webhook_settings'); ?>
+                
+                <table class="form-table">
+                    <tr>
+                        <th scope="row">Enable Webhooks</th>
+                        <td>
+                            <label>
+                                <input type="checkbox" name="webhooks_enabled" value="1" <?php checked($webhooks_enabled, 'yes'); ?>>
+                                Enable webhook processing (receive webhooks from Zoho)
+                            </label>
+                        </td>
+                    </tr>
+                    
+                    <tr>
+                        <th scope="row">Webhook Secret</th>
+                        <td>
+                            <input type="text" name="webhook_secret" value="<?php echo esc_attr($webhook_secret); ?>" class="regular-text" placeholder="Optional: Secret key for webhook validation">
+                            <p class="description">Optional: Set a secret key to validate webhook requests. Zoho should send this in X-Webhook-Secret header.</p>
+                        </td>
+                    </tr>
+                    
+                    <tr>
+                        <th scope="row">Sync Options</th>
+                        <td>
+                            <label style="display: block; margin-bottom: 10px;">
+                                <input type="checkbox" name="sync_items" value="1" <?php checked($sync_items, 'yes'); ?>>
+                                <strong>Items → Products:</strong> Sync Zoho items to WooCommerce products
+                            </label>
+                            
+                            <label style="display: block; margin-bottom: 10px;">
+                                <input type="checkbox" name="sync_contacts" value="1" <?php checked($sync_contacts, 'yes'); ?>>
+                                <strong>Contacts → Customers:</strong> Sync Zoho contacts to WooCommerce customers
+                            </label>
+                            
+                            <label style="display: block; margin-bottom: 10px;">
+                                <input type="checkbox" name="sync_invoices" value="1" <?php checked($sync_invoices, 'yes'); ?>>
+                                <strong>Invoices → Orders:</strong> Sync Zoho invoices to WooCommerce orders
+                            </label>
+                        </td>
+                    </tr>
+                </table>
+                
+                <?php submit_button('Save Webhook Settings', 'primary', 'save_webhook_settings'); ?>
+            </form>
+            
+            <div style="margin-top: 20px; padding: 15px; background: #fff3cd; border: 1px solid #ffc107; border-radius: 4px;">
+                <p style="margin: 0; color: #856404;">
+                    <strong>⚠️ Important:</strong> Zoho Inventory webhooks support needs to be verified. 
+                    If webhooks are not working, use the <a href="<?php echo admin_url('admin.php?page=zoho-inventory-sync'); ?>">Manual Sync</a> or Polling/Cron sync instead.
+                </p>
+            </div>
+        </div>
+        <?php endif; ?>
+        
         <!-- Sync Statistics Cards -->
         <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 20px; margin-bottom: 20px;">
             <!-- Items Synced Card -->
