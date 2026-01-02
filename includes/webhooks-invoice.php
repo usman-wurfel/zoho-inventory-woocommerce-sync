@@ -612,10 +612,26 @@ function zoho_delete_woo_order_from_zoho_invoice($zoho_invoice_id, $force_delete
         return;
     }
     
-    // Delete the order permanently
-    $deleted = wp_delete_post($order_id, true);
+    // Get order object and delete (HPOS compatible)
+    $order = wc_get_order($order_id);
+    if (!$order) {
+        zoho_add_detailed_log(
+            'invoice',
+            'order',
+            $order_id,
+            'invoice',
+            $zoho_invoice_id,
+            json_encode(array('action' => 'webhook_delete')),
+            json_encode(array('status' => 'failed', 'message' => 'Order object not found', 'order_id' => $order_id))
+        );
+        return;
+    }
     
-    if ($deleted) {
+    // Delete the order permanently (HPOS compatible - use order object method)
+    try {
+        // Delete order using WooCommerce order object method (works with both HPOS and post-based storage)
+        $order->delete(true); // true = force delete permanently
+        
         zoho_add_detailed_log(
             'invoice',
             'order',
@@ -625,15 +641,15 @@ function zoho_delete_woo_order_from_zoho_invoice($zoho_invoice_id, $force_delete
             json_encode(array('action' => 'webhook_delete')),
             json_encode(array('status' => 'deleted', 'order_id' => $order_id))
         );
-    } else {
+    } catch (Exception $e) {
         zoho_add_detailed_log(
             'invoice',
             'order',
             $order_id,
             'invoice',
             $zoho_invoice_id,
-            json_encode(array('action' => 'webhook_delete')),
-            json_encode(array('status' => 'failed', 'message' => 'Failed to delete order', 'order_id' => $order_id))
+            json_encode(array('action' => 'webhook_delete', 'error' => $e->getMessage())),
+            json_encode(array('status' => 'failed', 'message' => 'Exception while deleting order', 'order_id' => $order_id, 'error' => $e->getMessage()))
         );
     }
 }
