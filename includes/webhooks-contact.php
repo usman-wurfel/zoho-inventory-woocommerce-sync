@@ -198,7 +198,19 @@ function zoho_sync_zoho_contact_to_woo($zoho_contact_id, $zoho_contact_data = nu
  * Create WooCommerce customer from Zoho contact
  */
 function zoho_create_woo_customer_from_zoho_contact($zoho_contact_data) {
-    $email = isset($zoho_contact_data['email']) ? $zoho_contact_data['email'] : '';
+    // Extract email - check root level first, then contact_persons
+    $email = '';
+    if (!empty($zoho_contact_data['email'])) {
+        $email = trim($zoho_contact_data['email']);
+    } elseif (isset($zoho_contact_data['contact_persons']) && is_array($zoho_contact_data['contact_persons'])) {
+        foreach ($zoho_contact_data['contact_persons'] as $person) {
+            if (!empty($person['email'])) {
+                $email = trim($person['email']);
+                break;
+            }
+        }
+    }
+    
     if (empty($email)) {
         return false;
     }
@@ -217,31 +229,78 @@ function zoho_create_woo_customer_from_zoho_contact($zoho_contact_data) {
     $user = new WP_User($user_id);
     $user->set_role('customer');
     
-    if (isset($zoho_contact_data['first_name'])) {
-        update_user_meta($user_id, 'first_name', $zoho_contact_data['first_name']);
+    // Extract first_name - check root level first, then contact_persons
+    $first_name = '';
+    if (!empty($zoho_contact_data['first_name'])) {
+        $first_name = trim($zoho_contact_data['first_name']);
+    } elseif (isset($zoho_contact_data['contact_persons']) && is_array($zoho_contact_data['contact_persons'])) {
+        foreach ($zoho_contact_data['contact_persons'] as $person) {
+            if (!empty($person['first_name'])) {
+                $first_name = trim($person['first_name']);
+                break;
+            }
+        }
     }
-    if (isset($zoho_contact_data['last_name'])) {
-        update_user_meta($user_id, 'last_name', $zoho_contact_data['last_name']);
+    if (!empty($first_name)) {
+        update_user_meta($user_id, 'first_name', $first_name);
     }
-    if (isset($zoho_contact_data['phone'])) {
-        update_user_meta($user_id, 'billing_phone', $zoho_contact_data['phone']);
+    
+    // Extract last_name - check root level first, then contact_persons
+    $last_name = '';
+    if (!empty($zoho_contact_data['last_name'])) {
+        $last_name = trim($zoho_contact_data['last_name']);
+    } elseif (isset($zoho_contact_data['contact_persons']) && is_array($zoho_contact_data['contact_persons'])) {
+        foreach ($zoho_contact_data['contact_persons'] as $person) {
+            if (!empty($person['last_name'])) {
+                $last_name = trim($person['last_name']);
+                break;
+            }
+        }
     }
-    if (isset($zoho_contact_data['billing_address'])) {
+    if (!empty($last_name)) {
+        update_user_meta($user_id, 'last_name', $last_name);
+    }
+    
+    // Extract phone - check root level, then contact_persons, then billing_address
+    $phone = '';
+    if (!empty($zoho_contact_data['phone'])) {
+        $phone = trim($zoho_contact_data['phone']);
+    } elseif (!empty($zoho_contact_data['mobile'])) {
+        $phone = trim($zoho_contact_data['mobile']);
+    } elseif (isset($zoho_contact_data['contact_persons']) && is_array($zoho_contact_data['contact_persons'])) {
+        foreach ($zoho_contact_data['contact_persons'] as $person) {
+            if (!empty($person['phone'])) {
+                $phone = trim($person['phone']);
+                break;
+            } elseif (!empty($person['mobile'])) {
+                $phone = trim($person['mobile']);
+                break;
+            }
+        }
+    } elseif (isset($zoho_contact_data['billing_address']['phone']) && !empty($zoho_contact_data['billing_address']['phone'])) {
+        $phone = trim($zoho_contact_data['billing_address']['phone']);
+    }
+    if (!empty($phone)) {
+        update_user_meta($user_id, 'billing_phone', $phone);
+    }
+    
+    // Extract billing address
+    if (isset($zoho_contact_data['billing_address']) && is_array($zoho_contact_data['billing_address'])) {
         $billing = $zoho_contact_data['billing_address'];
-        if (isset($billing['address'])) {
-            update_user_meta($user_id, 'billing_address_1', $billing['address']);
+        if (!empty($billing['address'])) {
+            update_user_meta($user_id, 'billing_address_1', trim($billing['address']));
         }
-        if (isset($billing['city'])) {
-            update_user_meta($user_id, 'billing_city', $billing['city']);
+        if (!empty($billing['city'])) {
+            update_user_meta($user_id, 'billing_city', trim($billing['city']));
         }
-        if (isset($billing['state'])) {
-            update_user_meta($user_id, 'billing_state', $billing['state']);
+        if (!empty($billing['state'])) {
+            update_user_meta($user_id, 'billing_state', trim($billing['state']));
         }
-        if (isset($billing['zip'])) {
-            update_user_meta($user_id, 'billing_postcode', $billing['zip']);
+        if (!empty($billing['zip'])) {
+            update_user_meta($user_id, 'billing_postcode', trim($billing['zip']));
         }
-        if (isset($billing['country'])) {
-            update_user_meta($user_id, 'billing_country', $billing['country']);
+        if (!empty($billing['country'])) {
+            update_user_meta($user_id, 'billing_country', trim($billing['country']));
         }
     }
     
@@ -268,34 +327,94 @@ function zoho_create_woo_customer_from_zoho_contact($zoho_contact_data) {
  * Update WooCommerce customer from Zoho contact
  */
 function zoho_update_woo_customer_from_zoho_contact($user_id, $zoho_contact_data) {
-    if (isset($zoho_contact_data['first_name'])) {
-        update_user_meta($user_id, 'first_name', $zoho_contact_data['first_name']);
+    // Extract and update first_name - check root level first, then contact_persons
+    $first_name = '';
+    if (!empty($zoho_contact_data['first_name'])) {
+        $first_name = trim($zoho_contact_data['first_name']);
+    } elseif (isset($zoho_contact_data['contact_persons']) && is_array($zoho_contact_data['contact_persons'])) {
+        foreach ($zoho_contact_data['contact_persons'] as $person) {
+            if (!empty($person['first_name'])) {
+                $first_name = trim($person['first_name']);
+                break;
+            }
+        }
     }
-    if (isset($zoho_contact_data['last_name'])) {
-        update_user_meta($user_id, 'last_name', $zoho_contact_data['last_name']);
+    if (!empty($first_name)) {
+        update_user_meta($user_id, 'first_name', $first_name);
     }
-    if (isset($zoho_contact_data['email'])) {
-        wp_update_user(array('ID' => $user_id, 'user_email' => $zoho_contact_data['email']));
+    
+    // Extract and update last_name - check root level first, then contact_persons
+    $last_name = '';
+    if (!empty($zoho_contact_data['last_name'])) {
+        $last_name = trim($zoho_contact_data['last_name']);
+    } elseif (isset($zoho_contact_data['contact_persons']) && is_array($zoho_contact_data['contact_persons'])) {
+        foreach ($zoho_contact_data['contact_persons'] as $person) {
+            if (!empty($person['last_name'])) {
+                $last_name = trim($person['last_name']);
+                break;
+            }
+        }
     }
-    if (isset($zoho_contact_data['phone'])) {
-        update_user_meta($user_id, 'billing_phone', $zoho_contact_data['phone']);
+    if (!empty($last_name)) {
+        update_user_meta($user_id, 'last_name', $last_name);
     }
-    if (isset($zoho_contact_data['billing_address'])) {
+    
+    // Extract and update email - check root level first, then contact_persons
+    $email = '';
+    if (!empty($zoho_contact_data['email'])) {
+        $email = trim($zoho_contact_data['email']);
+    } elseif (isset($zoho_contact_data['contact_persons']) && is_array($zoho_contact_data['contact_persons'])) {
+        foreach ($zoho_contact_data['contact_persons'] as $person) {
+            if (!empty($person['email'])) {
+                $email = trim($person['email']);
+                break;
+            }
+        }
+    }
+    if (!empty($email)) {
+        wp_update_user(array('ID' => $user_id, 'user_email' => $email));
+    }
+    
+    // Extract and update phone - check root level, then contact_persons, then billing_address
+    $phone = '';
+    if (!empty($zoho_contact_data['phone'])) {
+        $phone = trim($zoho_contact_data['phone']);
+    } elseif (!empty($zoho_contact_data['mobile'])) {
+        $phone = trim($zoho_contact_data['mobile']);
+    } elseif (isset($zoho_contact_data['contact_persons']) && is_array($zoho_contact_data['contact_persons'])) {
+        foreach ($zoho_contact_data['contact_persons'] as $person) {
+            if (!empty($person['phone'])) {
+                $phone = trim($person['phone']);
+                break;
+            } elseif (!empty($person['mobile'])) {
+                $phone = trim($person['mobile']);
+                break;
+            }
+        }
+    } elseif (isset($zoho_contact_data['billing_address']['phone']) && !empty($zoho_contact_data['billing_address']['phone'])) {
+        $phone = trim($zoho_contact_data['billing_address']['phone']);
+    }
+    if (!empty($phone)) {
+        update_user_meta($user_id, 'billing_phone', $phone);
+    }
+    
+    // Extract and update billing address
+    if (isset($zoho_contact_data['billing_address']) && is_array($zoho_contact_data['billing_address'])) {
         $billing = $zoho_contact_data['billing_address'];
-        if (isset($billing['address'])) {
-            update_user_meta($user_id, 'billing_address_1', $billing['address']);
+        if (!empty($billing['address'])) {
+            update_user_meta($user_id, 'billing_address_1', trim($billing['address']));
         }
-        if (isset($billing['city'])) {
-            update_user_meta($user_id, 'billing_city', $billing['city']);
+        if (!empty($billing['city'])) {
+            update_user_meta($user_id, 'billing_city', trim($billing['city']));
         }
-        if (isset($billing['state'])) {
-            update_user_meta($user_id, 'billing_state', $billing['state']);
+        if (!empty($billing['state'])) {
+            update_user_meta($user_id, 'billing_state', trim($billing['state']));
         }
-        if (isset($billing['zip'])) {
-            update_user_meta($user_id, 'billing_postcode', $billing['zip']);
+        if (!empty($billing['zip'])) {
+            update_user_meta($user_id, 'billing_postcode', trim($billing['zip']));
         }
-        if (isset($billing['country'])) {
-            update_user_meta($user_id, 'billing_country', $billing['country']);
+        if (!empty($billing['country'])) {
+            update_user_meta($user_id, 'billing_country', trim($billing['country']));
         }
     }
     
