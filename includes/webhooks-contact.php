@@ -133,7 +133,18 @@ function zoho_handle_contact_delete_webhook($request) {
     }
     
     if (!empty($object_id)) {
-        zoho_delete_woo_customer_from_zoho_contact($object_id);
+        // Force delete when called from webhook (ignore auto_delete setting)
+        zoho_delete_woo_customer_from_zoho_contact($object_id, true);
+    } else {
+        zoho_add_detailed_log(
+            'webhook',
+            'webhook_contacts_delete',
+            0,
+            'webhook',
+            '',
+            json_encode(array('body' => $body)),
+            json_encode(array('status' => 'error', 'message' => 'Contact ID not found in webhook payload'))
+        );
     }
     
     return new WP_REST_Response(array('message' => 'Contact delete webhook processed', 'contact_id' => $object_id), 200);
@@ -153,7 +164,8 @@ function zoho_handle_contact_webhook($action, $contact_id, $contact_data) {
             zoho_sync_zoho_contact_to_woo($contact_id, $contact_data);
             break;
         case 'delete':
-            zoho_delete_woo_customer_from_zoho_contact($contact_id);
+            // Force delete when called from webhook
+            zoho_delete_woo_customer_from_zoho_contact($contact_id, true);
             break;
     }
 }
@@ -436,9 +448,12 @@ function zoho_update_woo_customer_from_zoho_contact($user_id, $zoho_contact_data
 
 /**
  * Delete WooCommerce customer when Zoho contact is deleted
+ * @param string $zoho_contact_id Zoho contact ID
+ * @param bool $force_delete If true, delete even if auto_delete setting is off (for webhooks)
  */
-function zoho_delete_woo_customer_from_zoho_contact($zoho_contact_id) {
-    if (get_option('zoho_auto_delete_woo_customers', 'no') !== 'yes') {
+function zoho_delete_woo_customer_from_zoho_contact($zoho_contact_id, $force_delete = false) {
+    // Check auto_delete setting only if not forced (for webhooks, we force delete)
+    if (!$force_delete && get_option('zoho_auto_delete_woo_customers', 'no') !== 'yes') {
         return;
     }
     
@@ -448,9 +463,23 @@ function zoho_delete_woo_customer_from_zoho_contact($zoho_contact_id) {
         $zoho_contact_id
     ));
     
-    if ($user_id) {
-        wp_delete_user($user_id);
-        
+    if (!$user_id) {
+        zoho_add_detailed_log(
+            'contact',
+            'customer',
+            0,
+            'contact',
+            $zoho_contact_id,
+            json_encode(array('action' => 'webhook_delete')),
+            json_encode(array('status' => 'not_found', 'message' => 'User not found in WooCommerce'))
+        );
+        return;
+    }
+    
+    // Delete the user
+    $deleted = wp_delete_user($user_id);
+    
+    if ($deleted) {
         zoho_add_detailed_log(
             'contact',
             'customer',
@@ -459,6 +488,16 @@ function zoho_delete_woo_customer_from_zoho_contact($zoho_contact_id) {
             $zoho_contact_id,
             json_encode(array('action' => 'webhook_delete')),
             json_encode(array('status' => 'deleted', 'user_id' => $user_id))
+        );
+    } else {
+        zoho_add_detailed_log(
+            'contact',
+            'customer',
+            $user_id,
+            'contact',
+            $zoho_contact_id,
+            json_encode(array('action' => 'webhook_delete')),
+            json_encode(array('status' => 'failed', 'message' => 'Failed to delete user', 'user_id' => $user_id))
         );
     }
 }
