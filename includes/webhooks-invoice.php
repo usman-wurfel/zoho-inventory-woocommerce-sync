@@ -133,7 +133,18 @@ function zoho_handle_invoice_delete_webhook($request) {
     }
     
     if (!empty($object_id)) {
-        zoho_delete_woo_order_from_zoho_invoice($object_id);
+        // Force delete when called from webhook (ignore auto_delete setting)
+        zoho_delete_woo_order_from_zoho_invoice($object_id, true);
+    } else {
+        zoho_add_detailed_log(
+            'webhook',
+            'webhook_invoices_delete',
+            0,
+            'webhook',
+            '',
+            json_encode(array('body' => $body)),
+            json_encode(array('status' => 'error', 'message' => 'Invoice ID not found in webhook payload'))
+        );
     }
     
     return new WP_REST_Response(array('message' => 'Invoice delete webhook processed', 'invoice_id' => $object_id), 200);
@@ -153,7 +164,8 @@ function zoho_handle_invoice_webhook($action, $invoice_id, $invoice_data) {
             zoho_sync_zoho_invoice_to_woo($invoice_id, $invoice_data);
             break;
         case 'delete':
-            zoho_delete_woo_order_from_zoho_invoice($invoice_id);
+            // Force delete when called from webhook
+            zoho_delete_woo_order_from_zoho_invoice($invoice_id, true);
             break;
     }
 }
@@ -242,9 +254,12 @@ function zoho_update_woo_order_from_zoho_invoice($order_id, $zoho_invoice_data) 
 
 /**
  * Delete WooCommerce order when Zoho invoice is deleted
+ * @param string $zoho_invoice_id Zoho invoice ID
+ * @param bool $force_delete If true, delete even if auto_delete setting is off (for webhooks)
  */
-function zoho_delete_woo_order_from_zoho_invoice($zoho_invoice_id) {
-    if (get_option('zoho_auto_delete_woo_orders', 'no') !== 'yes') {
+function zoho_delete_woo_order_from_zoho_invoice($zoho_invoice_id, $force_delete = false) {
+    // Check auto_delete setting only if not forced (for webhooks, we force delete)
+    if (!$force_delete && get_option('zoho_auto_delete_woo_orders', 'no') !== 'yes') {
         return;
     }
     
@@ -254,9 +269,23 @@ function zoho_delete_woo_order_from_zoho_invoice($zoho_invoice_id) {
         $zoho_invoice_id
     ));
     
-    if ($order_id) {
-        wp_delete_post($order_id, true);
-        
+    if (!$order_id) {
+        zoho_add_detailed_log(
+            'invoice',
+            'order',
+            0,
+            'invoice',
+            $zoho_invoice_id,
+            json_encode(array('action' => 'webhook_delete')),
+            json_encode(array('status' => 'not_found', 'message' => 'Order not found in WooCommerce'))
+        );
+        return;
+    }
+    
+    // Delete the order permanently
+    $deleted = wp_delete_post($order_id, true);
+    
+    if ($deleted) {
         zoho_add_detailed_log(
             'invoice',
             'order',
@@ -265,6 +294,16 @@ function zoho_delete_woo_order_from_zoho_invoice($zoho_invoice_id) {
             $zoho_invoice_id,
             json_encode(array('action' => 'webhook_delete')),
             json_encode(array('status' => 'deleted', 'order_id' => $order_id))
+        );
+    } else {
+        zoho_add_detailed_log(
+            'invoice',
+            'order',
+            $order_id,
+            'invoice',
+            $zoho_invoice_id,
+            json_encode(array('action' => 'webhook_delete')),
+            json_encode(array('status' => 'failed', 'message' => 'Failed to delete order', 'order_id' => $order_id))
         );
     }
 }
