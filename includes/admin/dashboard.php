@@ -511,36 +511,234 @@ function zoho_dashboard_page() {
         
         <?php if ($connected): ?>
         <div style="background: #fff; border: 1px solid #ccd0d4; box-shadow: 0 1px 1px rgba(0,0,0,.04); padding: 20px; margin-bottom: 20px; border-radius: 4px;">
-            <h2 style="margin-top: 0; font-size: 18px; margin-bottom: 20px;">Webhooks Settings (Zoho → WooCommerce)</h2>
+            <h2 style="margin-top: 0; font-size: 18px; margin-bottom: 20px; display: flex; align-items: center; justify-content: space-between; cursor: pointer;" onclick="toggleWebhookSettings()">
+                <span>Webhooks Settings</span>
+                <span id="webhook-toggle-icon" style="font-size: 14px; transition: transform 0.3s;">▼</span>
+            </h2>
             
-            <p style="color: #666; margin-bottom: 15px;">
-                Configure webhooks to automatically sync changes from Zoho to WooCommerce in real-time.
-                <strong>Note:</strong> This requires Zoho Inventory to support webhooks. If webhooks are not available, use Polling/Cron sync instead.
-            </p>
+            <div id="webhook-settings-content" style="display: none;">
             
-            <div style="background: #f0f0f0; padding: 15px; border-radius: 4px; margin-bottom: 20px;">
-                <p style="margin: 5px 0;"><strong>Webhook URLs:</strong></p>
-                
-                <div style="margin-bottom: 15px;">
-                    <p style="margin: 5px 0 8px 0; font-weight: bold; color: #2271b1;">Create/Update Webhook:</p>
-                    <div style="display: flex; gap: 10px; align-items: center;">
-                        <input type="text" id="webhook-url-input" value="<?php echo esc_attr($webhook_url); ?>" readonly style="flex: 1; font-family: monospace; background: #fff; padding: 10px; border: 1px solid #ddd; border-radius: 4px;">
-                        <button type="button" onclick="copyWebhookUrl('webhook-url-input')" class="button">Copy</button>
+            <!-- Tab Navigation -->
+            <div style="border-bottom: 2px solid #ddd; margin-bottom: 20px;">
+                <button type="button" class="webhook-tab-btn" onclick="switchWebhookTab('inventory')" id="webhook-tab-inventory" style="padding: 10px 20px; background: #2271b1; color: #fff; border: none; border-bottom: 3px solid #2271b1; cursor: pointer; font-weight: bold;">Inventory Webhooks</button>
+                <button type="button" class="webhook-tab-btn" onclick="switchWebhookTab('contact')" id="webhook-tab-contact" style="padding: 10px 20px; background: #f0f0f0; color: #333; border: none; border-bottom: 3px solid transparent; cursor: pointer;">Contact Webhooks</button>
+                <button type="button" class="webhook-tab-btn" onclick="switchWebhookTab('invoice')" id="webhook-tab-invoice" style="padding: 10px 20px; background: #f0f0f0; color: #333; border: none; border-bottom: 3px solid transparent; cursor: pointer;">Invoice Webhooks</button>
+            </div>
+            
+            <!-- Inventory Webhooks Tab -->
+            <div id="webhook-tab-content-inventory" class="webhook-tab-content">
+                <div style="background: #f0f0f0; padding: 15px; border-radius: 4px; margin-bottom: 20px;">
+                    <p style="margin: 5px 0 15px 0; font-weight: bold; font-size: 16px;">Webhook URLs for Items/Products:</p>
+                    
+                    <div style="margin-bottom: 15px;">
+                        <p style="margin: 5px 0 8px 0; font-weight: bold; color: #2271b1;">Create/Update Webhook:</p>
+                        <div style="display: flex; gap: 10px; align-items: center;">
+                            <input type="text" id="webhook-url-input" value="<?php echo esc_attr($webhook_url); ?>" readonly style="flex: 1; font-family: monospace; background: #fff; padding: 10px; border: 1px solid #ddd; border-radius: 4px;">
+                            <button type="button" onclick="copyWebhookUrl('webhook-url-input')" class="button">Copy</button>
+                        </div>
+                        <p style="margin: 8px 0 0 0; font-size: 12px; color: #666;">
+                            Use this URL for "Created" and "Updated" events in Zoho.
+                        </p>
                     </div>
-                    <p style="margin: 8px 0 0 0; font-size: 12px; color: #666;">
-                        Use this URL for "Created" and "Updated" events in Zoho.
-                    </p>
+                    
+                    <div>
+                        <p style="margin: 5px 0 8px 0; font-weight: bold; color: #dc3232;">Delete Webhook:</p>
+                        <div style="display: flex; gap: 10px; align-items: center;">
+                            <input type="text" id="webhook-delete-url-input" value="<?php echo esc_attr($webhook_delete_url); ?>" readonly style="flex: 1; font-family: monospace; background: #fff; padding: 10px; border: 1px solid #ddd; border-radius: 4px;">
+                            <button type="button" onclick="copyWebhookUrl('webhook-delete-url-input')" class="button">Copy</button>
+                        </div>
+                        <p style="margin: 8px 0 0 0; font-size: 12px; color: #666;">
+                            Use this URL for "Deleted" events in Zoho.
+                        </p>
+                    </div>
                 </div>
                 
-                <div>
-                    <p style="margin: 5px 0 8px 0; font-weight: bold; color: #dc3232;">Delete Webhook:</p>
-                    <div style="display: flex; gap: 10px; align-items: center;">
-                        <input type="text" id="webhook-delete-url-input" value="<?php echo esc_attr($webhook_delete_url); ?>" readonly style="flex: 1; font-family: monospace; background: #fff; padding: 10px; border: 1px solid #ddd; border-radius: 4px;">
-                        <button type="button" onclick="copyWebhookUrl('webhook-delete-url-input')" class="button">Copy</button>
+                <div style="background: #e7f3ff; padding: 15px; border-left: 4px solid #2271b1; margin-bottom: 20px;">
+                    <h3 style="margin-top: 0; color: #2271b1;">📋 How to Configure Item Webhooks in Zoho Inventory:</h3>
+                    <ol style="margin: 10px 0; padding-left: 20px; line-height: 1.8;">
+                        <li>Log in to your Zoho Inventory account</li>
+                        <li>Go to <strong>Settings</strong> → <strong>Automation</strong> → <strong>Actions</strong> → <strong>Webhooks</strong></li>
+                        <li>Click <strong>"New Webhook"</strong> or use this direct link:
+                            <br><a href="https://inventory.zoho.com/app/<?php echo esc_attr(get_option('zoho_organization_id', '')); ?>#/settings/automation/actions/webhooks/new" target="_blank" style="color: #2271b1; text-decoration: underline;">
+                                Open Webhooks Page
+                            </a>
+                        </li>
+                        <li>Configure <strong>two separate webhooks</strong> for Items:
+                            <ul style="margin-top: 5px; padding-left: 20px;">
+                                <li><strong>Webhook 1 - Create/Update:</strong>
+                                    <ul style="margin-top: 5px; padding-left: 20px;">
+                                        <li><strong>Webhook Name:</strong> WordPress Sync - Items Create/Update</li>
+                                        <li><strong>URL:</strong> <code><?php echo esc_html($webhook_url); ?></code></li>
+                                        <li><strong>Method:</strong> POST</li>
+                                        <li><strong>Content-Type:</strong> application/json</li>
+                                        <li><strong>Module:</strong> Items</li>
+                                        <li><strong>Events:</strong> Select "Created" and "Updated"</li>
+                                    </ul>
+                                </li>
+                                <li><strong>Webhook 2 - Delete:</strong>
+                                    <ul style="margin-top: 5px; padding-left: 20px;">
+                                        <li><strong>Webhook Name:</strong> WordPress Sync - Items Delete</li>
+                                        <li><strong>URL:</strong> <code><?php echo esc_html($webhook_delete_url); ?></code></li>
+                                        <li><strong>Method:</strong> POST</li>
+                                        <li><strong>Content-Type:</strong> application/json</li>
+                                        <li><strong>Module:</strong> Items</li>
+                                        <li><strong>Events:</strong> Select "Deleted"</li>
+                                    </ul>
+                                </li>
+                            </ul>
+                        </li>
+                        <?php if (!empty($webhook_secret)): ?>
+                        <li>Add custom header for security:
+                            <ul style="margin-top: 5px; padding-left: 20px;">
+                                <li><strong>Header Name:</strong> X-Webhook-Secret</li>
+                                <li><strong>Header Value:</strong> <code><?php echo esc_html($webhook_secret); ?></code></li>
+                            </ul>
+                        </li>
+                        <?php endif; ?>
+                        <li>Click <strong>"Save"</strong> to register the webhook</li>
+                    </ol>
+                </div>
+            </div>
+            
+            <!-- Contact Webhooks Tab -->
+            <div id="webhook-tab-content-contact" class="webhook-tab-content" style="display: none;">
+                <div style="background: #f0f0f0; padding: 15px; border-radius: 4px; margin-bottom: 20px;">
+                    <p style="margin: 5px 0 15px 0; font-weight: bold; font-size: 16px;">Webhook URLs for Contacts/Customers:</p>
+                    
+                    <div style="margin-bottom: 15px;">
+                        <p style="margin: 5px 0 8px 0; font-weight: bold; color: #2271b1;">Create/Update Webhook:</p>
+                        <div style="display: flex; gap: 10px; align-items: center;">
+                            <input type="text" id="webhook-contact-url-input" value="<?php echo esc_attr($webhook_url); ?>" readonly style="flex: 1; font-family: monospace; background: #fff; padding: 10px; border: 1px solid #ddd; border-radius: 4px;">
+                            <button type="button" onclick="copyWebhookUrl('webhook-contact-url-input')" class="button">Copy</button>
+                        </div>
+                        <p style="margin: 8px 0 0 0; font-size: 12px; color: #666;">
+                            Use this URL for "Created" and "Updated" events in Zoho.
+                        </p>
                     </div>
-                    <p style="margin: 8px 0 0 0; font-size: 12px; color: #666;">
-                        Use this URL for "Deleted" events in Zoho.
-                    </p>
+                    
+                    <div>
+                        <p style="margin: 5px 0 8px 0; font-weight: bold; color: #dc3232;">Delete Webhook:</p>
+                        <div style="display: flex; gap: 10px; align-items: center;">
+                            <input type="text" id="webhook-contact-delete-url-input" value="<?php echo esc_attr($webhook_delete_url); ?>" readonly style="flex: 1; font-family: monospace; background: #fff; padding: 10px; border: 1px solid #ddd; border-radius: 4px;">
+                            <button type="button" onclick="copyWebhookUrl('webhook-contact-delete-url-input')" class="button">Copy</button>
+                        </div>
+                        <p style="margin: 8px 0 0 0; font-size: 12px; color: #666;">
+                            Use this URL for "Deleted" events in Zoho.
+                        </p>
+                    </div>
+                </div>
+                
+                <div style="background: #e7f3ff; padding: 15px; border-left: 4px solid #2271b1; margin-bottom: 20px;">
+                    <h3 style="margin-top: 0; color: #2271b1;">📋 How to Configure Contact Webhooks in Zoho Inventory:</h3>
+                    <ol style="margin: 10px 0; padding-left: 20px; line-height: 1.8;">
+                        <li>Log in to your Zoho Inventory account</li>
+                        <li>Go to <strong>Settings</strong> → <strong>Automation</strong> → <strong>Actions</strong> → <strong>Webhooks</strong></li>
+                        <li>Click <strong>"New Webhook"</strong></li>
+                        <li>Configure <strong>two separate webhooks</strong> for Contacts:
+                            <ul style="margin-top: 5px; padding-left: 20px;">
+                                <li><strong>Webhook 1 - Create/Update:</strong>
+                                    <ul style="margin-top: 5px; padding-left: 20px;">
+                                        <li><strong>Webhook Name:</strong> WordPress Sync - Contacts Create/Update</li>
+                                        <li><strong>URL:</strong> <code><?php echo esc_html($webhook_url); ?></code></li>
+                                        <li><strong>Method:</strong> POST</li>
+                                        <li><strong>Content-Type:</strong> application/json</li>
+                                        <li><strong>Module:</strong> Contacts</li>
+                                        <li><strong>Events:</strong> Select "Created" and "Updated"</li>
+                                    </ul>
+                                </li>
+                                <li><strong>Webhook 2 - Delete:</strong>
+                                    <ul style="margin-top: 5px; padding-left: 20px;">
+                                        <li><strong>Webhook Name:</strong> WordPress Sync - Contacts Delete</li>
+                                        <li><strong>URL:</strong> <code><?php echo esc_html($webhook_delete_url); ?></code></li>
+                                        <li><strong>Method:</strong> POST</li>
+                                        <li><strong>Content-Type:</strong> application/json</li>
+                                        <li><strong>Module:</strong> Contacts</li>
+                                        <li><strong>Events:</strong> Select "Deleted"</li>
+                                    </ul>
+                                </li>
+                            </ul>
+                        </li>
+                        <?php if (!empty($webhook_secret)): ?>
+                        <li>Add custom header for security:
+                            <ul style="margin-top: 5px; padding-left: 20px;">
+                                <li><strong>Header Name:</strong> X-Webhook-Secret</li>
+                                <li><strong>Header Value:</strong> <code><?php echo esc_html($webhook_secret); ?></code></li>
+                            </ul>
+                        </li>
+                        <?php endif; ?>
+                        <li>Click <strong>"Save"</strong> to register the webhook</li>
+                    </ol>
+                </div>
+            </div>
+            
+            <!-- Invoice Webhooks Tab -->
+            <div id="webhook-tab-content-invoice" class="webhook-tab-content" style="display: none;">
+                <div style="background: #f0f0f0; padding: 15px; border-radius: 4px; margin-bottom: 20px;">
+                    <p style="margin: 5px 0 15px 0; font-weight: bold; font-size: 16px;">Webhook URLs for Invoices/Orders:</p>
+                    
+                    <div style="margin-bottom: 15px;">
+                        <p style="margin: 5px 0 8px 0; font-weight: bold; color: #2271b1;">Create/Update Webhook:</p>
+                        <div style="display: flex; gap: 10px; align-items: center;">
+                            <input type="text" id="webhook-invoice-url-input" value="<?php echo esc_attr($webhook_url); ?>" readonly style="flex: 1; font-family: monospace; background: #fff; padding: 10px; border: 1px solid #ddd; border-radius: 4px;">
+                            <button type="button" onclick="copyWebhookUrl('webhook-invoice-url-input')" class="button">Copy</button>
+                        </div>
+                        <p style="margin: 8px 0 0 0; font-size: 12px; color: #666;">
+                            Use this URL for "Created" and "Updated" events in Zoho.
+                        </p>
+                    </div>
+                    
+                    <div>
+                        <p style="margin: 5px 0 8px 0; font-weight: bold; color: #dc3232;">Delete Webhook:</p>
+                        <div style="display: flex; gap: 10px; align-items: center;">
+                            <input type="text" id="webhook-invoice-delete-url-input" value="<?php echo esc_attr($webhook_delete_url); ?>" readonly style="flex: 1; font-family: monospace; background: #fff; padding: 10px; border: 1px solid #ddd; border-radius: 4px;">
+                            <button type="button" onclick="copyWebhookUrl('webhook-invoice-delete-url-input')" class="button">Copy</button>
+                        </div>
+                        <p style="margin: 8px 0 0 0; font-size: 12px; color: #666;">
+                            Use this URL for "Deleted" events in Zoho.
+                        </p>
+                    </div>
+                </div>
+                
+                <div style="background: #e7f3ff; padding: 15px; border-left: 4px solid #2271b1; margin-bottom: 20px;">
+                    <h3 style="margin-top: 0; color: #2271b1;">📋 How to Configure Invoice Webhooks in Zoho Inventory:</h3>
+                    <ol style="margin: 10px 0; padding-left: 20px; line-height: 1.8;">
+                        <li>Log in to your Zoho Inventory account</li>
+                        <li>Go to <strong>Settings</strong> → <strong>Automation</strong> → <strong>Actions</strong> → <strong>Webhooks</strong></li>
+                        <li>Click <strong>"New Webhook"</strong></li>
+                        <li>Configure <strong>two separate webhooks</strong> for Invoices:
+                            <ul style="margin-top: 5px; padding-left: 20px;">
+                                <li><strong>Webhook 1 - Create/Update:</strong>
+                                    <ul style="margin-top: 5px; padding-left: 20px;">
+                                        <li><strong>Webhook Name:</strong> WordPress Sync - Invoices Create/Update</li>
+                                        <li><strong>URL:</strong> <code><?php echo esc_html($webhook_url); ?></code></li>
+                                        <li><strong>Method:</strong> POST</li>
+                                        <li><strong>Content-Type:</strong> application/json</li>
+                                        <li><strong>Module:</strong> Invoices</li>
+                                        <li><strong>Events:</strong> Select "Created" and "Updated"</li>
+                                    </ul>
+                                </li>
+                                <li><strong>Webhook 2 - Delete:</strong>
+                                    <ul style="margin-top: 5px; padding-left: 20px;">
+                                        <li><strong>Webhook Name:</strong> WordPress Sync - Invoices Delete</li>
+                                        <li><strong>URL:</strong> <code><?php echo esc_html($webhook_delete_url); ?></code></li>
+                                        <li><strong>Method:</strong> POST</li>
+                                        <li><strong>Content-Type:</strong> application/json</li>
+                                        <li><strong>Module:</strong> Invoices</li>
+                                        <li><strong>Events:</strong> Select "Deleted"</li>
+                                    </ul>
+                                </li>
+                            </ul>
+                        </li>
+                        <?php if (!empty($webhook_secret)): ?>
+                        <li>Add custom header for security:
+                            <ul style="margin-top: 5px; padding-left: 20px;">
+                                <li><strong>Header Name:</strong> X-Webhook-Secret</li>
+                                <li><strong>Header Value:</strong> <code><?php echo esc_html($webhook_secret); ?></code></li>
+                            </ul>
+                        </li>
+                        <?php endif; ?>
+                        <li>Click <strong>"Save"</strong> to register the webhook</li>
+                    </ol>
                 </div>
             </div>
             
@@ -552,66 +750,46 @@ function zoho_dashboard_page() {
                 document.execCommand('copy');
                 alert('Webhook URL copied to clipboard!');
             }
+            
+            function toggleWebhookSettings() {
+                var content = document.getElementById('webhook-settings-content');
+                var icon = document.getElementById('webhook-toggle-icon');
+                if (content.style.display === 'none') {
+                    content.style.display = 'block';
+                    icon.textContent = '▲';
+                    icon.style.transform = 'rotate(0deg)';
+                } else {
+                    content.style.display = 'none';
+                    icon.textContent = '▼';
+                    icon.style.transform = 'rotate(0deg)';
+                }
+            }
+            
+            function switchWebhookTab(tab) {
+                // Hide all tab contents
+                document.querySelectorAll('.webhook-tab-content').forEach(function(content) {
+                    content.style.display = 'none';
+                });
+                
+                // Reset all tab buttons
+                document.querySelectorAll('.webhook-tab-btn').forEach(function(btn) {
+                    btn.style.background = '#f0f0f0';
+                    btn.style.color = '#333';
+                    btn.style.borderBottom = '3px solid transparent';
+                    btn.style.fontWeight = 'normal';
+                });
+                
+                // Show selected tab content
+                document.getElementById('webhook-tab-content-' + tab).style.display = 'block';
+                
+                // Highlight selected tab button
+                var selectedBtn = document.getElementById('webhook-tab-' + tab);
+                selectedBtn.style.background = '#2271b1';
+                selectedBtn.style.color = '#fff';
+                selectedBtn.style.borderBottom = '3px solid #2271b1';
+                selectedBtn.style.fontWeight = 'bold';
+            }
             </script>
-            
-            <div style="background: #e7f3ff; padding: 15px; border-left: 4px solid #2271b1; margin-bottom: 20px;">
-                <h3 style="margin-top: 0; color: #2271b1;">📋 How to Configure Webhook in Zoho Inventory:</h3>
-                <ol style="margin: 10px 0; padding-left: 20px; line-height: 1.8;">
-                    <li>Log in to your Zoho Inventory account</li>
-                    <li>Go to <strong>Settings</strong> → <strong>Automation</strong> → <strong>Actions</strong> → <strong>Webhooks</strong></li>
-                    <li>Click <strong>"New Webhook"</strong> or use this direct link:
-                        <br><a href="https://inventory.zoho.com/app/<?php echo esc_attr(get_option('zoho_organization_id', '')); ?>#/settings/automation/actions/webhooks/new" target="_blank" style="color: #2271b1; text-decoration: underline;">
-                            Open Webhooks Page
-                        </a>
-                    </li>
-                    <li>Configure <strong>two separate webhooks</strong> in Zoho:
-                        <ul style="margin-top: 5px; padding-left: 20px;">
-                            <li><strong>Webhook 1 - Create/Update:</strong>
-                                <ul style="margin-top: 5px; padding-left: 20px;">
-                                    <li><strong>Webhook Name:</strong> WordPress Sync - Create/Update</li>
-                                    <li><strong>URL:</strong> <code><?php echo esc_html($webhook_url); ?></code></li>
-                                    <li><strong>Method:</strong> POST</li>
-                                    <li><strong>Content-Type:</strong> application/json</li>
-                                    <li><strong>Module:</strong> Select Items, Contacts, or Invoices</li>
-                                    <li><strong>Events:</strong> Select "Created" and "Updated"</li>
-                                </ul>
-                            </li>
-                            <li><strong>Webhook 2 - Delete:</strong>
-                                <ul style="margin-top: 5px; padding-left: 20px;">
-                                    <li><strong>Webhook Name:</strong> WordPress Sync - Delete</li>
-                                    <li><strong>URL:</strong> <code><?php echo esc_html($webhook_delete_url); ?></code></li>
-                                    <li><strong>Method:</strong> POST</li>
-                                    <li><strong>Content-Type:</strong> application/json</li>
-                                    <li><strong>Module:</strong> Select Items, Contacts, or Invoices</li>
-                                    <li><strong>Events:</strong> Select "Deleted"</li>
-                                </ul>
-                            </li>
-                        </ul>
-                    </li>
-                    <?php if (!empty($webhook_secret)): ?>
-                    <li>Add custom header for security:
-                        <ul style="margin-top: 5px; padding-left: 20px;">
-                            <li><strong>Header Name:</strong> X-Webhook-Secret</li>
-                            <li><strong>Header Value:</strong> <code><?php echo esc_html($webhook_secret); ?></code></li>
-                        </ul>
-                    </li>
-                    <?php endif; ?>
-                    <li>Click <strong>"Save"</strong> to register the webhook</li>
-                </ol>
-                <p style="margin: 10px 0 0 0; font-size: 12px; color: #666;">
-                    <strong>Note:</strong> Zoho Inventory does not support programmatic webhook registration via API. 
-                    You must configure webhooks manually through the Webhooks interface.
-                </p>
-            </div>
-            
-            <div style="background: #fff3cd; padding: 15px; border: 1px solid #ffc107; border-radius: 4px; margin-bottom: 20px;">
-                <p style="margin: 0; color: #856404;">
-                    <strong>⚠️ Important:</strong> 
-                    Zoho Inventory webhooks are configured via <strong>Workflow Rules</strong> in the Zoho UI. 
-                    There is no API endpoint to automatically register webhooks. 
-                    You must manually set them up following the steps above.
-                </p>
-            </div>
             
             <form method="post">
                 <?php wp_nonce_field('zoho_webhook_settings'); ?>
@@ -687,13 +865,6 @@ function zoho_dashboard_page() {
                 <?php endif; ?>
             </div>
             
-            <div style="margin-top: 15px; padding: 15px; background: #fff3cd; border: 1px solid #ffc107; border-radius: 4px;">
-                <p style="margin: 0; color: #856404;">
-                    <strong>⚠️ Note:</strong> If webhooks are not supported by Zoho Inventory, use the 
-                    <a href="<?php echo admin_url('admin.php?page=zoho-inventory-sync'); ?>">Manual Sync</a> option or 
-                    Polling/Cron sync instead.
-                </p>
-            </div>
         </div>
         <?php endif; ?>
         
