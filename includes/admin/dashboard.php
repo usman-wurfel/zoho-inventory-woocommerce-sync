@@ -488,6 +488,30 @@ function zoho_dashboard_page() {
         </div>
         
         <!-- Sync Statistics Cards -->
+        <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 20px; margin-bottom: 20px;">
+            <!-- Items Synced Card -->
+            <div class="zoho-stat-card">
+                <h3 class="zoho-stat-label">Zoho Items Linked</h3>
+                <div class="zoho-stat-number"><?php echo number_format($items_linked ?: 0); ?></div>
+                <div style="font-size: 12px; color: #666; margin-top: 5px;"><?php echo number_format($products_linked ?: 0); ?> of <?php echo number_format($published_products); ?> products linked</div>
+            </div>
+            
+            <!-- Invoices Synced Card -->
+            <div class="zoho-stat-card">
+                <h3 class="zoho-stat-label">Invoices Synced</h3>
+                <div class="zoho-stat-number"><?php echo number_format($invoices_synced ?: 0); ?></div>
+                <div style="font-size: 12px; color: #666; margin-top: 5px;"><?php echo number_format($invoices_synced ?: 0); ?> of <?php echo number_format($total_orders ?: 0); ?> orders linked</div>
+            </div>
+            
+            <!-- Contacts Synced Card -->
+            <div class="zoho-stat-card">
+                <h3 class="zoho-stat-label">Zoho Contacts Linked</h3>
+                <div class="zoho-stat-number"><?php echo number_format($contacts_linked ?: 0); ?></div>
+                <div style="font-size: 12px; color: #666; margin-top: 5px;"><?php echo number_format($customers_linked ?: 0); ?> of <?php echo number_format($total_customers); ?> customers linked</div>
+            </div>
+        </div>
+        
+        <!-- Webhooks Settings -->
         <?php
         // Handle webhook settings save
         if (isset($_POST['save_webhook_settings']) && $connected) {
@@ -867,30 +891,6 @@ function zoho_dashboard_page() {
             
         </div>
         <?php endif; ?>
-        
-        <!-- Sync Statistics Cards -->
-        <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 20px; margin-bottom: 20px;">
-            <!-- Items Synced Card -->
-            <div class="zoho-stat-card">
-                <h3 class="zoho-stat-label">Zoho Items Linked</h3>
-                <div class="zoho-stat-number"><?php echo number_format($items_linked ?: 0); ?></div>
-                <div style="font-size: 12px; color: #666; margin-top: 5px;"><?php echo number_format($products_linked ?: 0); ?> of <?php echo number_format($published_products); ?> products linked</div>
-            </div>
-            
-            <!-- Invoices Synced Card -->
-            <div class="zoho-stat-card">
-                <h3 class="zoho-stat-label">Invoices Synced</h3>
-                <div class="zoho-stat-number"><?php echo number_format($invoices_synced ?: 0); ?></div>
-                <div style="font-size: 12px; color: #666; margin-top: 5px;"><?php echo number_format($invoices_synced ?: 0); ?> of <?php echo number_format($total_orders ?: 0); ?> orders linked</div>
-            </div>
-            
-            <!-- Contacts Synced Card -->
-            <div class="zoho-stat-card">
-                <h3 class="zoho-stat-label">Zoho Contacts Linked</h3>
-                <div class="zoho-stat-number"><?php echo number_format($contacts_linked ?: 0); ?></div>
-                <div style="font-size: 12px; color: #666; margin-top: 5px;"><?php echo number_format($customers_linked ?: 0); ?> of <?php echo number_format($total_customers); ?> customers linked</div>
-            </div>
-        </div>
         
         <!-- Connection Settings - Only show if not connected -->
         <?php if (!$connected): ?>
