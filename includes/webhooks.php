@@ -30,19 +30,63 @@ function zoho_register_webhook_endpoints() {
    VALIDATE WEBHOOK REQUEST
 ====================================================== */
 function zoho_validate_webhook($request) {
-    // Option 1: Secret key validation (if Zoho sends a secret)
-    $webhook_secret = get_option('zoho_webhook_secret', '');
-    if (!empty($webhook_secret)) {
-        $received_secret = $request->get_header('X-Webhook-Secret');
-        if ($received_secret !== $webhook_secret) {
+    // Get received secret from header
+    $received_secret = $request->get_header('X-Webhook-Secret');
+    
+    // If secret is provided, validate against appropriate tab-specific secret
+    if (!empty($received_secret)) {
+        // Try to determine object type from request body
+        $body = $request->get_json_params();
+        $object_type = '';
+        
+        if (isset($body['item'])) {
+            $object_type = 'items';
+        } elseif (isset($body['contact'])) {
+            $object_type = 'contacts';
+        } elseif (isset($body['invoice'])) {
+            $object_type = 'invoices';
+        } elseif (isset($body['item_id'])) {
+            $object_type = 'items';
+        } elseif (isset($body['contact_id'])) {
+            $object_type = 'contacts';
+        } elseif (isset($body['invoice_id'])) {
+            $object_type = 'invoices';
+        }
+        
+        // Get the appropriate secret based on object type
+        $expected_secret = '';
+        if ($object_type === 'items') {
+            $expected_secret = get_option('zoho_webhook_secret_items', '');
+        } elseif ($object_type === 'contacts') {
+            $expected_secret = get_option('zoho_webhook_secret_contacts', '');
+        } elseif ($object_type === 'invoices') {
+            $expected_secret = get_option('zoho_webhook_secret_invoices', '');
+        }
+        
+        // If we have an expected secret and it doesn't match, reject
+        if (!empty($expected_secret) && $received_secret !== $expected_secret) {
             return new WP_Error('invalid_secret', 'Invalid webhook secret', array('status' => 401));
+        }
+        
+        // If secret is provided but object type unknown, check all secrets as fallback
+        if (empty($object_type)) {
+            $secret_items = get_option('zoho_webhook_secret_items', '');
+            $secret_contacts = get_option('zoho_webhook_secret_contacts', '');
+            $secret_invoices = get_option('zoho_webhook_secret_invoices', '');
+            
+            $is_valid = ($received_secret === $secret_items) || 
+                       ($received_secret === $secret_contacts) || 
+                       ($received_secret === $secret_invoices);
+            
+            if (!empty($secret_items) || !empty($secret_contacts) || !empty($secret_invoices)) {
+                if (!$is_valid) {
+                    return new WP_Error('invalid_secret', 'Invalid webhook secret', array('status' => 401));
+                }
+            }
         }
     }
     
-    // Option 2: IP whitelist (Zoho API IPs)
-    // Option 3: Basic auth or token validation
-    // For now, allow if secret is empty (for testing)
-    
+    // If no secret is required or validation passed, allow the request
     return true;
 }
 
@@ -71,11 +115,6 @@ function zoho_handle_webhook($request) {
         )),
         json_encode(array('status' => 'processing'))
     );
-    
-    // Check if webhooks are enabled
-    if (get_option('zoho_webhooks_enabled', 'no') !== 'yes') {
-        return new WP_REST_Response(array('message' => 'Webhooks disabled'), 200);
-    }
     
     // Zoho Inventory webhook format - can send data in different formats
     $object_type = '';
@@ -123,23 +162,30 @@ function zoho_handle_webhook($request) {
     }
     
     // Handle based on object type and action (create/update only)
+    // Check tab-specific enabled flags
     if (!empty($object_type)) {
         switch ($object_type) {
             case 'items':
                 if ($action === 'create' || $action === 'update') {
-                    zoho_handle_item_webhook($action, $object_id, $object_data);
+                    if (get_option('zoho_webhooks_enabled_items', 'no') === 'yes') {
+                        zoho_handle_item_webhook($action, $object_id, $object_data);
+                    }
                 }
                 break;
                 
             case 'contacts':
                 if ($action === 'create' || $action === 'update') {
-                    zoho_handle_contact_webhook($action, $object_id, $object_data);
+                    if (get_option('zoho_webhooks_enabled_contacts', 'no') === 'yes') {
+                        zoho_handle_contact_webhook($action, $object_id, $object_data);
+                    }
                 }
                 break;
                 
             case 'invoices':
                 if ($action === 'create' || $action === 'update') {
-                    zoho_handle_invoice_webhook($action, $object_id, $object_data);
+                    if (get_option('zoho_webhooks_enabled_invoices', 'no') === 'yes') {
+                        zoho_handle_invoice_webhook($action, $object_id, $object_data);
+                    }
                 }
                 break;
                 
@@ -197,11 +243,6 @@ function zoho_handle_delete_webhook($request) {
         json_encode(array('status' => 'processing_delete'))
     );
     
-    // Check if webhooks are enabled
-    if (get_option('zoho_webhooks_enabled', 'no') !== 'yes') {
-        return new WP_REST_Response(array('message' => 'Webhooks disabled'), 200);
-    }
-    
     // Parse delete webhook - Zoho sends object data with ID
     $object_type = '';
     $object_id = '';
@@ -233,21 +274,21 @@ function zoho_handle_delete_webhook($request) {
         $object_id = $body['invoice_id'];
     }
     
-    // Handle delete action
+    // Handle delete action - check tab-specific enabled flags
     if (!empty($object_type) && !empty($object_id)) {
         switch ($object_type) {
             case 'items':
-                if (get_option('zoho_sync_zoho_to_woo_items', 'no') === 'yes') {
+                if (get_option('zoho_webhooks_enabled_items', 'no') === 'yes' && get_option('zoho_sync_zoho_to_woo_items', 'no') === 'yes') {
                     zoho_delete_woo_product_from_zoho_item($object_id);
                 }
                 break;
             case 'contacts':
-                if (get_option('zoho_sync_zoho_to_woo_contacts', 'no') === 'yes') {
+                if (get_option('zoho_webhooks_enabled_contacts', 'no') === 'yes' && get_option('zoho_sync_zoho_to_woo_contacts', 'no') === 'yes') {
                     zoho_delete_woo_customer_from_zoho_contact($object_id);
                 }
                 break;
             case 'invoices':
-                if (get_option('zoho_sync_zoho_to_woo_invoices', 'no') === 'yes') {
+                if (get_option('zoho_webhooks_enabled_invoices', 'no') === 'yes' && get_option('zoho_sync_zoho_to_woo_invoices', 'no') === 'yes') {
                     zoho_delete_woo_order_from_zoho_invoice($object_id);
                 }
                 break;

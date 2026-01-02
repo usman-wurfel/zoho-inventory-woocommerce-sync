@@ -513,22 +513,42 @@ function zoho_dashboard_page() {
         
         <!-- Webhooks Settings -->
         <?php
-        // Handle webhook settings save
+        // Handle webhook settings save - separate for each tab
         if (isset($_POST['save_webhook_settings']) && $connected) {
             check_admin_referer('zoho_webhook_settings');
-            update_option('zoho_webhooks_enabled', isset($_POST['webhooks_enabled']) ? 'yes' : 'no');
-            update_option('zoho_sync_zoho_to_woo_items', isset($_POST['sync_items']) ? 'yes' : 'no');
-            update_option('zoho_sync_zoho_to_woo_contacts', isset($_POST['sync_contacts']) ? 'yes' : 'no');
-            update_option('zoho_sync_zoho_to_woo_invoices', isset($_POST['sync_invoices']) ? 'yes' : 'no');
-            update_option('zoho_webhook_secret', sanitize_text_field($_POST['webhook_secret']));
-            echo '<div class="notice notice-success"><p>Webhook settings saved!</p></div>';
+            $tab_type = isset($_POST['tab_type']) ? sanitize_text_field($_POST['tab_type']) : '';
+            
+            if ($tab_type === 'inventory') {
+                update_option('zoho_webhooks_enabled_items', isset($_POST['webhooks_enabled']) ? 'yes' : 'no');
+                update_option('zoho_sync_zoho_to_woo_items', isset($_POST['sync_items']) ? 'yes' : 'no');
+                update_option('zoho_webhook_secret_items', sanitize_text_field($_POST['webhook_secret']));
+                echo '<div class="notice notice-success"><p>Inventory webhook settings saved!</p></div>';
+            } elseif ($tab_type === 'contact') {
+                update_option('zoho_webhooks_enabled_contacts', isset($_POST['webhooks_enabled']) ? 'yes' : 'no');
+                update_option('zoho_sync_zoho_to_woo_contacts', isset($_POST['sync_contacts']) ? 'yes' : 'no');
+                update_option('zoho_webhook_secret_contacts', sanitize_text_field($_POST['webhook_secret']));
+                echo '<div class="notice notice-success"><p>Contact webhook settings saved!</p></div>';
+            } elseif ($tab_type === 'invoice') {
+                update_option('zoho_webhooks_enabled_invoices', isset($_POST['webhooks_enabled']) ? 'yes' : 'no');
+                update_option('zoho_sync_zoho_to_woo_invoices', isset($_POST['sync_invoices']) ? 'yes' : 'no');
+                update_option('zoho_webhook_secret_invoices', sanitize_text_field($_POST['webhook_secret']));
+                echo '<div class="notice notice-success"><p>Invoice webhook settings saved!</p></div>';
+            }
         }
         
-        $webhooks_enabled = get_option('zoho_webhooks_enabled', 'no');
-        $webhook_secret = get_option('zoho_webhook_secret', '');
+        // Get settings for each tab
+        $webhooks_enabled_items = get_option('zoho_webhooks_enabled_items', 'no');
+        $webhooks_enabled_contacts = get_option('zoho_webhooks_enabled_contacts', 'no');
+        $webhooks_enabled_invoices = get_option('zoho_webhooks_enabled_invoices', 'no');
+        
+        $webhook_secret_items = get_option('zoho_webhook_secret_items', '');
+        $webhook_secret_contacts = get_option('zoho_webhook_secret_contacts', '');
+        $webhook_secret_invoices = get_option('zoho_webhook_secret_invoices', '');
+        
         $sync_items = get_option('zoho_sync_zoho_to_woo_items', 'no');
         $sync_contacts = get_option('zoho_sync_zoho_to_woo_contacts', 'no');
         $sync_invoices = get_option('zoho_sync_zoho_to_woo_invoices', 'no');
+        
         $webhook_url = rest_url('zoho-inventory/v1/webhook');
         $webhook_delete_url = rest_url('zoho-inventory/v1/webhook-delete');
         ?>
@@ -611,17 +631,55 @@ function zoho_dashboard_page() {
                                 </li>
                             </ul>
                         </li>
-                        <?php if (!empty($webhook_secret)): ?>
+                        <?php if (!empty($webhook_secret_items)): ?>
                         <li>Add custom header for security:
                             <ul style="margin-top: 5px; padding-left: 20px;">
                                 <li><strong>Header Name:</strong> X-Webhook-Secret</li>
-                                <li><strong>Header Value:</strong> <code><?php echo esc_html($webhook_secret); ?></code></li>
+                                <li><strong>Header Value:</strong> <code><?php echo esc_html($webhook_secret_items); ?></code></li>
                             </ul>
                         </li>
                         <?php endif; ?>
                         <li>Click <strong>"Save"</strong> to register the webhook</li>
                     </ol>
                 </div>
+                
+                <!-- Settings Form for Inventory -->
+                <form method="post" style="margin-top: 30px;">
+                    <?php wp_nonce_field('zoho_webhook_settings'); ?>
+                    <input type="hidden" name="tab_type" value="inventory">
+                    
+                    <table class="form-table">
+                        <tr>
+                            <th scope="row">Enable Webhooks</th>
+                            <td>
+                                <label>
+                                    <input type="checkbox" name="webhooks_enabled" value="1" <?php checked($webhooks_enabled_items, 'yes'); ?>>
+                                    Enable webhook processing (receive webhooks from Zoho)
+                                </label>
+                            </td>
+                        </tr>
+                        
+                        <tr>
+                            <th scope="row">Webhook Secret <span style="color: red;">*</span></th>
+                            <td>
+                                <input type="text" name="webhook_secret" value="<?php echo esc_attr($webhook_secret_items); ?>" class="regular-text" placeholder="Enter secret key" required>
+                                <p class="description">Mandatory: Set a secret key to validate webhook requests. Zoho should send this in X-Webhook-Secret header.</p>
+                            </td>
+                        </tr>
+                        
+                        <tr>
+                            <th scope="row">Sync Option</th>
+                            <td>
+                                <label>
+                                    <input type="checkbox" name="sync_items" value="1" <?php checked($sync_items, 'yes'); ?>>
+                                    <strong>Items → Products:</strong> Sync Zoho items to WooCommerce products
+                                </label>
+                            </td>
+                        </tr>
+                    </table>
+                    
+                    <?php submit_button('Save Inventory Webhook Settings', 'primary', 'save_webhook_settings'); ?>
+                </form>
             </div>
             
             <!-- Contact Webhooks Tab -->
@@ -682,17 +740,55 @@ function zoho_dashboard_page() {
                                 </li>
                             </ul>
                         </li>
-                        <?php if (!empty($webhook_secret)): ?>
+                        <?php if (!empty($webhook_secret_contacts)): ?>
                         <li>Add custom header for security:
                             <ul style="margin-top: 5px; padding-left: 20px;">
                                 <li><strong>Header Name:</strong> X-Webhook-Secret</li>
-                                <li><strong>Header Value:</strong> <code><?php echo esc_html($webhook_secret); ?></code></li>
+                                <li><strong>Header Value:</strong> <code><?php echo esc_html($webhook_secret_contacts); ?></code></li>
                             </ul>
                         </li>
                         <?php endif; ?>
                         <li>Click <strong>"Save"</strong> to register the webhook</li>
                     </ol>
                 </div>
+                
+                <!-- Settings Form for Contacts -->
+                <form method="post" style="margin-top: 30px;">
+                    <?php wp_nonce_field('zoho_webhook_settings'); ?>
+                    <input type="hidden" name="tab_type" value="contact">
+                    
+                    <table class="form-table">
+                        <tr>
+                            <th scope="row">Enable Webhooks</th>
+                            <td>
+                                <label>
+                                    <input type="checkbox" name="webhooks_enabled" value="1" <?php checked($webhooks_enabled_contacts, 'yes'); ?>>
+                                    Enable webhook processing (receive webhooks from Zoho)
+                                </label>
+                            </td>
+                        </tr>
+                        
+                        <tr>
+                            <th scope="row">Webhook Secret <span style="color: red;">*</span></th>
+                            <td>
+                                <input type="text" name="webhook_secret" value="<?php echo esc_attr($webhook_secret_contacts); ?>" class="regular-text" placeholder="Enter secret key" required>
+                                <p class="description">Mandatory: Set a secret key to validate webhook requests. Zoho should send this in X-Webhook-Secret header.</p>
+                            </td>
+                        </tr>
+                        
+                        <tr>
+                            <th scope="row">Sync Option</th>
+                            <td>
+                                <label>
+                                    <input type="checkbox" name="sync_contacts" value="1" <?php checked($sync_contacts, 'yes'); ?>>
+                                    <strong>Contacts → Customers:</strong> Sync Zoho contacts to WooCommerce customers
+                                </label>
+                            </td>
+                        </tr>
+                    </table>
+                    
+                    <?php submit_button('Save Contact Webhook Settings', 'primary', 'save_webhook_settings'); ?>
+                </form>
             </div>
             
             <!-- Invoice Webhooks Tab -->
@@ -753,17 +849,55 @@ function zoho_dashboard_page() {
                                 </li>
                             </ul>
                         </li>
-                        <?php if (!empty($webhook_secret)): ?>
+                        <?php if (!empty($webhook_secret_invoices)): ?>
                         <li>Add custom header for security:
                             <ul style="margin-top: 5px; padding-left: 20px;">
                                 <li><strong>Header Name:</strong> X-Webhook-Secret</li>
-                                <li><strong>Header Value:</strong> <code><?php echo esc_html($webhook_secret); ?></code></li>
+                                <li><strong>Header Value:</strong> <code><?php echo esc_html($webhook_secret_invoices); ?></code></li>
                             </ul>
                         </li>
                         <?php endif; ?>
                         <li>Click <strong>"Save"</strong> to register the webhook</li>
                     </ol>
                 </div>
+                
+                <!-- Settings Form for Invoices -->
+                <form method="post" style="margin-top: 30px;">
+                    <?php wp_nonce_field('zoho_webhook_settings'); ?>
+                    <input type="hidden" name="tab_type" value="invoice">
+                    
+                    <table class="form-table">
+                        <tr>
+                            <th scope="row">Enable Webhooks</th>
+                            <td>
+                                <label>
+                                    <input type="checkbox" name="webhooks_enabled" value="1" <?php checked($webhooks_enabled_invoices, 'yes'); ?>>
+                                    Enable webhook processing (receive webhooks from Zoho)
+                                </label>
+                            </td>
+                        </tr>
+                        
+                        <tr>
+                            <th scope="row">Webhook Secret <span style="color: red;">*</span></th>
+                            <td>
+                                <input type="text" name="webhook_secret" value="<?php echo esc_attr($webhook_secret_invoices); ?>" class="regular-text" placeholder="Enter secret key" required>
+                                <p class="description">Mandatory: Set a secret key to validate webhook requests. Zoho should send this in X-Webhook-Secret header.</p>
+                            </td>
+                        </tr>
+                        
+                        <tr>
+                            <th scope="row">Sync Option</th>
+                            <td>
+                                <label>
+                                    <input type="checkbox" name="sync_invoices" value="1" <?php checked($sync_invoices, 'yes'); ?>>
+                                    <strong>Invoices → Orders:</strong> Sync Zoho invoices to WooCommerce orders
+                                </label>
+                            </td>
+                        </tr>
+                    </table>
+                    
+                    <?php submit_button('Save Invoice Webhook Settings', 'primary', 'save_webhook_settings'); ?>
+                </form>
             </div>
             
             <script>
@@ -814,53 +948,6 @@ function zoho_dashboard_page() {
                 selectedBtn.style.fontWeight = 'bold';
             }
             </script>
-            
-            <form method="post">
-                <?php wp_nonce_field('zoho_webhook_settings'); ?>
-                
-                <table class="form-table">
-                    <tr>
-                        <th scope="row">Enable Webhooks</th>
-                        <td>
-                            <label>
-                                <input type="checkbox" name="webhooks_enabled" value="1" <?php checked($webhooks_enabled, 'yes'); ?>>
-                                Enable webhook processing (receive webhooks from Zoho)
-                            </label>
-                        </td>
-                    </tr>
-                    
-                    <tr>
-                        <th scope="row">Webhook Secret</th>
-                        <td>
-                            <input type="text" name="webhook_secret" value="<?php echo esc_attr($webhook_secret); ?>" class="regular-text" placeholder="Optional: Secret key for webhook validation">
-                            <p class="description">Optional: Set a secret key to validate webhook requests. Zoho should send this in X-Webhook-Secret header.</p>
-                        </td>
-                    </tr>
-                    
-                    <tr>
-                        <th scope="row">Sync Options</th>
-                        <td>
-                            <label style="display: block; margin-bottom: 10px;">
-                                <input type="checkbox" name="sync_items" value="1" <?php checked($sync_items, 'yes'); ?>>
-                                <strong>Items → Products:</strong> Sync Zoho items to WooCommerce products
-                            </label>
-                            
-                            <label style="display: block; margin-bottom: 10px;">
-                                <input type="checkbox" name="sync_contacts" value="1" <?php checked($sync_contacts, 'yes'); ?>>
-                                <strong>Contacts → Customers:</strong> Sync Zoho contacts to WooCommerce customers
-                            </label>
-                            
-                            <label style="display: block; margin-bottom: 10px;">
-                                <input type="checkbox" name="sync_invoices" value="1" <?php checked($sync_invoices, 'yes'); ?>>
-                                <strong>Invoices → Orders:</strong> Sync Zoho invoices to WooCommerce orders
-                            </label>
-                        </td>
-                    </tr>
-                    
-                </table>
-                
-                <?php submit_button('Save Webhook Settings', 'primary', 'save_webhook_settings'); ?>
-            </form>
             
             <!-- Webhook Status/Test Section -->
             <?php
