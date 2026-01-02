@@ -211,6 +211,9 @@ function zoho_update_woo_order_from_zoho_invoice($order_id, $zoho_invoice_data) 
         return false;
     }
     
+    // Set flag to prevent circular sync - skip WooCommerce → Zoho sync for next 10 seconds
+    set_transient('zoho_webhook_updating_order_' . $order_id, true, 10);
+    
     if (isset($zoho_invoice_data['status'])) {
         $zoho_status = strtolower($zoho_invoice_data['status']);
         $woo_status = 'pending';

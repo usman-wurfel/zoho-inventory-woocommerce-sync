@@ -198,6 +198,7 @@ function zoho_sync_zoho_contact_to_woo($zoho_contact_id, $zoho_contact_data = nu
  * Create WooCommerce customer from Zoho contact
  */
 function zoho_create_woo_customer_from_zoho_contact($zoho_contact_data) {
+    // For new customers, we'll set the flag after user_id is created
     // Extract email - check root level first, then contact_persons
     $email = '';
     if (!empty($zoho_contact_data['email'])) {
@@ -327,6 +328,8 @@ function zoho_create_woo_customer_from_zoho_contact($zoho_contact_data) {
  * Update WooCommerce customer from Zoho contact
  */
 function zoho_update_woo_customer_from_zoho_contact($user_id, $zoho_contact_data) {
+    // Set flag to prevent circular sync - skip WooCommerce → Zoho sync for next 10 seconds
+    set_transient('zoho_webhook_updating_contact_' . $user_id, true, 10);
     // Extract and update first_name - check root level first, then contact_persons
     $first_name = '';
     if (!empty($zoho_contact_data['first_name'])) {

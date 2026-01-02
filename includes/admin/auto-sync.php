@@ -9,6 +9,11 @@ if (!defined('ABSPATH')) exit;
    HELPER: Sync Single Product to Zoho
 ====================================================== */
 function zoho_sync_single_product($product_id) {
+    // Skip sync if this update is from a webhook (prevent circular sync)
+    if (get_transient('zoho_webhook_updating_product_' . $product_id)) {
+        return false;
+    }
+    
     // Prevent duplicate syncs - check if already syncing this product
     $sync_lock_key = '_zoho_sync_lock_product_' . $product_id;
     if (get_transient($sync_lock_key)) {
@@ -256,6 +261,11 @@ function zoho_sync_single_product($product_id) {
    HELPER: Sync Single Order to Zoho Invoice
 ====================================================== */
 function zoho_sync_single_order($order_id) {
+    // Skip sync if this update is from a webhook (prevent circular sync)
+    if (get_transient('zoho_webhook_updating_order_' . $order_id)) {
+        return false;
+    }
+    
     // Check if Zoho is connected
     if (!get_option('zoho_access_token')) {
         return false;
@@ -853,6 +863,11 @@ function zoho_sync_single_order($order_id) {
    HELPER: Sync Single Contact to Zoho
 ====================================================== */
 function zoho_sync_single_contact($user_id) {
+    // Skip sync if this update is from a webhook (prevent circular sync)
+    if (get_transient('zoho_webhook_updating_contact_' . $user_id)) {
+        return false;
+    }
+    
     // Check if Zoho is connected
     if (!get_option('zoho_access_token')) {
         return false;

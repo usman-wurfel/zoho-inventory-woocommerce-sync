@@ -269,6 +269,9 @@ function zoho_create_woo_product_from_zoho_item($zoho_item_data) {
             update_post_meta($product_id, '_zoho_org_id', $org_id);
         }
         
+        // Set flag to prevent circular sync - skip WooCommerce → Zoho sync for next 10 seconds
+        set_transient('zoho_webhook_updating_product_' . $product_id, true, 10);
+        
         zoho_add_detailed_log(
             'item',
             'product',
@@ -290,6 +293,10 @@ function zoho_update_woo_product_from_zoho_item($product, $zoho_item_data) {
     if (!$product) {
         return false;
     }
+    
+    $product_id = $product->get_id();
+    // Set flag to prevent circular sync - skip WooCommerce → Zoho sync for next 10 seconds
+    set_transient('zoho_webhook_updating_product_' . $product_id, true, 10);
     
     // Map Zoho fields to WooCommerce fields
     $zoho_name_field = get_option('zoho_zoho_name_field', 'name');
