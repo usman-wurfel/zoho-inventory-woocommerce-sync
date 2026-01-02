@@ -186,11 +186,17 @@ function zoho_sync_zoho_invoice_to_woo($zoho_invoice_id, $zoho_invoice_data = nu
         $zoho_invoice_data = $response['invoice'];
     }
     
-    global $wpdb;
-    $order_id = $wpdb->get_var($wpdb->prepare(
-        "SELECT post_id FROM {$wpdb->postmeta} WHERE meta_key = '_zoho_invoice_id' AND meta_value = %s LIMIT 1",
-        $zoho_invoice_id
-    ));
+    // Use helper function for HPOS-compatible lookup
+    if (function_exists('zoho_get_order_by_zoho_invoice')) {
+        $order_id = zoho_get_order_by_zoho_invoice($zoho_invoice_id);
+    } else {
+        // Fallback if function doesn't exist
+        global $wpdb;
+        $order_id = $wpdb->get_var($wpdb->prepare(
+            "SELECT post_id FROM {$wpdb->postmeta} WHERE meta_key = '_zoho_invoice_id' AND meta_value = %s LIMIT 1",
+            $zoho_invoice_id
+        ));
+    }
     
     if ($order_id) {
         zoho_update_woo_order_from_zoho_invoice($order_id, $zoho_invoice_data);
@@ -203,15 +209,238 @@ function zoho_sync_zoho_invoice_to_woo($zoho_invoice_id, $zoho_invoice_data = nu
  * Create WooCommerce order from Zoho invoice
  */
 function zoho_create_woo_order_from_zoho_invoice($zoho_invoice_data) {
+    $zoho_invoice_id = $zoho_invoice_data['invoice_id'] ?? '';
+    if (empty($zoho_invoice_id)) {
+        return false;
+    }
+    
+    // Check if order already exists (use helper function for HPOS compatibility)
+    $existing_order_id = 0;
+    if (function_exists('zoho_get_order_by_zoho_invoice')) {
+        $existing_order_id = zoho_get_order_by_zoho_invoice($zoho_invoice_id);
+    } else {
+        global $wpdb;
+        $existing_order_id = $wpdb->get_var($wpdb->prepare(
+            "SELECT post_id FROM {$wpdb->postmeta} WHERE meta_key = '_zoho_invoice_id' AND meta_value = %s LIMIT 1",
+            $zoho_invoice_id
+        ));
+    }
+    
+    if ($existing_order_id) {
+        // Order already exists, update it instead
+        return zoho_update_woo_order_from_zoho_invoice($existing_order_id, $zoho_invoice_data);
+    }
+    
+    // Create new order
+    $order = wc_create_order();
+    if (!$order) {
+        return false;
+    }
+    
+    // Set flag to prevent circular sync
+    set_transient('zoho_webhook_updating_order_' . $order->get_id(), true, 10);
+    
+    // Set customer if exists
+    $customer_id = $zoho_invoice_data['customer_id'] ?? '';
+    $wc_customer_id = 0;
+    
+    if ($customer_id) {
+        // Try to find WooCommerce customer by Zoho contact ID (use helper function if available)
+        if (function_exists('zoho_get_wc_customer_by_zoho_contact')) {
+            $wc_customer_id = zoho_get_wc_customer_by_zoho_contact($customer_id);
+        } else {
+            global $wpdb;
+            $wc_customer_id = $wpdb->get_var($wpdb->prepare(
+                "SELECT user_id FROM {$wpdb->usermeta} WHERE meta_key = '_zoho_contact_id' AND meta_value = %s LIMIT 1",
+                $customer_id
+            ));
+        }
+        
+        if ($wc_customer_id) {
+            $order->set_customer_id($wc_customer_id);
+            $customer = new WC_Customer($wc_customer_id);
+            
+            // Set billing from customer
+            $order->set_billing_first_name($customer->get_billing_first_name());
+            $order->set_billing_last_name($customer->get_billing_last_name());
+            $order->set_billing_company($customer->get_billing_company());
+            $order->set_billing_address_1($customer->get_billing_address_1());
+            $order->set_billing_address_2($customer->get_billing_address_2());
+            $order->set_billing_city($customer->get_billing_city());
+            $order->set_billing_state($customer->get_billing_state());
+            $order->set_billing_postcode($customer->get_billing_postcode());
+            $order->set_billing_country($customer->get_billing_country());
+            $order->set_billing_email($customer->get_billing_email());
+            $order->set_billing_phone($customer->get_billing_phone());
+            
+            // Set shipping from customer
+            $order->set_shipping_first_name($customer->get_shipping_first_name());
+            $order->set_shipping_last_name($customer->get_shipping_last_name());
+            $order->set_shipping_company($customer->get_shipping_company());
+            $order->set_shipping_address_1($customer->get_shipping_address_1());
+            $order->set_shipping_address_2($customer->get_shipping_address_2());
+            $order->set_shipping_city($customer->get_shipping_city());
+            $order->set_shipping_state($customer->get_shipping_state());
+            $order->set_shipping_postcode($customer->get_shipping_postcode());
+            $order->set_shipping_country($customer->get_shipping_country());
+        }
+    }
+    
+    // If no customer or customer data incomplete, use invoice billing/shipping address
+    if (!$wc_customer_id) {
+        // Extract customer name from invoice
+        $customer_name = $zoho_invoice_data['customer_name'] ?? '';
+        $name_parts = explode(' ', $customer_name, 2);
+        $first_name = $name_parts[0] ?? '';
+        $last_name = isset($name_parts[1]) ? $name_parts[1] : '';
+        
+        // Set billing from invoice
+        $billing_address = $zoho_invoice_data['billing_address'] ?? array();
+        $order->set_billing_first_name($first_name);
+        $order->set_billing_last_name($last_name);
+        $order->set_billing_company($billing_address['company_name'] ?? '');
+        $order->set_billing_address_1($billing_address['street'] ?? $billing_address['address'] ?? '');
+        $order->set_billing_address_2($billing_address['street2'] ?? '');
+        $order->set_billing_city($billing_address['city'] ?? '');
+        $order->set_billing_state($billing_address['state'] ?? '');
+        $order->set_billing_postcode($billing_address['zip'] ?? '');
+        $order->set_billing_country($billing_address['country'] ?? '');
+        $order->set_billing_email($zoho_invoice_data['email'] ?? '');
+        $order->set_billing_phone($billing_address['phone'] ?? '');
+        
+        // Set shipping from invoice (fallback to billing if not available)
+        $shipping_address = $zoho_invoice_data['shipping_address'] ?? $billing_address;
+        $order->set_shipping_first_name($first_name);
+        $order->set_shipping_last_name($last_name);
+        $order->set_shipping_company($shipping_address['company_name'] ?? '');
+        $order->set_shipping_address_1($shipping_address['street'] ?? $shipping_address['address'] ?? '');
+        $order->set_shipping_address_2($shipping_address['street2'] ?? '');
+        $order->set_shipping_city($shipping_address['city'] ?? '');
+        $order->set_shipping_state($shipping_address['state'] ?? '');
+        $order->set_shipping_postcode($shipping_address['zip'] ?? '');
+        $order->set_shipping_country($shipping_address['country'] ?? '');
+    }
+    
+    // Add line items
+    $line_items = $zoho_invoice_data['line_items'] ?? array();
+    if (empty($line_items)) {
+        $order->delete(true);
+        zoho_add_detailed_log(
+            'invoice',
+            'order',
+            0,
+            'invoice',
+            $zoho_invoice_id,
+            json_encode(array('action' => 'webhook_create', 'zoho_data' => $zoho_invoice_data)),
+            json_encode(array('status' => 'failed', 'message' => 'No line items found in invoice'))
+        );
+        return false;
+    }
+    
+    foreach ($line_items as $line_item) {
+        $item_name = $line_item['name'] ?? 'Item';
+        $quantity = floatval($line_item['quantity'] ?? 1);
+        $rate = floatval($line_item['rate'] ?? 0);
+        $item_total = floatval($line_item['item_total'] ?? ($rate * $quantity));
+        
+        // Try to find product by SKU
+        $product_id = 0;
+        if (!empty($line_item['sku'])) {
+            $product_id = wc_get_product_id_by_sku($line_item['sku']);
+        }
+        
+        // Try to find by Zoho item_id
+        if (!$product_id && !empty($line_item['item_id'])) {
+            $product_id = zoho_get_product_by_zoho_item($line_item['item_id']);
+        }
+        
+        if ($product_id) {
+            $product = wc_get_product($product_id);
+            $order->add_product($product, $quantity, array(
+                'subtotal' => $item_total,
+                'total' => $item_total
+            ));
+        } else {
+            // Add as custom line item
+            $item = new WC_Order_Item_Product();
+            $item->set_name($item_name);
+            $item->set_quantity($quantity);
+            $item->set_subtotal($item_total);
+            $item->set_total($item_total);
+            $order->add_item($item);
+        }
+    }
+    
+    // Add taxes if any
+    foreach ($zoho_invoice_data['taxes'] ?? array() as $tax) {
+        $tax_item = new WC_Order_Item_Tax();
+        $tax_item->set_name($tax['tax_name'] ?? 'Tax');
+        $tax_item->set_rate_code($tax['tax_name'] ?? '');
+        $tax_item->set_tax_total($tax['tax_amount'] ?? 0);
+        $order->add_item($tax_item);
+    }
+    
+    // Set order totals
+    $order->set_discount_total($zoho_invoice_data['discount_total'] ?? 0);
+    $order->set_shipping_total($zoho_invoice_data['shipping_charge'] ?? 0);
+    $order->set_cart_tax($zoho_invoice_data['tax_total'] ?? 0);
+    $order->set_total($zoho_invoice_data['total'] ?? 0);
+    $order->calculate_totals(false);
+    
+    // Set order status based on invoice status
+    $zoho_status = strtolower($zoho_invoice_data['status'] ?? '');
+    $woo_status = 'processing';
+    
+    switch ($zoho_status) {
+        case 'paid':
+            $woo_status = 'completed';
+            break;
+        case 'partially_paid':
+        case 'sent':
+            $woo_status = 'processing';
+            break;
+        case 'draft':
+            $woo_status = 'pending';
+            break;
+        case 'void':
+        case 'cancelled':
+            $woo_status = 'cancelled';
+            break;
+    }
+    
+    $order->set_status($woo_status);
+    
+    // Add order notes
+    $order->add_order_note('Created from Zoho Invoice webhook: ' . $zoho_invoice_id);
+    if (!empty($zoho_invoice_data['reference_number'])) {
+        $order->add_order_note('Zoho Reference Number: ' . $zoho_invoice_data['reference_number']);
+    }
+    
+    // Save order
+    $order->save();
+    
+    // Save Zoho invoice ID and metadata
+    $order->update_meta_data('_zoho_invoice_id', $zoho_invoice_id);
+    $org_id = get_option('zoho_organization_id', '');
+    if (!empty($org_id)) {
+        $order->update_meta_data('_zoho_org_id', $org_id);
+    }
+    if (!empty($zoho_invoice_data['reference_number'])) {
+        $order->update_meta_data('_zoho_reference_number', $zoho_invoice_data['reference_number']);
+    }
+    $order->save();
+    
     zoho_add_detailed_log(
         'invoice',
         'order',
-        0,
+        $order->get_id(),
         'invoice',
-        $zoho_invoice_data['invoice_id'],
+        $zoho_invoice_id,
         json_encode(array('action' => 'webhook_create', 'zoho_data' => $zoho_invoice_data)),
-        json_encode(array('status' => 'not_implemented', 'message' => 'Invoice to order creation not yet implemented'))
+        json_encode(array('status' => 'created', 'order_id' => $order->get_id()))
     );
+    
+    return $order->get_id();
 }
 
 /**
@@ -226,25 +455,120 @@ function zoho_update_woo_order_from_zoho_invoice($order_id, $zoho_invoice_data) 
     // Set flag to prevent circular sync - skip WooCommerce → Zoho sync for next 10 seconds
     set_transient('zoho_webhook_updating_order_' . $order_id, true, 10);
     
+    // Remove old line items
+    foreach ($order->get_items() as $item_id => $item) {
+        wc_delete_order_item($item_id);
+    }
+    
+    // Update billing/shipping address if changed
+    $billing_address = $zoho_invoice_data['billing_address'] ?? array();
+    if (!empty($billing_address)) {
+        $customer_name = $zoho_invoice_data['customer_name'] ?? '';
+        $name_parts = explode(' ', $customer_name, 2);
+        $first_name = $name_parts[0] ?? '';
+        $last_name = isset($name_parts[1]) ? $name_parts[1] : '';
+        
+        $order->set_billing_first_name($first_name);
+        $order->set_billing_last_name($last_name);
+        $order->set_billing_address_1($billing_address['street'] ?? $billing_address['address'] ?? '');
+        $order->set_billing_address_2($billing_address['street2'] ?? '');
+        $order->set_billing_city($billing_address['city'] ?? '');
+        $order->set_billing_state($billing_address['state'] ?? '');
+        $order->set_billing_postcode($billing_address['zip'] ?? '');
+        $order->set_billing_country($billing_address['country'] ?? '');
+        $order->set_billing_phone($billing_address['phone'] ?? '');
+        
+        $shipping_address = $zoho_invoice_data['shipping_address'] ?? $billing_address;
+        $order->set_shipping_first_name($first_name);
+        $order->set_shipping_last_name($last_name);
+        $order->set_shipping_address_1($shipping_address['street'] ?? $shipping_address['address'] ?? '');
+        $order->set_shipping_address_2($shipping_address['street2'] ?? '');
+        $order->set_shipping_city($shipping_address['city'] ?? '');
+        $order->set_shipping_state($shipping_address['state'] ?? '');
+        $order->set_shipping_postcode($shipping_address['zip'] ?? '');
+        $order->set_shipping_country($shipping_address['country'] ?? '');
+    }
+    
+    // Add updated line items
+    $line_items = $zoho_invoice_data['line_items'] ?? array();
+    foreach ($line_items as $line_item) {
+        $item_name = $line_item['name'] ?? 'Item';
+        $quantity = floatval($line_item['quantity'] ?? 1);
+        $rate = floatval($line_item['rate'] ?? 0);
+        $item_total = floatval($line_item['item_total'] ?? ($rate * $quantity));
+        
+        // Try to find product by SKU
+        $product_id = 0;
+        if (!empty($line_item['sku'])) {
+            $product_id = wc_get_product_id_by_sku($line_item['sku']);
+        }
+        
+        // Try to find by Zoho item_id
+        if (!$product_id && !empty($line_item['item_id'])) {
+            $product_id = zoho_get_product_by_zoho_item($line_item['item_id']);
+        }
+        
+        if ($product_id) {
+            $product = wc_get_product($product_id);
+            $order->add_product($product, $quantity, array(
+                'subtotal' => $item_total,
+                'total' => $item_total
+            ));
+        } else {
+            // Add as custom line item
+            $item = new WC_Order_Item_Product();
+            $item->set_name($item_name);
+            $item->set_quantity($quantity);
+            $item->set_subtotal($item_total);
+            $item->set_total($item_total);
+            $order->add_item($item);
+        }
+    }
+    
+    // Update totals
+    $order->set_discount_total($zoho_invoice_data['discount_total'] ?? 0);
+    $order->set_shipping_total($zoho_invoice_data['shipping_charge'] ?? 0);
+    $order->set_cart_tax($zoho_invoice_data['tax_total'] ?? 0);
+    $order->set_total($zoho_invoice_data['total'] ?? 0);
+    $order->calculate_totals(false);
+    
+    // Update order status
     if (isset($zoho_invoice_data['status'])) {
         $zoho_status = strtolower($zoho_invoice_data['status']);
-        $woo_status = 'pending';
+        $woo_status = 'processing';
         
-        if ($zoho_status === 'paid' || $zoho_status === 'sent') {
-            $woo_status = 'processing';
-        } elseif ($zoho_status === 'void') {
-            $woo_status = 'cancelled';
+        switch ($zoho_status) {
+            case 'paid':
+                $woo_status = 'completed';
+                break;
+            case 'partially_paid':
+            case 'sent':
+                $woo_status = 'processing';
+                break;
+            case 'draft':
+                $woo_status = 'pending';
+                break;
+            case 'void':
+            case 'cancelled':
+                $woo_status = 'cancelled';
+                break;
         }
         
         $order->update_status($woo_status);
     }
+    
+    // Add order note
+    $order->add_order_note('Updated from Zoho Invoice webhook: ' . ($zoho_invoice_data['invoice_id'] ?? ''));
+    
+    // Save order
+    $order->save();
     
     zoho_add_detailed_log(
         'invoice',
         'order',
         $order_id,
         'invoice',
-        $zoho_invoice_data['invoice_id'],
+        $zoho_invoice_data['invoice_id'] ?? '',
         json_encode(array('action' => 'webhook_update', 'zoho_data' => $zoho_invoice_data)),
         json_encode(array('status' => 'updated', 'order_id' => $order_id))
     );
@@ -263,11 +587,17 @@ function zoho_delete_woo_order_from_zoho_invoice($zoho_invoice_id, $force_delete
         return;
     }
     
-    global $wpdb;
-    $order_id = $wpdb->get_var($wpdb->prepare(
-        "SELECT post_id FROM {$wpdb->postmeta} WHERE meta_key = '_zoho_invoice_id' AND meta_value = %s LIMIT 1",
-        $zoho_invoice_id
-    ));
+    // Use helper function for HPOS-compatible lookup
+    $order_id = 0;
+    if (function_exists('zoho_get_order_by_zoho_invoice')) {
+        $order_id = zoho_get_order_by_zoho_invoice($zoho_invoice_id);
+    } else {
+        global $wpdb;
+        $order_id = $wpdb->get_var($wpdb->prepare(
+            "SELECT post_id FROM {$wpdb->postmeta} WHERE meta_key = '_zoho_invoice_id' AND meta_value = %s LIMIT 1",
+            $zoho_invoice_id
+        ));
+    }
     
     if (!$order_id) {
         zoho_add_detailed_log(
