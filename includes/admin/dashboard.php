@@ -549,8 +549,20 @@ function zoho_dashboard_page() {
         $sync_contacts = get_option('zoho_sync_zoho_to_woo_contacts', 'no');
         $sync_invoices = get_option('zoho_sync_zoho_to_woo_invoices', 'no');
         
-        $webhook_url = rest_url('zoho-inventory/v1/webhook');
-        $webhook_delete_url = rest_url('zoho-inventory/v1/webhook-delete');
+        $webhook_url_items = rest_url('zoho-inventory/v1/webhook-items');
+        $webhook_delete_url_items = rest_url('zoho-inventory/v1/webhook-items-delete');
+        $webhook_url_contacts = rest_url('zoho-inventory/v1/webhook-contacts');
+        $webhook_delete_url_contacts = rest_url('zoho-inventory/v1/webhook-contacts-delete');
+        $webhook_url_invoices = rest_url('zoho-inventory/v1/webhook-invoices');
+        $webhook_delete_url_invoices = rest_url('zoho-inventory/v1/webhook-invoices-delete');
+        
+        // Get last webhook data for each tab
+        $last_webhook_items = get_option('zoho_last_webhook_items', '');
+        $last_webhook_items_data = get_option('zoho_last_webhook_items_data', array());
+        $last_webhook_contacts = get_option('zoho_last_webhook_contacts', '');
+        $last_webhook_contacts_data = get_option('zoho_last_webhook_contacts_data', array());
+        $last_webhook_invoices = get_option('zoho_last_webhook_invoices', '');
+        $last_webhook_invoices_data = get_option('zoho_last_webhook_invoices_data', array());
         ?>
         
         <?php if ($connected): ?>
@@ -577,7 +589,7 @@ function zoho_dashboard_page() {
                     <div style="margin-bottom: 15px;">
                         <p style="margin: 5px 0 8px 0; font-weight: bold; color: #2271b1;">Create/Update Webhook:</p>
                         <div style="display: flex; gap: 10px; align-items: center;">
-                            <input type="text" id="webhook-url-input" value="<?php echo esc_attr($webhook_url); ?>" readonly style="flex: 1; font-family: monospace; background: #fff; padding: 10px; border: 1px solid #ddd; border-radius: 4px;">
+                            <input type="text" id="webhook-url-input" value="<?php echo esc_attr($webhook_url_items); ?>" readonly style="flex: 1; font-family: monospace; background: #fff; padding: 10px; border: 1px solid #ddd; border-radius: 4px;">
                             <button type="button" onclick="copyWebhookUrl('webhook-url-input')" class="button">Copy</button>
                         </div>
                         <p style="margin: 8px 0 0 0; font-size: 12px; color: #666;">
@@ -588,7 +600,7 @@ function zoho_dashboard_page() {
                     <div>
                         <p style="margin: 5px 0 8px 0; font-weight: bold; color: #dc3232;">Delete Webhook:</p>
                         <div style="display: flex; gap: 10px; align-items: center;">
-                            <input type="text" id="webhook-delete-url-input" value="<?php echo esc_attr($webhook_delete_url); ?>" readonly style="flex: 1; font-family: monospace; background: #fff; padding: 10px; border: 1px solid #ddd; border-radius: 4px;">
+                            <input type="text" id="webhook-delete-url-input" value="<?php echo esc_attr($webhook_delete_url_items); ?>" readonly style="flex: 1; font-family: monospace; background: #fff; padding: 10px; border: 1px solid #ddd; border-radius: 4px;">
                             <button type="button" onclick="copyWebhookUrl('webhook-delete-url-input')" class="button">Copy</button>
                         </div>
                         <p style="margin: 8px 0 0 0; font-size: 12px; color: #666;">
@@ -612,7 +624,7 @@ function zoho_dashboard_page() {
                                 <li><strong>Webhook 1 - Create/Update:</strong>
                                     <ul style="margin-top: 5px; padding-left: 20px;">
                                         <li><strong>Webhook Name:</strong> WordPress Sync - Items Create/Update</li>
-                                        <li><strong>URL:</strong> <code><?php echo esc_html($webhook_url); ?></code></li>
+                                        <li><strong>URL:</strong> <code><?php echo esc_html($webhook_url_items); ?></code></li>
                                         <li><strong>Method:</strong> POST</li>
                                         <li><strong>Content-Type:</strong> application/json</li>
                                         <li><strong>Module:</strong> Items</li>
@@ -622,7 +634,7 @@ function zoho_dashboard_page() {
                                 <li><strong>Webhook 2 - Delete:</strong>
                                     <ul style="margin-top: 5px; padding-left: 20px;">
                                         <li><strong>Webhook Name:</strong> WordPress Sync - Items Delete</li>
-                                        <li><strong>URL:</strong> <code><?php echo esc_html($webhook_delete_url); ?></code></li>
+                                        <li><strong>URL:</strong> <code><?php echo esc_html($webhook_delete_url_items); ?></code></li>
                                         <li><strong>Method:</strong> POST</li>
                                         <li><strong>Content-Type:</strong> application/json</li>
                                         <li><strong>Module:</strong> Items</li>
@@ -650,16 +662,6 @@ function zoho_dashboard_page() {
                     
                     <table class="form-table">
                         <tr>
-                            <th scope="row">Enable Webhooks</th>
-                            <td>
-                                <label>
-                                    <input type="checkbox" name="webhooks_enabled" value="1" <?php checked($webhooks_enabled_items, 'yes'); ?>>
-                                    Enable webhook processing (receive webhooks from Zoho)
-                                </label>
-                            </td>
-                        </tr>
-                        
-                        <tr>
                             <th scope="row">Webhook Secret <span style="color: red;">*</span></th>
                             <td>
                                 <input type="text" name="webhook_secret" value="<?php echo esc_attr($webhook_secret_items); ?>" class="regular-text" placeholder="Enter secret key" required>
@@ -674,12 +676,35 @@ function zoho_dashboard_page() {
                                     <input type="checkbox" name="sync_items" value="1" <?php checked($sync_items, 'yes'); ?>>
                                     <strong>Items → Products:</strong> Sync Zoho items to WooCommerce products
                                 </label>
+                                <p class="description">Enable this to sync Zoho items to WooCommerce products when webhooks are received.</p>
                             </td>
                         </tr>
                     </table>
                     
                     <?php submit_button('Save Inventory Webhook Settings', 'primary', 'save_webhook_settings'); ?>
                 </form>
+                
+                <!-- Webhook Status for Items -->
+                <div style="margin-top: 20px; padding: 15px; background: <?php echo $last_webhook_items ? '#d4edda' : '#fff3cd'; ?>; border: 1px solid <?php echo $last_webhook_items ? '#28a745' : '#ffc107'; ?>; border-radius: 4px;">
+                    <h4 style="margin-top: 0;">Webhook Status:</h4>
+                    <?php if ($last_webhook_items): ?>
+                        <p style="margin: 5px 0; color: #155724;">
+                            <strong>✅ Webhook is working!</strong><br>
+                            Last webhook received: <strong><?php echo esc_html($last_webhook_items); ?></strong>
+                        </p>
+                        <?php if (!empty($last_webhook_items_data)): ?>
+                            <details style="margin-top: 10px;">
+                                <summary style="cursor: pointer; color: #155724; font-weight: bold;">View Last Webhook Data</summary>
+                                <pre style="background: #fff; padding: 10px; border: 1px solid #ddd; border-radius: 4px; margin-top: 10px; overflow-x: auto; font-size: 12px;"><?php echo esc_html(json_encode($last_webhook_items_data, JSON_PRETTY_PRINT)); ?></pre>
+                            </details>
+                        <?php endif; ?>
+                    <?php else: ?>
+                        <p style="margin: 0; color: #856404;">
+                            <strong>⚠️ No webhooks received yet.</strong><br>
+                            After configuring webhooks in Zoho Inventory, create/update an item to test.
+                        </p>
+                    <?php endif; ?>
+                </div>
             </div>
             
             <!-- Contact Webhooks Tab -->
@@ -690,7 +715,7 @@ function zoho_dashboard_page() {
                     <div style="margin-bottom: 15px;">
                         <p style="margin: 5px 0 8px 0; font-weight: bold; color: #2271b1;">Create/Update Webhook:</p>
                         <div style="display: flex; gap: 10px; align-items: center;">
-                            <input type="text" id="webhook-contact-url-input" value="<?php echo esc_attr($webhook_url); ?>" readonly style="flex: 1; font-family: monospace; background: #fff; padding: 10px; border: 1px solid #ddd; border-radius: 4px;">
+                            <input type="text" id="webhook-contact-url-input" value="<?php echo esc_attr($webhook_url_contacts); ?>" readonly style="flex: 1; font-family: monospace; background: #fff; padding: 10px; border: 1px solid #ddd; border-radius: 4px;">
                             <button type="button" onclick="copyWebhookUrl('webhook-contact-url-input')" class="button">Copy</button>
                         </div>
                         <p style="margin: 8px 0 0 0; font-size: 12px; color: #666;">
@@ -701,7 +726,7 @@ function zoho_dashboard_page() {
                     <div>
                         <p style="margin: 5px 0 8px 0; font-weight: bold; color: #dc3232;">Delete Webhook:</p>
                         <div style="display: flex; gap: 10px; align-items: center;">
-                            <input type="text" id="webhook-contact-delete-url-input" value="<?php echo esc_attr($webhook_delete_url); ?>" readonly style="flex: 1; font-family: monospace; background: #fff; padding: 10px; border: 1px solid #ddd; border-radius: 4px;">
+                            <input type="text" id="webhook-contact-delete-url-input" value="<?php echo esc_attr($webhook_delete_url_contacts); ?>" readonly style="flex: 1; font-family: monospace; background: #fff; padding: 10px; border: 1px solid #ddd; border-radius: 4px;">
                             <button type="button" onclick="copyWebhookUrl('webhook-contact-delete-url-input')" class="button">Copy</button>
                         </div>
                         <p style="margin: 8px 0 0 0; font-size: 12px; color: #666;">
@@ -721,7 +746,7 @@ function zoho_dashboard_page() {
                                 <li><strong>Webhook 1 - Create/Update:</strong>
                                     <ul style="margin-top: 5px; padding-left: 20px;">
                                         <li><strong>Webhook Name:</strong> WordPress Sync - Contacts Create/Update</li>
-                                        <li><strong>URL:</strong> <code><?php echo esc_html($webhook_url); ?></code></li>
+                                        <li><strong>URL:</strong> <code><?php echo esc_html($webhook_url_items); ?></code></li>
                                         <li><strong>Method:</strong> POST</li>
                                         <li><strong>Content-Type:</strong> application/json</li>
                                         <li><strong>Module:</strong> Contacts</li>
@@ -731,7 +756,7 @@ function zoho_dashboard_page() {
                                 <li><strong>Webhook 2 - Delete:</strong>
                                     <ul style="margin-top: 5px; padding-left: 20px;">
                                         <li><strong>Webhook Name:</strong> WordPress Sync - Contacts Delete</li>
-                                        <li><strong>URL:</strong> <code><?php echo esc_html($webhook_delete_url); ?></code></li>
+                                        <li><strong>URL:</strong> <code><?php echo esc_html($webhook_delete_url_items); ?></code></li>
                                         <li><strong>Method:</strong> POST</li>
                                         <li><strong>Content-Type:</strong> application/json</li>
                                         <li><strong>Module:</strong> Contacts</li>
@@ -759,16 +784,6 @@ function zoho_dashboard_page() {
                     
                     <table class="form-table">
                         <tr>
-                            <th scope="row">Enable Webhooks</th>
-                            <td>
-                                <label>
-                                    <input type="checkbox" name="webhooks_enabled" value="1" <?php checked($webhooks_enabled_contacts, 'yes'); ?>>
-                                    Enable webhook processing (receive webhooks from Zoho)
-                                </label>
-                            </td>
-                        </tr>
-                        
-                        <tr>
                             <th scope="row">Webhook Secret <span style="color: red;">*</span></th>
                             <td>
                                 <input type="text" name="webhook_secret" value="<?php echo esc_attr($webhook_secret_contacts); ?>" class="regular-text" placeholder="Enter secret key" required>
@@ -783,12 +798,35 @@ function zoho_dashboard_page() {
                                     <input type="checkbox" name="sync_contacts" value="1" <?php checked($sync_contacts, 'yes'); ?>>
                                     <strong>Contacts → Customers:</strong> Sync Zoho contacts to WooCommerce customers
                                 </label>
+                                <p class="description">Enable this to sync Zoho contacts to WooCommerce customers when webhooks are received.</p>
                             </td>
                         </tr>
                     </table>
                     
                     <?php submit_button('Save Contact Webhook Settings', 'primary', 'save_webhook_settings'); ?>
                 </form>
+                
+                <!-- Webhook Status for Contacts -->
+                <div style="margin-top: 20px; padding: 15px; background: <?php echo $last_webhook_contacts ? '#d4edda' : '#fff3cd'; ?>; border: 1px solid <?php echo $last_webhook_contacts ? '#28a745' : '#ffc107'; ?>; border-radius: 4px;">
+                    <h4 style="margin-top: 0;">Webhook Status:</h4>
+                    <?php if ($last_webhook_contacts): ?>
+                        <p style="margin: 5px 0; color: #155724;">
+                            <strong>✅ Webhook is working!</strong><br>
+                            Last webhook received: <strong><?php echo esc_html($last_webhook_contacts); ?></strong>
+                        </p>
+                        <?php if (!empty($last_webhook_contacts_data)): ?>
+                            <details style="margin-top: 10px;">
+                                <summary style="cursor: pointer; color: #155724; font-weight: bold;">View Last Webhook Data</summary>
+                                <pre style="background: #fff; padding: 10px; border: 1px solid #ddd; border-radius: 4px; margin-top: 10px; overflow-x: auto; font-size: 12px;"><?php echo esc_html(json_encode($last_webhook_contacts_data, JSON_PRETTY_PRINT)); ?></pre>
+                            </details>
+                        <?php endif; ?>
+                    <?php else: ?>
+                        <p style="margin: 0; color: #856404;">
+                            <strong>⚠️ No webhooks received yet.</strong><br>
+                            After configuring webhooks in Zoho Inventory, create/update a contact to test.
+                        </p>
+                    <?php endif; ?>
+                </div>
             </div>
             
             <!-- Invoice Webhooks Tab -->
@@ -799,7 +837,7 @@ function zoho_dashboard_page() {
                     <div style="margin-bottom: 15px;">
                         <p style="margin: 5px 0 8px 0; font-weight: bold; color: #2271b1;">Create/Update Webhook:</p>
                         <div style="display: flex; gap: 10px; align-items: center;">
-                            <input type="text" id="webhook-invoice-url-input" value="<?php echo esc_attr($webhook_url); ?>" readonly style="flex: 1; font-family: monospace; background: #fff; padding: 10px; border: 1px solid #ddd; border-radius: 4px;">
+                            <input type="text" id="webhook-invoice-url-input" value="<?php echo esc_attr($webhook_url_invoices); ?>" readonly style="flex: 1; font-family: monospace; background: #fff; padding: 10px; border: 1px solid #ddd; border-radius: 4px;">
                             <button type="button" onclick="copyWebhookUrl('webhook-invoice-url-input')" class="button">Copy</button>
                         </div>
                         <p style="margin: 8px 0 0 0; font-size: 12px; color: #666;">
@@ -810,7 +848,7 @@ function zoho_dashboard_page() {
                     <div>
                         <p style="margin: 5px 0 8px 0; font-weight: bold; color: #dc3232;">Delete Webhook:</p>
                         <div style="display: flex; gap: 10px; align-items: center;">
-                            <input type="text" id="webhook-invoice-delete-url-input" value="<?php echo esc_attr($webhook_delete_url); ?>" readonly style="flex: 1; font-family: monospace; background: #fff; padding: 10px; border: 1px solid #ddd; border-radius: 4px;">
+                            <input type="text" id="webhook-invoice-delete-url-input" value="<?php echo esc_attr($webhook_delete_url_invoices); ?>" readonly style="flex: 1; font-family: monospace; background: #fff; padding: 10px; border: 1px solid #ddd; border-radius: 4px;">
                             <button type="button" onclick="copyWebhookUrl('webhook-invoice-delete-url-input')" class="button">Copy</button>
                         </div>
                         <p style="margin: 8px 0 0 0; font-size: 12px; color: #666;">
@@ -830,7 +868,7 @@ function zoho_dashboard_page() {
                                 <li><strong>Webhook 1 - Create/Update:</strong>
                                     <ul style="margin-top: 5px; padding-left: 20px;">
                                         <li><strong>Webhook Name:</strong> WordPress Sync - Invoices Create/Update</li>
-                                        <li><strong>URL:</strong> <code><?php echo esc_html($webhook_url); ?></code></li>
+                                        <li><strong>URL:</strong> <code><?php echo esc_html($webhook_url_items); ?></code></li>
                                         <li><strong>Method:</strong> POST</li>
                                         <li><strong>Content-Type:</strong> application/json</li>
                                         <li><strong>Module:</strong> Invoices</li>
@@ -840,7 +878,7 @@ function zoho_dashboard_page() {
                                 <li><strong>Webhook 2 - Delete:</strong>
                                     <ul style="margin-top: 5px; padding-left: 20px;">
                                         <li><strong>Webhook Name:</strong> WordPress Sync - Invoices Delete</li>
-                                        <li><strong>URL:</strong> <code><?php echo esc_html($webhook_delete_url); ?></code></li>
+                                        <li><strong>URL:</strong> <code><?php echo esc_html($webhook_delete_url_items); ?></code></li>
                                         <li><strong>Method:</strong> POST</li>
                                         <li><strong>Content-Type:</strong> application/json</li>
                                         <li><strong>Module:</strong> Invoices</li>
@@ -868,16 +906,6 @@ function zoho_dashboard_page() {
                     
                     <table class="form-table">
                         <tr>
-                            <th scope="row">Enable Webhooks</th>
-                            <td>
-                                <label>
-                                    <input type="checkbox" name="webhooks_enabled" value="1" <?php checked($webhooks_enabled_invoices, 'yes'); ?>>
-                                    Enable webhook processing (receive webhooks from Zoho)
-                                </label>
-                            </td>
-                        </tr>
-                        
-                        <tr>
                             <th scope="row">Webhook Secret <span style="color: red;">*</span></th>
                             <td>
                                 <input type="text" name="webhook_secret" value="<?php echo esc_attr($webhook_secret_invoices); ?>" class="regular-text" placeholder="Enter secret key" required>
@@ -892,12 +920,35 @@ function zoho_dashboard_page() {
                                     <input type="checkbox" name="sync_invoices" value="1" <?php checked($sync_invoices, 'yes'); ?>>
                                     <strong>Invoices → Orders:</strong> Sync Zoho invoices to WooCommerce orders
                                 </label>
+                                <p class="description">Enable this to sync Zoho invoices to WooCommerce orders when webhooks are received.</p>
                             </td>
                         </tr>
                     </table>
                     
                     <?php submit_button('Save Invoice Webhook Settings', 'primary', 'save_webhook_settings'); ?>
                 </form>
+                
+                <!-- Webhook Status for Invoices -->
+                <div style="margin-top: 20px; padding: 15px; background: <?php echo $last_webhook_invoices ? '#d4edda' : '#fff3cd'; ?>; border: 1px solid <?php echo $last_webhook_invoices ? '#28a745' : '#ffc107'; ?>; border-radius: 4px;">
+                    <h4 style="margin-top: 0;">Webhook Status:</h4>
+                    <?php if ($last_webhook_invoices): ?>
+                        <p style="margin: 5px 0; color: #155724;">
+                            <strong>✅ Webhook is working!</strong><br>
+                            Last webhook received: <strong><?php echo esc_html($last_webhook_invoices); ?></strong>
+                        </p>
+                        <?php if (!empty($last_webhook_invoices_data)): ?>
+                            <details style="margin-top: 10px;">
+                                <summary style="cursor: pointer; color: #155724; font-weight: bold;">View Last Webhook Data</summary>
+                                <pre style="background: #fff; padding: 10px; border: 1px solid #ddd; border-radius: 4px; margin-top: 10px; overflow-x: auto; font-size: 12px;"><?php echo esc_html(json_encode($last_webhook_invoices_data, JSON_PRETTY_PRINT)); ?></pre>
+                            </details>
+                        <?php endif; ?>
+                    <?php else: ?>
+                        <p style="margin: 0; color: #856404;">
+                            <strong>⚠️ No webhooks received yet.</strong><br>
+                            After configuring webhooks in Zoho Inventory, create/update an invoice to test.
+                        </p>
+                    <?php endif; ?>
+                </div>
             </div>
             
             <script>
@@ -948,33 +999,6 @@ function zoho_dashboard_page() {
                 selectedBtn.style.fontWeight = 'bold';
             }
             </script>
-            
-            <!-- Webhook Status/Test Section -->
-            <?php
-            $last_webhook_received = get_option('zoho_last_webhook_received', '');
-            $last_webhook_data = get_option('zoho_last_webhook_data', array());
-            ?>
-            <div style="margin-top: 20px; padding: 15px; background: <?php echo $last_webhook_received ? '#d4edda' : '#fff3cd'; ?>; border: 1px solid <?php echo $last_webhook_received ? '#28a745' : '#ffc107'; ?>; border-radius: 4px;">
-                <h4 style="margin-top: 0;">Webhook Status:</h4>
-                <?php if ($last_webhook_received): ?>
-                    <p style="margin: 5px 0; color: #155724;">
-                        <strong>✅ Webhook is working!</strong><br>
-                        Last webhook received: <strong><?php echo esc_html($last_webhook_received); ?></strong>
-                    </p>
-                    <?php if (!empty($last_webhook_data)): ?>
-                        <details style="margin-top: 10px;">
-                            <summary style="cursor: pointer; color: #155724; font-weight: bold;">View Last Webhook Data</summary>
-                            <pre style="background: #fff; padding: 10px; border: 1px solid #ddd; border-radius: 4px; margin-top: 10px; overflow-x: auto; font-size: 12px;"><?php echo esc_html(json_encode($last_webhook_data, JSON_PRETTY_PRINT)); ?></pre>
-                        </details>
-                    <?php endif; ?>
-                <?php else: ?>
-                    <p style="margin: 0; color: #856404;">
-                        <strong>⚠️ No webhooks received yet.</strong><br>
-                        After configuring webhooks in Zoho Inventory, create/update an item, contact, or invoice to test. 
-                        If no webhooks are received, webhooks may not be supported or configured incorrectly.
-                    </p>
-                <?php endif; ?>
-            </div>
             
         </div>
         <?php endif; ?>
