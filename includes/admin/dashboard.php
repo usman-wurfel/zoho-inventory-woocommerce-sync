@@ -506,6 +506,7 @@ function zoho_dashboard_page() {
         $sync_contacts = get_option('zoho_sync_zoho_to_woo_contacts', 'no');
         $sync_invoices = get_option('zoho_sync_zoho_to_woo_invoices', 'no');
         $webhook_url = rest_url('zoho-inventory/v1/webhook');
+        $webhook_delete_url = rest_url('zoho-inventory/v1/webhook-delete');
         ?>
         
         <?php if ($connected): ?>
