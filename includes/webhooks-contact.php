@@ -131,6 +131,8 @@ function zoho_handle_contact_delete_webhook($request) {
     } elseif (isset($body['contact_id'])) {
         $object_id = $body['contact_id'];
     }
+
+    
     
     if (!empty($object_id)) {
         // Force delete when called from webhook (ignore auto_delete setting)
