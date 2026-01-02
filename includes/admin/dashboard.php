@@ -497,7 +497,6 @@ function zoho_dashboard_page() {
             update_option('zoho_sync_zoho_to_woo_contacts', isset($_POST['sync_contacts']) ? 'yes' : 'no');
             update_option('zoho_sync_zoho_to_woo_invoices', isset($_POST['sync_invoices']) ? 'yes' : 'no');
             update_option('zoho_webhook_secret', sanitize_text_field($_POST['webhook_secret']));
-            update_option('zoho_auto_delete_woo_products', isset($_POST['auto_delete_products']) ? 'yes' : 'no');
             echo '<div class="notice notice-success"><p>Webhook settings saved!</p></div>';
         }
         
@@ -519,19 +518,34 @@ function zoho_dashboard_page() {
             </p>
             
             <div style="background: #f0f0f0; padding: 15px; border-radius: 4px; margin-bottom: 20px;">
-                <p style="margin: 5px 0;"><strong>Webhook URL:</strong></p>
-                <div style="display: flex; gap: 10px; align-items: center;">
-                    <input type="text" id="webhook-url-input" value="<?php echo esc_attr($webhook_url); ?>" readonly style="flex: 1; font-family: monospace; background: #fff; padding: 10px; border: 1px solid #ddd; border-radius: 4px;">
-                    <button type="button" onclick="copyWebhookUrl()" class="button">Copy URL</button>
+                <p style="margin: 5px 0;"><strong>Webhook URLs:</strong></p>
+                
+                <div style="margin-bottom: 15px;">
+                    <p style="margin: 5px 0 8px 0; font-weight: bold; color: #2271b1;">Create/Update Webhook:</p>
+                    <div style="display: flex; gap: 10px; align-items: center;">
+                        <input type="text" id="webhook-url-input" value="<?php echo esc_attr($webhook_url); ?>" readonly style="flex: 1; font-family: monospace; background: #fff; padding: 10px; border: 1px solid #ddd; border-radius: 4px;">
+                        <button type="button" onclick="copyWebhookUrl('webhook-url-input')" class="button">Copy</button>
+                    </div>
+                    <p style="margin: 8px 0 0 0; font-size: 12px; color: #666;">
+                        Use this URL for "Created" and "Updated" events in Zoho.
+                    </p>
                 </div>
-                <p style="margin: 10px 0 0 0; font-size: 12px; color: #666;">
-                    Copy this URL and manually configure it in Zoho Inventory.
-                </p>
+                
+                <div>
+                    <p style="margin: 5px 0 8px 0; font-weight: bold; color: #dc3232;">Delete Webhook:</p>
+                    <div style="display: flex; gap: 10px; align-items: center;">
+                        <input type="text" id="webhook-delete-url-input" value="<?php echo esc_attr($webhook_delete_url); ?>" readonly style="flex: 1; font-family: monospace; background: #fff; padding: 10px; border: 1px solid #ddd; border-radius: 4px;">
+                        <button type="button" onclick="copyWebhookUrl('webhook-delete-url-input')" class="button">Copy</button>
+                    </div>
+                    <p style="margin: 8px 0 0 0; font-size: 12px; color: #666;">
+                        Use this URL for "Deleted" events in Zoho.
+                    </p>
+                </div>
             </div>
             
             <script>
-            function copyWebhookUrl() {
-                var input = document.getElementById('webhook-url-input');
+            function copyWebhookUrl(inputId) {
+                var input = document.getElementById(inputId);
                 input.select();
                 input.setSelectionRange(0, 99999); // For mobile devices
                 document.execCommand('copy');
@@ -549,14 +563,28 @@ function zoho_dashboard_page() {
                             Open Webhooks Page
                         </a>
                     </li>
-                    <li>Configure the webhook with these details:
+                    <li>Configure <strong>two separate webhooks</strong> in Zoho:
                         <ul style="margin-top: 5px; padding-left: 20px;">
-                            <li><strong>Webhook Name:</strong> WordPress Sync</li>
-                            <li><strong>URL:</strong> <code><?php echo esc_html($webhook_url); ?></code></li>
-                            <li><strong>Method:</strong> POST</li>
-                            <li><strong>Content-Type:</strong> application/json</li>
-                            <li><strong>Module:</strong> Select Items, Contacts, or Invoices</li>
-                            <li><strong>Events:</strong> Select events like "Created", "Updated", "Deleted"</li>
+                            <li><strong>Webhook 1 - Create/Update:</strong>
+                                <ul style="margin-top: 5px; padding-left: 20px;">
+                                    <li><strong>Webhook Name:</strong> WordPress Sync - Create/Update</li>
+                                    <li><strong>URL:</strong> <code><?php echo esc_html($webhook_url); ?></code></li>
+                                    <li><strong>Method:</strong> POST</li>
+                                    <li><strong>Content-Type:</strong> application/json</li>
+                                    <li><strong>Module:</strong> Select Items, Contacts, or Invoices</li>
+                                    <li><strong>Events:</strong> Select "Created" and "Updated"</li>
+                                </ul>
+                            </li>
+                            <li><strong>Webhook 2 - Delete:</strong>
+                                <ul style="margin-top: 5px; padding-left: 20px;">
+                                    <li><strong>Webhook Name:</strong> WordPress Sync - Delete</li>
+                                    <li><strong>URL:</strong> <code><?php echo esc_html($webhook_delete_url); ?></code></li>
+                                    <li><strong>Method:</strong> POST</li>
+                                    <li><strong>Content-Type:</strong> application/json</li>
+                                    <li><strong>Module:</strong> Select Items, Contacts, or Invoices</li>
+                                    <li><strong>Events:</strong> Select "Deleted"</li>
+                                </ul>
+                            </li>
                         </ul>
                     </li>
                     <?php if (!empty($webhook_secret)): ?>
@@ -626,19 +654,6 @@ function zoho_dashboard_page() {
                         </td>
                     </tr>
                     
-                    <tr>
-                        <th scope="row">Delete Options</th>
-                        <td>
-                            <?php 
-                            $auto_delete_products = get_option('zoho_auto_delete_woo_products', 'no');
-                            ?>
-                            <label style="display: block; margin-bottom: 10px;">
-                                <input type="checkbox" name="auto_delete_products" value="1" <?php checked($auto_delete_products, 'yes'); ?>>
-                                <strong>Permanently delete products:</strong> When Zoho item is deleted, permanently delete WooCommerce product (otherwise move to trash)
-                            </label>
-                            <p class="description">By default, deleted items are moved to trash. Enable this to permanently delete them.</p>
-                        </td>
-                    </tr>
                 </table>
                 
                 <?php submit_button('Save Webhook Settings', 'primary', 'save_webhook_settings'); ?>

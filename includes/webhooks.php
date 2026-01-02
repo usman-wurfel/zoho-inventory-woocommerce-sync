@@ -7,14 +7,21 @@
 if (!defined('ABSPATH')) exit;
 
 /* ======================================================
-   REGISTER WEBHOOK ENDPOINT
+   REGISTER WEBHOOK ENDPOINTS
 ====================================================== */
 add_action('rest_api_init', 'zoho_register_webhook_endpoints');
 function zoho_register_webhook_endpoints() {
-    // Webhook endpoint: /wp-json/zoho-inventory/v1/webhook
+    // Webhook endpoint for create/update: /wp-json/zoho-inventory/v1/webhook
     register_rest_route('zoho-inventory/v1', '/webhook', array(
         'methods' => WP_REST_Server::CREATABLE,
         'callback' => 'zoho_handle_webhook',
+        'permission_callback' => 'zoho_validate_webhook',
+    ));
+    
+    // Separate webhook endpoint for delete: /wp-json/zoho-inventory/v1/webhook-delete
+    register_rest_route('zoho-inventory/v1', '/webhook-delete', array(
+        'methods' => WP_REST_Server::CREATABLE,
+        'callback' => 'zoho_handle_delete_webhook',
         'permission_callback' => 'zoho_validate_webhook',
     ));
 }
@@ -88,21 +95,11 @@ function zoho_handle_webhook($request) {
         $object_type = 'items';
         $object_data = $body['item'];
         $object_id = isset($object_data['item_id']) ? $object_data['item_id'] : '';
-        // Determine action from event_type, status, or default to 'update'
+        // Determine action from event_type or default to 'update' (create/update only - delete uses separate endpoint)
         if (isset($body['event_type'])) {
             $event_type = strtolower($body['event_type']);
             if (strpos($event_type, 'created') !== false || strpos($event_type, 'create') !== false) {
                 $action = 'create';
-            } elseif (strpos($event_type, 'deleted') !== false || strpos($event_type, 'delete') !== false) {
-                $action = 'delete';
-            } else {
-                $action = 'update';
-            }
-        } elseif (isset($object_data['status'])) {
-            // Check status field - if inactive, treat as delete
-            $status = strtolower($object_data['status']);
-            if ($status === 'inactive' || $status === 'deleted') {
-                $action = 'delete';
             } else {
                 $action = 'update';
             }
@@ -125,19 +122,25 @@ function zoho_handle_webhook($request) {
         $action = isset($body['event_type']) ? strtolower(str_replace('invoice.', '', $body['event_type'])) : 'update';
     }
     
-    // Handle based on object type and action
+    // Handle based on object type and action (create/update only)
     if (!empty($object_type)) {
         switch ($object_type) {
             case 'items':
-                zoho_handle_item_webhook($action, $object_id, $object_data);
+                if ($action === 'create' || $action === 'update') {
+                    zoho_handle_item_webhook($action, $object_id, $object_data);
+                }
                 break;
                 
             case 'contacts':
-                zoho_handle_contact_webhook($action, $object_id, $object_data);
+                if ($action === 'create' || $action === 'update') {
+                    zoho_handle_contact_webhook($action, $object_id, $object_data);
+                }
                 break;
                 
             case 'invoices':
-                zoho_handle_invoice_webhook($action, $object_id, $object_data);
+                if ($action === 'create' || $action === 'update') {
+                    zoho_handle_invoice_webhook($action, $object_id, $object_data);
+                }
                 break;
                 
             default:
@@ -165,7 +168,93 @@ function zoho_handle_webhook($request) {
         );
     }
     
-    return new WP_REST_Response(array('message' => 'Webhook processed'), 200);
+    return new WP_REST_Response(array('message' => 'Webhook processed', 'object_type' => $object_type, 'action' => $action), 200);
+}
+
+/* ======================================================
+   HANDLE DELETE WEBHOOK REQUEST
+====================================================== */
+function zoho_handle_delete_webhook($request) {
+    $body = $request->get_json_params();
+    $headers = $request->get_headers();
+    
+    // Store last webhook received time (for testing/verification)
+    update_option('zoho_last_webhook_received', current_time('mysql'));
+    update_option('zoho_last_webhook_data', $body);
+    
+    // Log webhook received
+    zoho_add_detailed_log(
+        'webhook',
+        'webhook_delete',
+        0,
+        'webhook',
+        '',
+        json_encode(array(
+            'received_data' => $body,
+            'headers' => $headers,
+            'timestamp' => current_time('mysql')
+        )),
+        json_encode(array('status' => 'processing_delete'))
+    );
+    
+    // Check if webhooks are enabled
+    if (get_option('zoho_webhooks_enabled', 'no') !== 'yes') {
+        return new WP_REST_Response(array('message' => 'Webhooks disabled'), 200);
+    }
+    
+    // Parse delete webhook - Zoho sends object data with ID
+    $object_type = '';
+    $object_id = '';
+    $object_data = array();
+    
+    if (isset($body['item'])) {
+        $object_type = 'items';
+        $object_data = $body['item'];
+        $object_id = isset($object_data['item_id']) ? $object_data['item_id'] : '';
+    } elseif (isset($body['contact'])) {
+        $object_type = 'contacts';
+        $object_data = $body['contact'];
+        $object_id = isset($object_data['contact_id']) ? $object_data['contact_id'] : '';
+    } elseif (isset($body['invoice'])) {
+        $object_type = 'invoices';
+        $object_data = $body['invoice'];
+        $object_id = isset($object_data['invoice_id']) ? $object_data['invoice_id'] : '';
+    } elseif (isset($body['item_id'])) {
+        // Direct item_id in body
+        $object_type = 'items';
+        $object_id = $body['item_id'];
+    } elseif (isset($body['contact_id'])) {
+        // Direct contact_id in body
+        $object_type = 'contacts';
+        $object_id = $body['contact_id'];
+    } elseif (isset($body['invoice_id'])) {
+        // Direct invoice_id in body
+        $object_type = 'invoices';
+        $object_id = $body['invoice_id'];
+    }
+    
+    // Handle delete action
+    if (!empty($object_type) && !empty($object_id)) {
+        switch ($object_type) {
+            case 'items':
+                if (get_option('zoho_sync_zoho_to_woo_items', 'no') === 'yes') {
+                    zoho_delete_woo_product_from_zoho_item($object_id);
+                }
+                break;
+            case 'contacts':
+                if (get_option('zoho_sync_zoho_to_woo_contacts', 'no') === 'yes') {
+                    zoho_delete_woo_customer_from_zoho_contact($object_id);
+                }
+                break;
+            case 'invoices':
+                if (get_option('zoho_sync_zoho_to_woo_invoices', 'no') === 'yes') {
+                    zoho_delete_woo_order_from_zoho_invoice($object_id);
+                }
+                break;
+        }
+    }
+    
+    return new WP_REST_Response(array('message' => 'Delete webhook processed', 'object_type' => $object_type, 'object_id' => $object_id), 200);
 }
 
 /* ======================================================
@@ -428,15 +517,22 @@ function zoho_delete_woo_product_from_zoho_item($zoho_item_id) {
     ));
     
     if (!$product_id) {
+        zoho_add_detailed_log(
+            'item',
+            'product',
+            0,
+            'item',
+            $zoho_item_id,
+            json_encode(array('action' => 'webhook_delete')),
+            json_encode(array('status' => 'not_found', 'message' => 'Product not found in WooCommerce'))
+        );
         return; // Product not found
     }
     
-    // Check if auto-delete is enabled
-    $auto_delete = get_option('zoho_auto_delete_woo_products', 'no');
-    
-    if ($auto_delete === 'yes') {
-        // Permanently delete the product
-        wp_delete_post($product_id, true);
+    // Move product to trash
+    $product = wc_get_product($product_id);
+    if ($product) {
+        $product->delete(false); // false = move to trash, true = permanently delete
         
         zoho_add_detailed_log(
             'item',
@@ -445,24 +541,8 @@ function zoho_delete_woo_product_from_zoho_item($zoho_item_id) {
             'item',
             $zoho_item_id,
             json_encode(array('action' => 'webhook_delete')),
-            json_encode(array('status' => 'deleted', 'product_id' => $product_id))
+            json_encode(array('status' => 'trashed', 'product_id' => $product_id))
         );
-    } else {
-        // Just move to trash (default behavior)
-        $product = wc_get_product($product_id);
-        if ($product) {
-            $product->delete(false); // false = move to trash, true = permanently delete
-            
-            zoho_add_detailed_log(
-                'item',
-                'product',
-                $product_id,
-                'item',
-                $zoho_item_id,
-                json_encode(array('action' => 'webhook_delete')),
-                json_encode(array('status' => 'trashed', 'product_id' => $product_id))
-            );
-        }
     }
 }
 
