@@ -487,7 +487,7 @@ function zoho_dashboard_page() {
             <?php endif; ?>
         </div>
         
-        <!-- Webhooks Settings -->
+        <!-- Sync Statistics Cards -->
         <?php
         // Handle webhook settings save
         if (isset($_POST['save_webhook_settings']) && $connected) {
