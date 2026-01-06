@@ -1851,7 +1851,6 @@ function zoho_contact_sync_page() {
     }
     
     echo '<p>Sync contacts/customers between Zoho Inventory and WooCommerce.</p>';
-    echo '<p>Configure contact field mappings in <a href="'.admin_url('admin.php?page=zoho-field-mapping&tab=customers').'">Field Mapping → Customers</a> before syncing.</p>';
     
     // Date filters
     echo '<div style="background: #fff; border: 1px solid #ddd; padding: 20px; margin: 20px 0; border-radius: 4px;">';

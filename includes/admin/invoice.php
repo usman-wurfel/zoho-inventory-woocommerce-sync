@@ -1041,7 +1041,6 @@ function zoho_invoice_sync_page() {
     }
     
     echo '<p>Sync invoices between Zoho Inventory and WooCommerce Orders.</p>';
-    echo '<p>Configure invoice field mappings in <a href="'.admin_url('admin.php?page=zoho-field-mapping&tab=invoices').'">Field Mapping → Invoices</a> before syncing.</p>';
     
     // Date filters
     echo '<div style="background: #fff; border: 1px solid #ddd; padding: 20px; margin: 20px 0; border-radius: 4px;">';
