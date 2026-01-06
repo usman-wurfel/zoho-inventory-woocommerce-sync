@@ -53,15 +53,17 @@ function zoho_sync_orders_to_invoices($offset, $total, $synced, $created, $updat
             'order' => 'DESC'
         );
         
-        if (!empty($from_date)) {
-            $args['date_created'] = '>=' . $from_date;
+        // Apply date filters for orders
+        if (!empty($from_date) && $from_date !== '') {
+            $args['date_created'] = '>=' . $from_date . ' 00:00:00';
         }
-        if (!empty($to_date)) {
-            if (!empty($from_date)) {
-                $args['date_created'] = $from_date . '...' . $to_date;
+        if (!empty($to_date) && $to_date !== '') {
+            if (!isset($args['date_created'])) {
+                $args['date_created'] = '';
             } else {
-                $args['date_created'] = '<=' . $to_date;
+                $args['date_created'] .= '...';
             }
+            $args['date_created'] .= '<=' . $to_date . ' 23:59:59';
         }
         
         $order_ids = wc_get_orders($args);
@@ -649,7 +651,52 @@ function zoho_sync_invoices_to_orders($offset, $total, $synced, $created, $updat
             }
             
             $invoices = $response['invoices'] ?? array();
-            $all_invoices = array_merge($all_invoices, $invoices);
+            
+            // Apply client-side date filtering if API parameters didn't work or for extra validation
+            // Note: Zoho API date_start/date_end should filter, but we also filter here as fallback
+            if (!empty($from_date) || !empty($to_date)) {
+                foreach ($invoices as $invoice) {
+                    $invoice_data = $invoice;
+                    if (isset($invoice['invoice'])) {
+                        $invoice_data = $invoice['invoice'];
+                    }
+                    
+                    $invoice_created_time = $invoice_data['created_time'] ?? $invoice_data['date'] ?? '';
+                    
+                    // Skip if no date field
+                    if (empty($invoice_created_time)) {
+                        continue;
+                    }
+                    
+                    // Parse Zoho date format (e.g., "2026-01-02T12:22:05+0500" or "2026-01-02")
+                    $invoice_date = strtotime($invoice_created_time);
+                    if ($invoice_date === false) {
+                        continue; // Skip if date parsing fails
+                    }
+                    
+                    // Filter by from_date
+                    if (!empty($from_date)) {
+                        $from_timestamp = strtotime($from_date . ' 00:00:00');
+                        if ($invoice_date < $from_timestamp) {
+                            continue; // Skip - invoice created before from_date
+                        }
+                    }
+                    
+                    // Filter by to_date
+                    if (!empty($to_date)) {
+                        $to_timestamp = strtotime($to_date . ' 23:59:59');
+                        if ($invoice_date > $to_timestamp) {
+                            continue; // Skip - invoice created after to_date
+                        }
+                    }
+                    
+                    // Invoice passed date filter, add it
+                    $all_invoices[] = $invoice;
+                }
+            } else {
+                // No date filter, add all invoices
+                $all_invoices = array_merge($all_invoices, $invoices);
+            }
             
             $has_more_pages = isset($response['page_context']['has_more_page']) ? $response['page_context']['has_more_page'] : (count($invoices) >= $per_page);
             $page++;
@@ -659,7 +706,7 @@ function zoho_sync_invoices_to_orders($offset, $total, $synced, $created, $updat
         $total = count($all_invoices);
         
         if ($total == 0) {
-            wp_send_json_error('No invoices found in Zoho');
+            wp_send_json_error('No invoices found in Zoho' . (!empty($from_date) || !empty($to_date) ? ' (after date filtering)' : ''));
             return;
         }
         

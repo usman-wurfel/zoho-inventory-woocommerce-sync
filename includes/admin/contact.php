@@ -944,7 +944,46 @@ function zoho_sync_contacts_to_customers($offset, $total, $synced, $created, $up
             }
             
             $contacts = $response['contacts'] ?? array();
-            $all_contacts = array_merge($all_contacts, $contacts);
+            
+            // Apply date filtering if dates are provided
+            if (!empty($from_date) || !empty($to_date)) {
+                foreach ($contacts as $contact) {
+                    $contact_created_time = $contact['created_time'] ?? '';
+                    
+                    // If no created_time, skip this contact (can't filter without date)
+                    if (empty($contact_created_time)) {
+                        continue;
+                    }
+                    
+                    // Parse Zoho date format (e.g., "2026-01-02T12:22:05+0500")
+                    $contact_date = strtotime($contact_created_time);
+                    if ($contact_date === false) {
+                        continue; // Skip if date parsing fails
+                    }
+                    
+                    // Filter by from_date
+                    if (!empty($from_date)) {
+                        $from_timestamp = strtotime($from_date . ' 00:00:00');
+                        if ($contact_date < $from_timestamp) {
+                            continue; // Skip - contact created before from_date
+                        }
+                    }
+                    
+                    // Filter by to_date
+                    if (!empty($to_date)) {
+                        $to_timestamp = strtotime($to_date . ' 23:59:59');
+                        if ($contact_date > $to_timestamp) {
+                            continue; // Skip - contact created after to_date
+                        }
+                    }
+                    
+                    // Contact passed date filter, add it
+                    $all_contacts[] = $contact;
+                }
+            } else {
+                // No date filter, add all contacts
+                $all_contacts = array_merge($all_contacts, $contacts);
+            }
             
             $has_more_pages = isset($response['page_context']['has_more_page']) ? $response['page_context']['has_more_page'] : (count($contacts) >= $per_page);
             $page++;
@@ -954,7 +993,7 @@ function zoho_sync_contacts_to_customers($offset, $total, $synced, $created, $up
         $total = count($all_contacts);
         
         if ($total == 0) {
-            wp_send_json_error('No contacts found in Zoho');
+            wp_send_json_error('No contacts found in Zoho' . (!empty($from_date) || !empty($to_date) ? ' (after date filtering)' : ''));
             return;
         }
         
