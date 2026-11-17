@@ -1,78 +1,112 @@
 # Zoho Inventory ↔ WooCommerce Sync
 
-WordPress / WooCommerce plugin for **two-way sync** with **Zoho Inventory** — products/stock, contacts/customers, and invoices/orders — via OAuth, bulk AJAX sync, auto-hooks, and Zoho webhooks.
+Custom WordPress plugin that keeps **Zoho Inventory** and **WooCommerce** in sync — products/stock, customers/contacts, and orders/invoices — in **both directions**, in near real time.
 
 **Live store:** [skylerrubber.com.au](https://skylerrubber.com.au)
 
 ---
 
-## What it is
+## Why this is useful
 
-A custom **Zoho Inventory ↔ WooCommerce** integration plugin (not Zoho’s native connector):
+Most stores either:
 
-- Connect Zoho Inventory with OAuth (multi-region accounts)
-- Sync **items ↔ products**, **contacts ↔ customers**, **invoices ↔ orders**
-- Run **manual bulk sync** (both directions) with progress UI
-- Enable **auto-sync** when WooCommerce data changes
-- Receive **Zoho webhooks** for near real-time Zoho → Woo updates
-- Configure **field mapping**, webhook secrets, and detailed **sync logs**
+- enter the same product / stock / order data **twice** (Zoho + Woo), or
+- rely on Zoho’s native Woo connector, which is mostly **one-way / limited**, or
+- duct-tape Zapier/Flow jobs that break when payloads change
+
+This plugin closes that gap for a real WooCommerce shop that also runs operations in Zoho Inventory:
+
+| Pain | What the plugin does |
+|------|----------------------|
+| Stock wrong on website → overselling | Zoho item stock changes push to Woo via **webhooks**; Woo stock changes push back via **auto-sync** |
+| Catalog maintained in Zoho, store looks stale | Bulk **Zoho → Woo** product sync + field mapping (price, image, SKU, barcodes…) |
+| Orders live in Woo, finance lives in Zoho | Woo orders sync to **Zoho invoices**; Zoho invoice updates can flow back |
+| Customers duplicated / mismatched | Woo customers ↔ Zoho contacts (create / update / delete both ways) |
+| Manual CSV hell at scale | AJAX **batch sync** with progress UI + date filters |
+| Silent failures | Detailed **sync + webhook logs** (created / updated / pending + reason) |
+| Circular update loops | Webhook locks + sync locks so Zoho→Woo and Woo→Zoho don’t fight each other |
+
+**Bottom line:** one source of operational truth across storefront + inventory ERP — fewer mistakes, less admin time, faster order→invoice flow.
 
 ---
 
-## Sync directions
+## Architecture (simple)
+
+```
+WooCommerce (store)  ←→  Plugin (WP Admin + REST)  ←→  Zoho Inventory API
+        │                         │
+   auto-hooks              OAuth + webhooks
+ (product/order/user)     /wp-json/zoho-inventory/v1/*
+```
+
+- **Woo → Zoho:** product / order / customer hooks + scheduled single-entity sync
+- **Zoho → Woo:** Zoho Inventory automation webhooks (items, contacts, invoices)
+- **Manual:** admin pages for bulk inventory / contact / invoice sync either direction
+
+---
+
+## Screenshots (live storefront)
+
+| | |
+|--|--|
+| Storefront | ![Storefront](docs/screenshots/01-storefront.png) |
+| Products | ![Products](docs/screenshots/02-products.png) |
+| Gym catalog | ![Gym catalog](docs/screenshots/03-gym-catalog.png) |
+
+---
+
+## What syncs
 
 | Entity | WooCommerce | Zoho Inventory | Directions |
 |--------|-------------|----------------|------------|
 | Catalog / stock | Products | Items | Zoho → Woo **and** Woo → Zoho |
-| People | Customers (incl. guests where applicable) | Contacts | Both ways |
+| People | Customers | Contacts | Both ways |
 | Commerce | Orders | Invoices | Both ways |
-
-Manual sync pages support direction toggle + optional date range (contacts / invoices).
 
 ---
 
 ## Feature highlights
 
-### 1) OAuth & connection
-- Zoho OAuth connect / disconnect from WP admin
-- Access + refresh token handling with auto-refresh on `401` / auth errors
-- Multi-region token endpoints (`.com` / `.in` / `.eu` / `.com.au`)
-- Organization picker via Zoho Inventory organizations API
+### 1) OAuth connection
+- Connect / disconnect Zoho from WP admin
+- Access + refresh tokens with auto-refresh on auth failures
+- Multi-region Zoho accounts (`.com` / `.in` / `.eu` / `.com.au`)
+- Organization selection via Inventory organizations API
 
 ### 2) Dashboard
 - Connection status
-- Counts for synced products, contacts / customers, invoices / orders
-- Quick links into Zoho Inventory app
+- Synced product / contact / invoice counts
+- Deep links into Zoho Inventory records
 
-### 3) Field mapping (products / items)
-Toggle which fields sync, including:
-- Name, SKU, price, cost price, stock
+### 3) Field mapping (why catalogs stay consistent)
+Toggle per-field sync for items ↔ products:
+- Name, SKU, selling price, cost price, stock
 - Image, description
 - Reorder point, weight, dimensions, tax
 - UPC / EAN / ISBN / MPN
 - Brand, manufacturer
 
-### 4) Inventory / product sync
-- Bulk sync with AJAX progress bar (batch offset)
-- Create / update products mapped by `_zoho_item_id` (and SKU matching flows)
-- Direction: **Zoho → Woo** or **Woo → Zoho**
+### 4) Inventory sync
+- Bulk sync with AJAX progress (batched offsets)
+- Direction toggle: Zoho → Woo or Woo → Zoho
+- Mapping via `_zoho_item_id` (+ SKU matching flows)
 - Auto-sync on Woo product create / update / stock change / delete
-- Circular-sync guards (webhook update locks + sync locks)
+- Circular-sync protection (webhook + sync locks)
 
-### 5) Contact / customer sync
+### 5) Contact sync
 - Woo customers ↔ Zoho contacts (registered + guest handling)
-- Bulk sync both directions with date filters
+- Bulk both directions + date range
 - Auto-sync on user/customer create / update / delete
-- Zoho contact webhooks (create/update + delete endpoints)
+- Zoho contact webhooks (create/update + delete)
 
 ### 6) Invoice / order sync
 - Woo orders ↔ Zoho invoices
-- Bulk sync both directions with date filters
-- Auto-sync on checkout / order update / delete (HPOS-aware paths)
+- Bulk both directions + date range
+- Auto-sync on checkout / order update / delete (HPOS-aware)
 - Zoho invoice webhooks (create/update + delete)
 
 ### 7) Zoho → Woo webhooks (REST)
-Secret-protected REST routes under `zoho-inventory/v1`:
+Secret-protected routes under `zoho-inventory/v1`:
 
 | Endpoint | Purpose |
 |----------|---------|
@@ -83,21 +117,10 @@ Secret-protected REST routes under `zoho-inventory/v1`:
 | `/webhook-invoices` | Invoice create/update |
 | `/webhook-invoices-delete` | Invoice delete |
 
-### 8) Logs & admin UX
-- Sync logs (created / updated / pending SKUs + reasons)
-- Detailed webhook / sync activity logging
-- Admin pages: Dashboard, Field Mapping, Inventory Sync, Contact Sync, Invoice Sync, Logs
-
----
-
-## Admin pages
-
-- **Zoho Sync → Dashboard**
-- **Field Mapping**
-- **Inventory Sync**
-- **Contact Sync**
-- **Invoice Sync**
-- **Logs**
+### 8) Logs
+- Sync logs: created / updated / pending SKUs + failure reasons
+- Webhook activity timestamps + payloads for debugging
+- Admin: Dashboard · Field Mapping · Inventory · Contacts · Invoices · Logs
 
 ---
 
@@ -109,16 +132,15 @@ Secret-protected REST routes under `zoho-inventory/v1`:
 | Integration | **Zoho Inventory API** (OAuth 2.0) |
 | Realtime | WP REST webhooks + WooCommerce hooks |
 | UI | WP Admin + AJAX progress (`js/zoho-sync.js`) |
-| Data links | Post/user/order meta (`_zoho_item_id`, `_zoho_contact_id`, `_zoho_invoice_id`, org id) |
+| Links | Meta keys `_zoho_item_id`, `_zoho_contact_id`, `_zoho_invoice_id`, org id |
 
 ---
 
 ## Install (high level)
 
-1. Copy plugin folder into `wp-content/plugins/`
-2. Activate **Zoho Inventory WooCommerce Sync**
-3. Open **Zoho Sync** in WP admin → connect OAuth → select organization
-4. Configure field mapping + webhook secrets in Zoho Inventory automation
-5. Run inventory / contact / invoice sync as needed; enable auto-sync toggles
+1. Copy plugin into `wp-content/plugins/` and activate
+2. **Zoho Sync** → connect OAuth → pick organization
+3. Set field mapping + Zoho webhook secrets / endpoints
+4. Run inventory / contact / invoice sync; enable auto-sync toggles
 
-> Portfolio / case-study snapshot. Do not commit live OAuth client secrets or tokens.
+> Case-study / portfolio snapshot. Do not commit live OAuth client secrets or tokens.
