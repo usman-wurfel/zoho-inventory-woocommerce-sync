@@ -130,5 +130,3 @@ Secret-protected routes under `zoho-inventory/v1`:
 2. **Zoho Sync** → connect OAuth → pick organization
 3. Set field mapping + Zoho webhook secrets / endpoints
 4. Run inventory / contact / invoice sync; enable auto-sync toggles
-
-> Case-study / portfolio snapshot. Do not commit live OAuth client secrets or tokens.
