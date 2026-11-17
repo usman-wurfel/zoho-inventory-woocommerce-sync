@@ -1,9 +1,9 @@
 <?php
 /**
  * Plugin Name: Zoho Inventory WooCommerce Sync
- * Description: Zoho Inventory → WooCommerce Inventory Sync
+ * Description: Two-way Zoho Inventory ↔ WooCommerce sync (products, contacts, invoices)
  * Version: 1.2.3
- * Author: Skyler Rubber
+ * Author: Muhammad Usman
  */
 
 if (!defined('ABSPATH')) exit;
