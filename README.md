@@ -2,8 +2,6 @@
 
 Custom WordPress plugin that keeps **Zoho Inventory** and **WooCommerce** in sync — products/stock, customers/contacts, and orders/invoices — in **both directions**, in near real time.
 
-**Live store:** [skylerrubber.com.au](https://skylerrubber.com.au)
-
 ---
 
 ## Why this is useful
@@ -14,7 +12,7 @@ Most stores either:
 - rely on Zoho’s native Woo connector, which is mostly **one-way / limited**, or
 - duct-tape Zapier/Flow jobs that break when payloads change
 
-This plugin closes that gap for a real WooCommerce shop that also runs operations in Zoho Inventory:
+This plugin closes that gap for a WooCommerce shop that also runs operations in Zoho Inventory:
 
 | Pain | What the plugin does |
 |------|----------------------|
@@ -42,16 +40,6 @@ WooCommerce (store)  ←→  Plugin (WP Admin + REST)  ←→  Zoho Inventory AP
 - **Woo → Zoho:** product / order / customer hooks + scheduled single-entity sync
 - **Zoho → Woo:** Zoho Inventory automation webhooks (items, contacts, invoices)
 - **Manual:** admin pages for bulk inventory / contact / invoice sync either direction
-
----
-
-## Screenshots (live storefront)
-
-| | |
-|--|--|
-| Storefront | ![Storefront](docs/screenshots/01-storefront.png) |
-| Products | ![Products](docs/screenshots/02-products.png) |
-| Gym catalog | ![Gym catalog](docs/screenshots/03-gym-catalog.png) |
 
 ---
 
